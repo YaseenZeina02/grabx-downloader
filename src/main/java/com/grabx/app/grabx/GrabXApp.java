@@ -21,6 +21,7 @@ public class GrabXApp extends Application {
 //                java.util.Objects.requireNonNull(GrabXApp.class.getResource("styles/table.css")).toExternalForm(),
 //                java.util.Objects.requireNonNull(GrabXApp.class.getResource("styles/sidebar.css")).toExternalForm()
 //        );
+
         stage.setTitle("GrabX");
         stage.setMinWidth(900);
         stage.setMinHeight(500);
