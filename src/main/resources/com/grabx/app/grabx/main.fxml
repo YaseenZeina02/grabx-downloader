@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import java.net.URL?>
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.Button?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.ListView?>
+<?import javafx.scene.control.Separator?>
+<?import javafx.scene.control.TextField?>
+<?import javafx.scene.layout.BorderPane?>
+<?import javafx.scene.layout.HBox?>
+<?import javafx.scene.layout.Region?>
+<?import javafx.scene.layout.VBox?>
+<?import javafx.scene.text.Text?>
+
+<BorderPane prefHeight="820" prefWidth="1280" styleClass="gx-root" xmlns="http://javafx.com/javafx/19" xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.grabx.app.grabx.MainController">
+
+    <!-- TOP BAR -->
+    <top>
+        <VBox styleClass="gx-top-wrap">
+            <HBox alignment="CENTER_LEFT" spacing="12" styleClass="gx-topbar">
+                <Label styleClass="gx-brand" text="GX" />
+                <VBox spacing="2">
+                    <Text styleClass="gx-title" text="GrabX" />
+                    <Text styleClass="gx-subtitle" text="Downloader" />
+                </VBox>
+
+                <Region HBox.hgrow="ALWAYS" />
+
+                <Button minWidth="96" onAction="#onAddLink" styleClass="gx-btn gx-btn-primary" text="Add Link" />
+                <Button minWidth="96" onAction="#onSettings" styleClass="gx-btn gx-btn-ghost" text="Settings" />
+            </HBox>
+            <Separator />
+        </VBox>
+    </top>
+
+    <!-- MAIN CONTENT -->
+    <center>
+        <HBox spacing="12" styleClass="gx-main">
+            <padding>
+                <Insets bottom="12" left="12" right="12" top="12" />
+            </padding>
+
+            <!-- LEFT SIDEBAR -->
+            <VBox maxWidth="240" minWidth="240" spacing="10" styleClass="gx-sidebar">
+                <Label styleClass="gx-sidebar-section" text="Library" />
+
+                <!-- Finder-like sidebar list -->
+                <ListView fx:id="sidebarList" styleClass="gx-sidebar-list" VBox.vgrow="ALWAYS" />
+
+                <Button onAction="#onMiniMode" styleClass="gx-btn gx-btn-ghost" text="Mini Mode" />
+            </VBox>
+
+            <!-- CENTER CONTENT -->
+            <VBox spacing="10" styleClass="gx-content" HBox.hgrow="ALWAYS">
+                <HBox alignment="CENTER_LEFT" spacing="10" styleClass="gx-content-header">
+                    <Label fx:id="contentTitle" styleClass="gx-section-title" text="Downloads" />
+                    <Region HBox.hgrow="ALWAYS" />
+                    <TextField fx:id="searchField" maxWidth="260" promptText="Search..." styleClass="gx-search" />
+                </HBox>
+
+                <!-- Motrix-like list -->
+                <ListView fx:id="downloadsList" styleClass="gx-list" VBox.vgrow="ALWAYS" />
+            </VBox>
+        </HBox>
+    </center>
+
+    <!-- FOOTER -->
+    <bottom>
+        <HBox alignment="CENTER_LEFT" spacing="10" styleClass="gx-footer">
+            <Label styleClass="gx-text-muted" text="Status:" />
+            <Label fx:id="statusText" styleClass="gx-text-strong" text="Ready" />
+            <Region HBox.hgrow="ALWAYS" />
+            <Label styleClass="gx-text-muted" text="Speed:" />
+            <Label fx:id="globalSpeed" styleClass="gx-text-strong" text="0 KB/s" />
+        </HBox>
+    </bottom>
+
+    <stylesheets>
+        <URL value="@styles/theme-base.css" />
+        <URL value="@styles/layout.css" />
+        <URL value="@styles/buttons.css" />
+        <URL value="@styles/tabs.css" />
+        <URL value="@styles/table.css" />
+        <!-- If you created a dedicated sidebar.css, keep this. If not, delete this line. -->
+        <URL value="@styles/sidebar.css" />
+    </stylesheets>
+
+</BorderPane>

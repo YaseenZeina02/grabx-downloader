@@ -1,0 +1,36 @@
+/* ===============================
+   GrabX – Base Theme
+   =============================== */
+
+.gx-root {
+    -fx-font-family: "Inter", "SF Pro Display", "Segoe UI", Arial;
+    -fx-background-color: #0F1115;
+}
+
+/* Text colors */
+.gx-text-primary {
+    -fx-text-fill: #E8ECF3;
+}
+
+.gx-text-muted {
+    -fx-text-fill: #6B7280;
+}
+
+.gx-text-accent {
+    -fx-text-fill: #9FB6FF;
+}
+
+/* Backgrounds */
+.gx-bg-panel {
+    -fx-background-color: #161A22;
+}
+
+.gx-bg-elevated {
+    -fx-background-color: #1C2230;
+}
+
+/* Status colors (future use) */
+.gx-status-downloading { -fx-text-fill: #2E5BFF; }
+.gx-status-paused      { -fx-text-fill: #F59E0B; }
+.gx-status-completed   { -fx-text-fill: #22C55E; }
+.gx-status-cancelled   { -fx-text-fill: #EF4444; }

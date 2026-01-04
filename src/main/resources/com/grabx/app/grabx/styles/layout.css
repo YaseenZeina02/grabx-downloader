@@ -1,0 +1,128 @@
+/* ===============================
+   Root & General Layout
+   =============================== */
+
+.gx-root {
+    -fx-background-color: #0F1115;
+}
+
+/* ===============================
+   Top Bar
+   =============================== */
+
+.gx-topbar {
+    -fx-background-color: linear-gradient(
+            to bottom,
+            #0F1115,
+            #0B0E14
+    );
+    -fx-padding: 16;
+    -fx-border-color: rgba(255,255,255,0.15);
+    -fx-border-width: 0 0 1 0;
+}
+
+/* ===============================
+   Content Area
+   =============================== */
+
+.gx-content {
+    -fx-background-color: #0F1115;
+    -fx-padding: 18;
+}
+
+/* ===============================
+   Footer
+   =============================== */
+
+.gx-footer {
+    -fx-background-color: linear-gradient(
+            to top,
+            #0F1115,
+            #0B0E14
+    );
+    -fx-padding: 10 16;
+    -fx-border-color: rgba(255,255,255,0.15);
+    -fx-border-width: 1 0 0 0;
+}
+
+/* ===============================
+   Brand (GX)
+   =============================== */
+
+.gx-brand {
+    -fx-background-color: #1C2230;
+    -fx-text-fill: #9FB6FF;
+    -fx-font-weight: 800;
+    -fx-padding: 8 12;
+    -fx-background-radius: 10;
+}
+
+
+
+
+
+
+/* ===============================
+   Layout
+   =============================== */
+
+.gx-topbar {
+    -fx-background-color: #0F1115;
+    -fx-padding: 16;
+    -fx-border-color: transparent transparent #2A3142 transparent;
+    -fx-border-width: 0 0 1 0;
+}
+
+/* Main content area (CENTER) */
+.gx-content {
+    -fx-background-color: #0F1115;
+    -fx-padding: 18;
+}
+
+/* A subtle "panel" look used inside content */
+.gx-panel {
+    -fx-background-color: #121826;
+    -fx-background-radius: 14;
+    -fx-padding: 14;
+}
+
+.gx-footer {
+    -fx-background-color: #0F1115;
+    -fx-padding: 10 14;
+    -fx-border-color: #2A3142 transparent transparent transparent;
+    -fx-border-width: 1 0 0 0;
+}
+
+/* Brand chip (GX) */
+.gx-brand {
+    -fx-background-color: #1C2230;
+    -fx-text-fill: #9FB6FF;
+    -fx-font-weight: 800;
+    -fx-padding: 8 12;
+    -fx-background-radius: 10;
+}
+
+.gx-section {
+    -fx-padding: 12;
+    -fx-spacing: 10;
+}
+
+/* Navigation buttons (if you use ToggleButtons) */
+.gx-nav-btn {
+    -fx-min-height: 38;
+    -fx-background-radius: 10;
+    -fx-alignment: CENTER_LEFT;
+    -fx-padding: 0 12;
+    -fx-text-fill: #E8ECF3;
+    -fx-background-color: transparent;
+}
+
+.gx-nav-btn:hover {
+    -fx-background-color: #161A22;
+}
+
+.gx-nav-btn:selected {
+    -fx-background-color: #1C2230;
+    -fx-text-fill: #9FB6FF;
+    -fx-font-weight: 700;
+}

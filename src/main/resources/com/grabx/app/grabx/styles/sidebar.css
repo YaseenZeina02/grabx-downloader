@@ -1,0 +1,137 @@
+/* ===============================
+   Sidebar (Library)
+   =============================== */
+
+.gx-sidebar {
+    -fx-background-color: #0B1220;      /* فرق واضح عن المحتوى */
+    -fx-background-radius: 18;
+    -fx-border-radius: 18;
+    -fx-border-color: rgba(255,255,255,0.10);
+    -fx-border-width: 1;
+    -fx-padding: 14 14 18 14;          /* extra bottom space */
+    -fx-pref-width: 240;
+}
+
+/* Section title */
+.gx-sidebar-section {
+    -fx-text-fill: #6B7280;
+    -fx-font-size: 12;
+    -fx-font-weight: 700;
+    -fx-padding: 6 8 10 8;
+}
+
+/* ===============================
+   ListView (IMPORTANT FIX)
+   =============================== */
+
+.gx-sidebar-list {
+    -fx-background-color: transparent;
+    -fx-control-inner-background: transparent;
+    -fx-control-inner-background-alt: transparent;
+    -fx-padding: 0;
+    -fx-background-insets: 0;
+    -fx-background-radius: 0;
+}
+
+.gx-sidebar-list .viewport,
+.gx-sidebar-list .virtual-flow,
+.gx-sidebar-list .virtual-flow .clipped-container,
+.gx-sidebar-list .corner {
+    -fx-background-color: transparent;
+}
+
+/* List items (only when there is real content) */
+.gx-sidebar-list .list-cell:filled {
+    -fx-background-color: transparent;
+    -fx-text-fill: #E8ECF3;
+    -fx-padding: 10 14;
+    -fx-background-radius: 10;
+}
+
+/* IMPORTANT: Hide the extra empty rows area */
+.gx-sidebar-list .list-cell:empty {
+    -fx-background-color: transparent;
+    -fx-padding: 0;
+    -fx-border-width: 0;
+    -fx-background-insets: 0;
+}
+
+.gx-sidebar-list .list-cell:empty:hover,
+.gx-sidebar-list .list-cell:empty:selected {
+    -fx-background-color: transparent;
+}
+
+/* Hover (only for filled cells) */
+.gx-sidebar-list .list-cell:filled:hover {
+    -fx-background-color: #1C2230;
+}
+
+/* Selected (only for filled cells) */
+.gx-sidebar-list .list-cell:filled:selected {
+    -fx-background-color: #1C2230;
+    -fx-text-fill: #9FB6FF;
+    -fx-font-weight: 800;
+}
+
+
+
+
+
+
+
+/*!* ===============================*/
+/*   Sidebar*/
+/*   =============================== *!*/
+
+/*!* Sidebar container *!*/
+/*.gx-sidebar {*/
+/*    -fx-padding: 14;*/
+/*    -fx-pref-width: 260;*/
+/*    -fx-min-width: 240;*/
+/*    -fx-max-width: 320;*/
+
+/*    !* Distinct sidebar tone *!*/
+/*    -fx-background-color: #111827;*/
+/*    -fx-background-radius: 16;*/
+
+/*    !* Create a small separation from the window background *!*/
+/*    -fx-border-color: #2A3142;*/
+/*    -fx-border-radius: 16;*/
+/*    -fx-border-width: 1;*/
+/*}*/
+
+/*!* Section title (Library) *!*/
+/*.gx-sidebar-section {*/
+/*    -fx-text-fill: #9AA4B2;*/
+/*    -fx-font-size: 12px;*/
+/*    -fx-font-weight: 800;*/
+/*    -fx-padding: 6 8 10 8;*/
+/*}*/
+
+/*!* ListView *!*/
+/*.gx-sidebar-list {*/
+/*    -fx-background-color: transparent;*/
+/*    -fx-padding: 0;*/
+/*}*/
+
+/*!* Remove default list background *!*/
+/*.gx-sidebar-list .viewport {*/
+/*    -fx-background-color: transparent;*/
+/*}*/
+
+/*.gx-sidebar-list .list-cell {*/
+/*    -fx-background-color: transparent;*/
+/*    -fx-text-fill: #E8ECF3;*/
+/*    -fx-padding: 10 12;*/
+/*    -fx-background-radius: 12;*/
+/*}*/
+
+/*.gx-sidebar-list .list-cell:hover {*/
+/*    -fx-background-color: #161A22;*/
+/*}*/
+/* c*/
+/*.gx-sidebar-list .list-cell:selected {*/
+/*    -fx-background-color: #1C2230;*/
+/*    -fx-text-fill: #9FB6FF;*/
+/*    -fx-font-weight: 800;*/
+/*}*/

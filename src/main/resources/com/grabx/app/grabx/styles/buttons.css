@@ -1,0 +1,102 @@
+/* ===============================
+   Buttons
+   =============================== */
+
+.gx-btn {
+    -fx-background-radius: 10;
+    -fx-font-weight: 700;
+    -fx-padding: 8 14;
+    -fx-cursor: hand;
+}
+
+/* Primary */
+.gx-btn-primary {
+    -fx-background-color: #2E5BFF;
+    -fx-text-fill: white;
+}
+.gx-btn-primary:hover {
+    -fx-background-color: #3B6BFF;
+}
+
+.gx-btn-primary:pressed { -fx-background-color: #2447C9; }
+
+/* Neutral (Settings) */
+.gx-btn-neutral {
+    -fx-background-color: #1C2230;
+    -fx-text-fill: #E8ECF3;
+    -fx-border-color: rgba(255,255,255,0.10);
+    -fx-border-width: 1;
+}
+.gx-btn-neutral:hover { -fx-background-color: #222A3A; }
+.gx-btn-neutral:pressed { -fx-background-color: #1A2130; }
+
+/* Ghost (Mini Mode) */
+.gx-btn-ghost {
+    -fx-background-color: transparent;
+    -fx-text-fill: #E8ECF3;
+    -fx-border-color: rgba(255,255,255,0.14);
+    -fx-border-width: 1;
+}
+.gx-btn-ghost:hover { -fx-background-color: rgba(255,255,255,0.06); }
+.gx-btn-ghost:pressed { -fx-background-color: rgba(255,255,255,0.10); }
+
+/* Focus ring */
+.gx-btn:focused {
+    -fx-effect: dropshadow(gaussian, rgba(46,91,255,0.45), 10, 0.35, 0, 0);
+}
+
+/* Ghost / Secondary */
+.gx-btn-ghost {
+    -fx-background-color: #1C2230;
+    -fx-text-fill: #E8ECF3;
+}
+.gx-btn-ghost:hover {
+    -fx-background-color: #262E40;
+}
+
+/* Danger (later) */
+.gx-btn-danger {
+    -fx-background-color: #EF4444;
+    -fx-text-fill: white;
+}
+.gx-btn-danger:hover {
+    -fx-background-color: #DC2626;
+}
+
+/* layout.css */
+.gx-topbar { -fx-padding: 14 16; }
+.gx-sidebar { -fx-padding: 14; -fx-pref-width: 220; }
+.gx-content { -fx-padding: 14; }
+
+.gx-title { -fx-fill: #E8ECF3; -fx-font-size: 20; -fx-font-weight: 800; }
+.gx-subtitle { -fx-fill: #9AA4B2; -fx-font-size: 12; }
+
+/* buttons.css */
+.gx-nav-btn {
+    -fx-background-color: transparent;
+    -fx-text-fill: #E8ECF3;
+    -fx-alignment: CENTER_LEFT;
+    -fx-padding: 10 12;
+    -fx-background-radius: 10;
+    -fx-cursor: hand;
+}
+.gx-nav-btn:selected { -fx-background-color: #1C2230; }
+.gx-nav-btn:hover { -fx-background-color: #161A22; }
+
+/* theme-base.css */
+.gx-text-strong { -fx-text-fill: #E8ECF3; -fx-font-weight: 700; }
+.gx-section-title { -fx-text-fill: #E8ECF3; -fx-font-size: 16; -fx-font-weight: 800; }
+.gx-sidebar-title { -fx-text-fill: #9AA4B2; -fx-font-size: 12; -fx-font-weight: 700; }
+
+.gx-search {
+    -fx-background-color: #1C2230;
+    -fx-text-fill: #E8ECF3;
+    -fx-prompt-text-fill: #6B7280;
+    -fx-background-radius: 10;
+    -fx-padding: 8 10;
+}
+
+/* motrix-cards later: gx-list will be styled once we implement cellFactory */
+.gx-list {
+    -fx-background-color: transparent;
+}
