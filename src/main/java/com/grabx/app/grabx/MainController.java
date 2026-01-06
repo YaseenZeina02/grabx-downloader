@@ -3,13 +3,19 @@ package com.grabx.app.grabx;
 import com.grabx.app.grabx.ui.sidebar.SidebarItem;
 import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
+import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
+import javafx.scene.layout.BorderPane;
 
 public class MainController {
 
     @FXML private Label statusText;
+    @FXML private BorderPane root;
+
+    @FXML
+    private Button addLinkButton;
 
     // ✅ هذا هو الـID اللي نربطه بعنوان Downloads (ديناميكي)
     @FXML private Label contentTitle;
@@ -33,6 +39,9 @@ public class MainController {
 
     @FXML
     public void initialize() {
+        javafx.application.Platform.runLater(() -> root.requestFocus());
+
+//        root.requestFocus();
 
         sidebarList.getItems().setAll(
                 new SidebarItem("ALL", "All"),

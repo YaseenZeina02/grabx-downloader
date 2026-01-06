@@ -7,70 +7,45 @@
 }
 
 /* ===============================
-   Top Bar
-   =============================== */
-
-.gx-topbar {
-    -fx-background-color: linear-gradient(
-            to bottom,
-            #0F1115,
-            #0B0E14
-    );
-    -fx-padding: 16;
-    -fx-border-color: rgba(255,255,255,0.15);
-    -fx-border-width: 0 0 1 0;
-}
-
-/* ===============================
-   Content Area
-   =============================== */
-
-.gx-content {
-    -fx-background-color: #0F1115;
-    -fx-padding: 18;
-}
-
-/* ===============================
-   Footer
-   =============================== */
-
-.gx-footer {
-    -fx-background-color: linear-gradient(
-            to top,
-            #0F1115,
-            #0B0E14
-    );
-    -fx-padding: 10 16;
-    -fx-border-color: rgba(255,255,255,0.15);
-    -fx-border-width: 1 0 0 0;
-}
-
-/* ===============================
-   Brand (GX)
-   =============================== */
-
-.gx-brand {
-    -fx-background-color: #1C2230;
-    -fx-text-fill: #9FB6FF;
-    -fx-font-weight: 800;
-    -fx-padding: 8 12;
-    -fx-background-radius: 10;
-}
-
-
-
-
-
-
-/* ===============================
    Layout
    =============================== */
 
 .gx-topbar {
-    -fx-background-color: #0F1115;
-    -fx-padding: 16;
-    -fx-border-color: transparent transparent #2A3142 transparent;
-    -fx-border-width: 0 0 1 0;
+    /*-fx-background-color: linear-gradient(to bottom, #0F1115, #0B0E14);*/
+    /*-fx-background-color: linear-gradient(*/
+    /*        to bottom,*/
+    /*        #0B1220,*/
+    /*        #0E1626*/
+    /*);*/
+
+    -fx-background-color: linear-gradient(
+            to bottom,
+            #0C1424,
+            #0A1120
+    );
+
+    -fx-background-radius: 22;
+    -fx-border-radius: 22;
+    /*-fx-padding: 14 16;*/
+    -fx-padding: 16 22;
+
+
+    -fx-border-color: rgba(255,255,255,0.12);
+    -fx-border-width: 1;
+    -fx-effect: dropshadow(
+            gaussian,
+            rgba(0,0,0,0.30),
+            14,
+            0.18,
+            0,
+            4
+    );
+    /*-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.35), 18, 0.18, 0, 6);*/
+}
+
+.gx-top-wrap {
+    /* Outer spacing around the top card to align with center padding */
+    -fx-padding: 10 12 4 12; /* top right bottom left */
 }
 
 /* Main content area (CENTER) */
@@ -78,6 +53,13 @@
     -fx-background-color: #0F1115;
     -fx-padding: 18;
 }
+
+.gx-main {
+    /*-fx-padding: 12;*/
+    -fx-padding: 6 12 12 12;
+    -fx-spacing: 12;
+}
+
 
 /* A subtle "panel" look used inside content */
 .gx-panel {

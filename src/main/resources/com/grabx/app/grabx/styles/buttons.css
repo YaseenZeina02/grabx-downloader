@@ -18,7 +18,11 @@
     -fx-background-color: #3B6BFF;
 }
 
-.gx-btn-primary:pressed { -fx-background-color: #2447C9; }
+.gx-btn-primary:pressed {
+    /*-fx-background-color: #2447C9;*/
+    -fx-effect: dropshadow(gaussian, rgba(46,91,255,0.65), 14, 0.4, 0, 0);
+
+}
 
 /* Neutral (Settings) */
 .gx-btn-neutral {
@@ -43,6 +47,7 @@
 /* Focus ring */
 .gx-btn:focused {
     -fx-effect: dropshadow(gaussian, rgba(46,91,255,0.45), 10, 0.35, 0, 0);
+
 }
 
 /* Ghost / Secondary */
@@ -99,4 +104,60 @@
 /* motrix-cards later: gx-list will be styled once we implement cellFactory */
 .gx-list {
     -fx-background-color: transparent;
+}
+
+
+.gx-btn-secondary:focused {
+    -fx-effect:
+            dropshadow(gaussian, rgba(200,210,255,0.35), 10, 0.35, 0, 0);
+}
+
+/* ======================================================
+   Subtle animation (hover polish)
+   ====================================================== */
+
+.gx-btn {
+    -fx-background-color: inherit;
+}
+
+.gx-btn:hover {
+    -fx-scale-x: 1.02;
+    -fx-scale-y: 1.02;
+}
+
+
+/* ======================================================
+    Icon Button
+   ====================================================== */
+
+.gx-icon-btn {
+    -fx-background-color: rgba(255,255,255,0.08);
+    -fx-background-radius: 12;
+
+    -fx-min-width: 40;
+    -fx-min-height: 40;
+
+    -fx-padding: 0;
+    -fx-cursor: hand;
+
+    -fx-border-color: rgba(255,255,255,0.10);
+    -fx-border-width: 1;
+    -fx-border-radius: 12;
+}
+
+/* Hover */
+.gx-icon-btn:hover {
+    -fx-background-color: rgba(255,255,255,0.16);
+}
+
+/* Pressed */
+.gx-icon-btn:pressed {
+    -fx-background-color: rgba(255,255,255,0.22);
+    -fx-translate-y: 1;
+}
+
+/* Icon inside icon-button */
+.gx-icon-btn .font-icon {
+    -fx-icon-size: 19px;
+    -fx-icon-color: #F1F5F9; /* أبيض أوضح شوي */
 }
