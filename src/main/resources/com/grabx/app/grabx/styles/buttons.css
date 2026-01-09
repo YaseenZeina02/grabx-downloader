@@ -3,26 +3,41 @@
    =============================== */
 
 .gx-btn {
-    -fx-background-radius: 10;
+    /*-fx-background-radius: 10;*/
+    /*-fx-font-weight: 700;*/
+    /*-fx-padding: 8 14;*/
+    /*-fx-cursor: hand;*/
+    -fx-background-radius: 12;
+    -fx-border-radius: 12;
     -fx-font-weight: 700;
     -fx-padding: 8 14;
     -fx-cursor: hand;
+    -fx-background-insets: 0;
+    -fx-border-insets: 0;
+
 }
 
 /* Primary */
 .gx-btn-primary {
+    /*-fx-background-color: #2E5BFF;*/
+    /*-fx-text-fill: white;*/
     -fx-background-color: #2E5BFF;
     -fx-text-fill: white;
+    -fx-border-color: transparent;
 }
 .gx-btn-primary:hover {
     -fx-background-color: #3B6BFF;
 }
 
 .gx-btn-primary:pressed {
-    /*-fx-background-color: #2447C9;*/
-    -fx-effect: dropshadow(gaussian, rgba(46,91,255,0.65), 14, 0.4, 0, 0);
+    /*-fx-effect: dropshadow(gaussian, rgba(46,91,255,0.65), 14, 0.4, 0, 0);*/
+    /*-fx-effect: dropshadow(gaussian, rgba(46,91,255,0.55), 14, 0.35, 0, 0);*/
+    -fx-effect: dropshadow(gaussian, rgba(46,91,255,0.45), 10, 0.35, 0, 0);
+
+    -fx-translate-y: 1;
 
 }
+
 
 /* Neutral (Settings) */
 .gx-btn-neutral {
@@ -32,7 +47,10 @@
     -fx-border-width: 1;
 }
 .gx-btn-neutral:hover { -fx-background-color: #222A3A; }
-.gx-btn-neutral:pressed { -fx-background-color: #1A2130; }
+.gx-btn-neutral:pressed {
+    -fx-background-color: #1A2130;
+    -fx-translate-y: 1;
+}
 
 /* Ghost (Mini Mode) */
 .gx-btn-ghost {
@@ -42,7 +60,10 @@
     -fx-border-width: 1;
 }
 .gx-btn-ghost:hover { -fx-background-color: rgba(255,255,255,0.06); }
-.gx-btn-ghost:pressed { -fx-background-color: rgba(255,255,255,0.10); }
+.gx-btn-ghost:pressed {
+    -fx-background-color: rgba(255,255,255,0.10);
+    -fx-translate-y: 1;
+}
 
 /* Focus ring */
 .gx-btn:focused {
@@ -50,14 +71,14 @@
 
 }
 
-/* Ghost / Secondary */
-.gx-btn-ghost {
-    -fx-background-color: #1C2230;
-    -fx-text-fill: #E8ECF3;
-}
-.gx-btn-ghost:hover {
-    -fx-background-color: #262E40;
-}
+ /*Ghost / Secondary */
+/*.gx-btn-ghost {*/
+/*    -fx-background-color: #1C2230;*/
+/*    -fx-text-fill: #E8ECF3;*/
+/*}*/
+/*.gx-btn-ghost:hover {*/
+/*    -fx-background-color: #262E40;*/
+/*}*/
 
 /* Danger (later) */
 .gx-btn-danger {
@@ -160,4 +181,74 @@
 .gx-icon-btn .font-icon {
     -fx-icon-size: 19px;
     -fx-icon-color: #F1F5F9; /* أبيض أوضح شوي */
+}
+
+/*!* ===============================*/
+/*   Tooltips (Hover Labels)*/
+/*   =============================== *!*/
+
+/*.tooltip.gx-tooltip {*/
+/*    -fx-font-size: 12px;*/
+/*    -fx-font-weight: 600;*/
+/*    -fx-text-fill: rgba(255,255,255,0.92);*/
+
+/*    -fx-background-color: rgba(12, 16, 24, 0.95);*/
+/*    -fx-background-radius: 10;*/
+
+/*    -fx-padding: 8 10;*/
+
+/*    -fx-border-color: rgba(255,255,255,0.10);*/
+/*    -fx-border-radius: 10;*/
+
+/*    !* subtle glow like your UI *!*/
+/*    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.55), 18, 0.2, 0, 6);*/
+/*}*/
+
+/*!* ===============================*/
+/*   Hover Label (custom popup)*/
+/*   =============================== *!*/
+
+/*.gx-hoverbubble {*/
+/*    -fx-background-color: rgba(18, 24, 38, 0.98);*/
+/*    -fx-background-radius: 12;*/
+
+/*    -fx-border-color: rgba(255,255,255,0.12);*/
+/*    -fx-border-radius: 12;*/
+/*    -fx-border-width: 1;*/
+
+/*    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.60), 22, 0.25, 0, 8);*/
+/*}*/
+
+/*.gx-hoverlabel {*/
+
+/*    -fx-font-size: 12px;*/
+/*    -fx-font-weight: 800;*/
+/*    -fx-text-fill: rgba(255,255,255,0.95);*/
+/*    -fx-padding: 8 12;*/
+/*}*/
+
+/*.gx-hoverarrow {*/
+/*    -fx-fill: rgba(18, 24, 38, 0.98);*/
+/*    -fx-stroke: rgba(255,255,255,0.12);*/
+/*    -fx-stroke-width: 1;*/
+/*}*/
+
+/* ===============================
+   Tooltips (Hover Labels)
+   =============================== */
+
+.tooltip.gx-tooltip {
+    -fx-font-size: 12px;
+    -fx-font-weight: 600;
+    -fx-text-fill: rgba(255,255,255,0.92);
+
+    -fx-background-color: rgba(12, 16, 24, 0.95);
+    -fx-background-radius: 10;
+
+    -fx-padding: 8 10;
+
+    -fx-border-color: rgba(255,255,255,0.10);
+    -fx-border-radius: 10;
+
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.55), 18, 0.2, 0, 6);
 }

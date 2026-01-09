@@ -11,13 +11,6 @@
    =============================== */
 
 .gx-topbar {
-    /*-fx-background-color: linear-gradient(to bottom, #0F1115, #0B0E14);*/
-    /*-fx-background-color: linear-gradient(*/
-    /*        to bottom,*/
-    /*        #0B1220,*/
-    /*        #0E1626*/
-    /*);*/
-
     -fx-background-color: linear-gradient(
             to bottom,
             #0C1424,
@@ -107,4 +100,448 @@
     -fx-background-color: #1C2230;
     -fx-text-fill: #9FB6FF;
     -fx-font-weight: 700;
+}
+
+
+/* ===============================
+   Sidebar Scroll (Modern Auto-hide)
+   =============================== */
+
+/* ضع هذا على ScrollPane الخاص بالـ sidebar */
+.gx-sidebar-scroll {
+    -fx-background-color: transparent;
+    -fx-padding: 0;
+}
+
+/* خلفية الـ viewport */
+.gx-sidebar-scroll > .viewport {
+    -fx-background-color: transparent;
+}
+
+/* نخفي الخلفية والـ corner */
+.gx-sidebar-scroll > .corner {
+    -fx-background-color: transparent;
+}
+
+/* نخلي الـ scrollbar نحيف */
+.gx-sidebar-scroll .scroll-bar:vertical,
+.gx-sidebar-scroll .scroll-bar:horizontal {
+    -fx-background-color: transparent;
+    -fx-pref-width: 9;   /* نحيف */
+    -fx-pref-height: 9;
+    -fx-padding: 0;
+}
+
+/* track شفاف */
+.gx-sidebar-scroll .scroll-bar:vertical .track,
+.gx-sidebar-scroll .scroll-bar:horizontal .track {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+}
+
+/* thumb لون مناسب مع الواجهة */
+.gx-sidebar-scroll .scroll-bar:vertical .thumb,
+.gx-sidebar-scroll .scroll-bar:horizontal .thumb {
+    -fx-background-color: rgba(210, 225, 255, 0.28); /* رمادي/أزرق خفيف */
+    -fx-background-insets: 2;
+    -fx-background-radius: 999;
+}
+
+/* hover على thumb */
+.gx-sidebar-scroll .scroll-bar:vertical .thumb:hover,
+.gx-sidebar-scroll .scroll-bar:horizontal .thumb:hover {
+    -fx-background-color: rgba(210, 225, 255, 0.40);
+}
+
+/* ضغط */
+.gx-sidebar-scroll .scroll-bar:vertical .thumb:pressed,
+.gx-sidebar-scroll .scroll-bar:horizontal .thumb:pressed {
+    -fx-background-color: rgba(210, 225, 255, 0.55);
+}
+
+/* نخفي الأزرار (السهم فوق/تحت) */
+.gx-sidebar-scroll .scroll-bar .increment-button,
+.gx-sidebar-scroll .scroll-bar .decrement-button {
+    -fx-padding: 0;
+    -fx-background-color: transparent;
+}
+.gx-sidebar-scroll .scroll-bar .increment-arrow,
+.gx-sidebar-scroll .scroll-bar .decrement-arrow {
+    -fx-shape: "";
+    -fx-padding: 0;
+}
+
+
+/* ===============================
+   Global ScrollBars (Modern)
+   =============================== */
+
+/* الخلفيات العامة */
+.scroll-bar:vertical, .scroll-bar:horizontal {
+    -fx-background-color: transparent;
+    -fx-padding: 0;
+}
+
+/* خليها نحيفة */
+.scroll-bar:vertical { -fx-pref-width: 9; }
+.scroll-bar:horizontal { -fx-pref-height: 9; }
+
+/* track شفاف */
+.scroll-bar .track {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+}
+
+/* thumb */
+.scroll-bar .thumb {
+    -fx-background-color: rgba(210, 225, 255, 0.28);
+    -fx-background-insets: 2;
+    -fx-background-radius: 999;
+}
+
+.scroll-bar .thumb:hover {
+    -fx-background-color: rgba(210, 225, 255, 0.40);
+}
+
+.scroll-bar .thumb:pressed {
+    -fx-background-color: rgba(210, 225, 255, 0.55);
+}
+
+/* نخفي الأسهم (الازرار فوق/تحت) */
+.scroll-bar .increment-button,
+.scroll-bar .decrement-button {
+    -fx-padding: 0;
+    -fx-background-color: transparent;
+}
+
+.scroll-bar .increment-arrow,
+.scroll-bar .decrement-arrow {
+    -fx-shape: "";
+    -fx-padding: 0;
+}
+
+
+/*!* ===============================*/
+/*   Dialogs (Add Link) - MODERN (FIXED)*/
+/*   =============================== *!*/
+
+/*!* DialogPane نفسه *!*/
+/*.dialog-pane.gx-dialog {*/
+/*    -fx-background-color: transparent;*/
+/*    -fx-padding: 0;*/
+/*}*/
+
+/*!* الخلفية الأساسية (الـ body) *!*/
+/*.dialog-pane.gx-dialog > .content {*/
+/*    -fx-background-color: #121826;*/
+/*    -fx-background-radius: 16;*/
+/*    -fx-border-radius: 16;*/
+
+/*    -fx-border-color: rgba(255,255,255,0.12);*/
+/*    -fx-border-width: 1;*/
+
+/*    -fx-padding: 18 18 12 18;*/
+
+/*    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.55), 22, 0.18, 0, 10);*/
+/*}*/
+
+/*!* اخفاء/تنسيق الهيدر (لو كان موجود) *!*/
+/*.dialog-pane.gx-dialog > .header-panel {*/
+/*    -fx-background-color: transparent;*/
+/*    -fx-padding: 0;*/
+/*}*/
+/*.dialog-pane.gx-dialog > .header-panel .label {*/
+/*    -fx-text-fill: rgba(255,255,255,0.92);*/
+/*    -fx-font-size: 15px;*/
+/*    -fx-font-weight: 900;*/
+/*}*/
+
+/*!* Labels داخل المحتوى *!*/
+/*.dialog-pane.gx-dialog .label {*/
+/*    -fx-text-fill: rgba(255,255,255,0.86);*/
+/*    -fx-font-weight: 700;*/
+/*}*/
+
+/*!* Grid *!*/
+/*.gx-dialog-grid {*/
+/*    -fx-background-color: transparent;*/
+/*}*/
+
+/*!* Inputs *!*/
+/*.gx-input {*/
+/*    -fx-background-color: rgba(255,255,255,0.06);*/
+/*    -fx-text-fill: rgba(255,255,255,0.92);*/
+/*    -fx-prompt-text-fill: rgba(255,255,255,0.38);*/
+
+/*    -fx-background-radius: 12;*/
+/*    -fx-border-color: rgba(255,255,255,0.12);*/
+/*    -fx-border-radius: 12;*/
+/*    -fx-border-width: 1;*/
+
+/*    -fx-padding: 10 12;*/
+/*}*/
+/*.gx-input:focused {*/
+/*    -fx-border-color: rgba(46,91,255,0.65);*/
+/*    -fx-effect: dropshadow(gaussian, rgba(46,91,255,0.28), 14, 0.25, 0, 0);*/
+/*}*/
+
+/*!* ComboBox *!*/
+/*.gx-combo {*/
+/*    -fx-background-color: rgba(255,255,255,0.06);*/
+/*    -fx-background-radius: 12;*/
+
+/*    -fx-border-color: rgba(255,255,255,0.12);*/
+/*    -fx-border-radius: 12;*/
+/*    -fx-border-width: 1;*/
+
+/*    -fx-padding: 2 6 2 6;*/
+/*}*/
+/*.gx-combo .list-cell {*/
+/*    -fx-text-fill: rgba(255,255,255,0.92);*/
+/*    -fx-background-color: transparent;*/
+/*}*/
+
+/*!* Combo popup *!*/
+/*.combo-box-popup .list-view {*/
+/*    -fx-background-color: #121826;*/
+/*    -fx-background-radius: 12;*/
+/*    -fx-border-color: rgba(255,255,255,0.10);*/
+/*    -fx-border-radius: 12;*/
+/*    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.55), 18, 0.18, 0, 10);*/
+/*}*/
+/*.combo-box-popup .list-cell {*/
+/*    -fx-text-fill: rgba(255,255,255,0.90);*/
+/*    -fx-background-color: transparent;*/
+/*    -fx-padding: 10 12;*/
+/*}*/
+/*.combo-box-popup .list-cell:hover {*/
+/*    -fx-background-color: rgba(46,91,255,0.18);*/
+/*}*/
+/*.combo-box-popup .list-cell:selected {*/
+/*    -fx-background-color: rgba(46,91,255,0.28);*/
+/*}*/
+
+/*!* checkbox *!*/
+/*.gx-check {*/
+/*    -fx-text-fill: rgba(255,255,255,0.86);*/
+/*    -fx-font-weight: 700;*/
+/*}*/
+/*.gx-check .box {*/
+/*    -fx-background-color: rgba(255,255,255,0.06);*/
+/*    -fx-border-color: rgba(255,255,255,0.14);*/
+/*    -fx-border-radius: 6;*/
+/*    -fx-background-radius: 6;*/
+/*}*/
+/*.gx-check:selected .mark {*/
+/*    -fx-background-color: white;*/
+/*}*/
+
+/*!* hint *!*/
+/*.gx-text-muted {*/
+/*    -fx-text-fill: rgba(255,255,255,0.52);*/
+/*    -fx-font-size: 12px;*/
+/*    -fx-font-weight: 600;*/
+/*}*/
+
+/*!* Buttons bar *!*/
+/*.dialog-pane.gx-dialog > .button-bar {*/
+/*    -fx-background-color: transparent;*/
+/*    -fx-padding: 0 18 16 18;*/
+/*}*/
+
+/*!* buttons *!*/
+/*.dialog-pane.gx-dialog .button {*/
+/*    -fx-font-size: 13px;*/
+/*    -fx-font-weight: 900;*/
+/*    -fx-background-radius: 12;*/
+/*    -fx-border-radius: 12;*/
+/*    -fx-padding: 9 16;*/
+/*    -fx-cursor: hand;*/
+/*}*/
+
+/*!* default *!*/
+/*.dialog-pane.gx-dialog .button:default {*/
+/*    -fx-background-color: #2E5BFF;*/
+/*    -fx-text-fill: white;*/
+/*}*/
+/*.dialog-pane.gx-dialog .button:default:hover {*/
+/*    -fx-background-color: #2A51E6;*/
+/*}*/
+
+/*!* cancel *!*/
+/*.dialog-pane.gx-dialog .button:cancel {*/
+/*    -fx-background-color: rgba(255,255,255,0.06);*/
+/*    -fx-text-fill: rgba(255,255,255,0.90);*/
+/*    -fx-border-color: rgba(255,255,255,0.14);*/
+/*    -fx-border-width: 1;*/
+/*}*/
+/*.dialog-pane.gx-dialog .button:cancel:hover {*/
+/*    -fx-background-color: rgba(255,255,255,0.10);*/
+/*}*/
+
+/* ===============================
+   Dialogs (Add Link) - MODERN (FIXED v2)
+   =============================== */
+
+/* خلي الـ DialogPane نفسه هو الكرت (بدون أي أبيض) */
+.dialog-pane.gx-dialog {
+    -fx-background-color: #121826;
+    -fx-background-radius: 18;
+    -fx-border-radius: 18;
+
+    -fx-border-color: rgba(255,255,255,0.12);
+    -fx-border-width: 1;
+
+    -fx-padding: 0;
+
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.60), 26, 0.22, 0, 12);
+}
+
+/* مهم: منع أي insets افتراضية تعمل “هالة” بيضاء */
+.dialog-pane.gx-dialog {
+    -fx-background-insets: 0;
+    -fx-border-insets: 0;
+}
+
+/* اخفاء/تنسيق الهيدر */
+.dialog-pane.gx-dialog > .header-panel {
+    -fx-background-color: transparent;
+    -fx-padding: 14 18 0 18;
+}
+.dialog-pane.gx-dialog > .header-panel .label {
+    -fx-text-fill: rgba(255,255,255,0.92);
+    -fx-font-size: 16px;
+    -fx-font-weight: 900;
+}
+
+/* content area: خليه شفاف لأنه الكرت صار على الـ dialog-pane */
+.dialog-pane.gx-dialog > .content {
+    -fx-background-color: transparent;
+    -fx-padding: 18 18 10 18;
+}
+
+/* Labels داخل المحتوى */
+.dialog-pane.gx-dialog .label {
+    -fx-text-fill: rgba(255,255,255,0.86);
+    -fx-font-weight: 800;
+}
+
+/* Grid */
+.gx-dialog-grid {
+    -fx-background-color: transparent;
+}
+
+/* Inputs */
+.gx-input {
+    -fx-background-color: rgba(255,255,255,0.06);
+    -fx-text-fill: rgba(255,255,255,0.92);
+    -fx-prompt-text-fill: rgba(255,255,255,0.40);
+
+    -fx-background-radius: 12;
+    -fx-border-color: rgba(255,255,255,0.12);
+    -fx-border-radius: 12;
+    -fx-border-width: 1;
+
+    -fx-padding: 11 12;
+}
+.gx-input:focused {
+    -fx-border-color: rgba(46,91,255,0.70);
+    -fx-effect: dropshadow(gaussian, rgba(46,91,255,0.28), 14, 0.25, 0, 0);
+}
+
+/* ComboBox */
+.gx-combo {
+    -fx-background-color: rgba(255,255,255,0.06);
+    -fx-background-radius: 12;
+
+    -fx-border-color: rgba(255,255,255,0.12);
+    -fx-border-radius: 12;
+    -fx-border-width: 1;
+
+    -fx-padding: 3 8 3 8;
+}
+.gx-combo .list-cell {
+    -fx-text-fill: rgba(255,255,255,0.92);
+    -fx-background-color: transparent;
+}
+
+/* Combo popup */
+.combo-box-popup .list-view {
+    -fx-background-color: #121826;
+    -fx-background-radius: 12;
+    -fx-border-color: rgba(255,255,255,0.10);
+    -fx-border-radius: 12;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.55), 18, 0.18, 0, 10);
+}
+.combo-box-popup .list-cell {
+    -fx-text-fill: rgba(255,255,255,0.90);
+    -fx-background-color: transparent;
+    -fx-padding: 10 12;
+}
+.combo-box-popup .list-cell:hover {
+    -fx-background-color: rgba(46,91,255,0.18);
+}
+.combo-box-popup .list-cell:selected {
+    -fx-background-color: rgba(46,91,255,0.28);
+}
+
+/* checkbox */
+.gx-check {
+    -fx-text-fill: rgba(255,255,255,0.86);
+    -fx-font-weight: 800;
+}
+.gx-check .box {
+    -fx-background-color: rgba(255,255,255,0.06);
+    -fx-border-color: rgba(255,255,255,0.14);
+    -fx-border-radius: 6;
+    -fx-background-radius: 6;
+}
+.gx-check:selected .mark {
+    -fx-background-color: white;
+}
+
+/* hint */
+.gx-text-muted {
+    -fx-text-fill: rgba(255,255,255,0.55);
+    -fx-font-size: 12px;
+    -fx-font-weight: 600;
+}
+
+/* Button bar: خليه داخل نفس الكرت + شفاف */
+.dialog-pane.gx-dialog > .button-bar {
+    -fx-background-color: transparent;
+    -fx-padding: 0 18 18 18;
+}
+.dialog-pane.gx-dialog > .button-bar > .container {
+    -fx-background-color: transparent;
+}
+
+/* buttons */
+.dialog-pane.gx-dialog .button {
+    -fx-font-size: 13px;
+    -fx-font-weight: 900;
+    -fx-background-radius: 12;
+    -fx-border-radius: 12;
+    -fx-padding: 10 18;
+    -fx-cursor: hand;
+}
+
+/* default */
+.dialog-pane.gx-dialog .button:default {
+    -fx-background-color: #2E5BFF;
+    -fx-text-fill: white;
+}
+.dialog-pane.gx-dialog .button:default:hover {
+    -fx-background-color: #2A51E6;
+}
+
+/* cancel */
+.dialog-pane.gx-dialog .button:cancel {
+    -fx-background-color: rgba(255,255,255,0.06);
+    -fx-text-fill: rgba(255,255,255,0.90);
+    -fx-border-color: rgba(255,255,255,0.14);
+    -fx-border-width: 1;
+}
+.dialog-pane.gx-dialog .button:cancel:hover {
+    -fx-background-color: rgba(255,255,255,0.10);
 }

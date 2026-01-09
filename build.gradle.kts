@@ -27,6 +27,8 @@ application {
 dependencies {
     implementation("org.kordamp.ikonli:ikonli-javafx:12.3.1")
     implementation("org.kordamp.ikonli:ikonli-materialdesign2-pack:12.3.1")
+    // Needed for iconLiteral like: fas-plus, far-..., fab-...
+    implementation("org.kordamp.ikonli:ikonli-fontawesome5-pack:12.3.1")
 }
 
 /** ✅ IMPORTANT: Disable tests temporarily to bypass the Gradle ':test' crash */
