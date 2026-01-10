@@ -1,0 +1,22 @@
+/* ===============================
+   Playlist Thumbnail
+   =============================== */
+
+.gx-playlist-thumb {
+    -fx-background-color: #1C2230;
+    -fx-background-radius: 8;
+    -fx-min-width: 96;
+    -fx-min-height: 54;
+    -fx-max-width: 96;
+    -fx-max-height: 54;
+}
+
+.gx-playlist-thumb ImageView {
+    -fx-background-radius: 8;
+}
+
+.gx-playlist-thumb-placeholder {
+    -fx-text-fill: rgba(255,255,255,0.35);
+    -fx-font-size: 11px;
+    -fx-font-weight: 700;
+}
