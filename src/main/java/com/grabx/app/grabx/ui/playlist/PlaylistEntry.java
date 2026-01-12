@@ -60,7 +60,9 @@ public class PlaylistEntry {
     public boolean isQualitiesLoaded() { return qualitiesLoaded; }
     public void setQualitiesLoaded(boolean qualitiesLoaded) { this.qualitiesLoaded = qualitiesLoaded; }
 
-    public boolean isManualQuality() { return manualQuality; }
+    public boolean isManualQuality() {
+        return manualQuality;
+    }
     public void setManualQuality(boolean manualQuality) { this.manualQuality = manualQuality; }
 
     public void setSizeByQuality(Map<String, String> map) {

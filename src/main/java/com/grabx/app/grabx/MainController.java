@@ -998,7 +998,7 @@ public class MainController {
 
         ComboBox<String> globalQualityCombo = new ComboBox<>();
         globalQualityCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality");
-        globalQualityCombo.setPrefWidth(260);
+        globalQualityCombo.setPrefWidth(160);
 
         // standard list; we will map to closest supported per item
         fillQualityCombo(globalQualityCombo);
@@ -1008,8 +1008,12 @@ public class MainController {
             @Override protected void updateItem(String item, boolean empty) {
                 super.updateItem(item, empty);
                 setText(empty ? null : item);
-                setDisable(QUALITY_SEPARATOR.equals(item));
-                setOpacity(QUALITY_SEPARATOR.equals(item) ? 0.55 : 1.0);
+//                setDisable(QUALITY_SEPARATOR.equals(item));
+//                setOpacity(QUALITY_SEPARATOR.equals(item) ? 0.55 : 1.0);
+                boolean disabled = QUALITY_SEPARATOR.equals(item) || QUALITY_CUSTOM.equals(item);
+                setDisable(disabled);
+                setOpacity(disabled ? 0.55 : 1.0);
+
             }
         });
         globalQualityCombo.setButtonCell(new ListCell<>() {
@@ -1019,17 +1023,11 @@ public class MainController {
             }
         });
 
-// store desired global quality
+        // store desired global quality (used as default for items that are not manual)
         StringProperty globalDesiredQuality = new SimpleStringProperty(QUALITY_BEST);
         globalQualityCombo.getSelectionModel().select(QUALITY_BEST);
-//        globalDesiredQuality.bind(globalQualityCombo.valueProperty());
 
-        globalQualityCombo.valueProperty().addListener((obs, oldV, newV) -> {
-            if (newV == null) return;
-            if (QUALITY_SEPARATOR.equals(newV)) return;
-            if (QUALITY_CUSTOM.equals(newV)) return;
-            globalDesiredQuality.set(newV);
-        });
+        // NOTE: we DO NOT bind; we only update this on USER changes to the global combo.
 
         HBox globalRow = new HBox(10);
         globalRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
@@ -1062,6 +1060,10 @@ public class MainController {
         java.util.concurrent.atomic.AtomicBoolean pendingRefresh =
                 new java.util.concurrent.atomic.AtomicBoolean(false);
 
+        java.util.concurrent.atomic.AtomicBoolean pendingMixedUpdate =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        final java.util.concurrent.atomic.AtomicReference<Runnable> updateGlobalMixedStateRef = new java.util.concurrent.atomic.AtomicReference<>();
+
         Runnable requestRefreshSafe = () -> {
             if (anyQualityPopupOpen.get()) {
                 pendingRefresh.set(true);
@@ -1074,12 +1076,20 @@ public class MainController {
 
         // Track popup state (so list.refresh() doesn't close an open ComboBox)
         globalQualityCombo.showingProperty().addListener((obs, was, isNow) -> anyQualityPopupOpen.set(isNow));
-
+        // Run pending UI refresh/mixed update after any quality popup closes
         anyQualityPopupOpen.addListener((o, was, isNow) -> {
-            if (!isNow && pendingRefresh.getAndSet(false)) {
-                refreshThrottle.stop();
-                refreshThrottle.setOnFinished(ev -> list.refresh());
-                refreshThrottle.playFromStart();
+            if (!isNow) {
+                if (pendingRefresh.getAndSet(false)) {
+                    refreshThrottle.stop();
+                    refreshThrottle.setOnFinished(ev -> list.refresh());
+                    refreshThrottle.playFromStart();
+                }
+                if (pendingMixedUpdate.getAndSet(false)) {
+                    Platform.runLater(() -> {
+                        Runnable r = updateGlobalMixedStateRef.get();
+                        if (r != null) r.run();
+                    });
+                }
             }
         });
 
@@ -1090,77 +1100,141 @@ public class MainController {
         // ===== Union of discovered heights across playlist for the GLOBAL combo =====
         java.util.Set<Integer> globalHeightsUnion = new java.util.concurrent.ConcurrentSkipListSet<>();
 
-        PauseTransition globalComboUpdateThrottle = new PauseTransition(Duration.millis(220));
-        Runnable updateGlobalQualityCombo = () -> {
-            globalComboUpdateThrottle.stop();
-            globalComboUpdateThrottle.setOnFinished(ev -> {
-                String prev = globalQualityCombo.getValue();
-                if (prev == null || prev.isBlank()) prev = QUALITY_BEST;
-
-                if (globalHeightsUnion.isEmpty()) {
-                    fillQualityCombo(globalQualityCombo);
-                } else {
-                    java.util.Set<Integer> normalized = normalizeHeights(new java.util.HashSet<>(globalHeightsUnion));
-                    java.util.List<Integer> sorted = normalized.stream()
-                            .sorted(java.util.Comparator.reverseOrder())
-                            .toList();
-
-                    globalQualityCombo.getItems().clear();
-                    globalQualityCombo.getItems().add(QUALITY_BEST);
-                    globalQualityCombo.getItems().add(QUALITY_SEPARATOR);
-                    for (Integer h : sorted) {
-                        globalQualityCombo.getItems().add(formatHeightLabel(h));
-                    }
-                }
-
-                // Restore selection if possible, otherwise map to closest
-                if (!globalQualityCombo.getItems().contains(prev)) {
-                    String mapped = pickClosestSupportedQuality(prev, new java.util.ArrayList<>(globalQualityCombo.getItems()));
-                    globalQualityCombo.getSelectionModel().select(mapped);
-                } else {
-                    globalQualityCombo.getSelectionModel().select(prev);
-                }
-            });
-            globalComboUpdateThrottle.playFromStart();
-        };
-
+        // Guards so programmatic combo changes don't trigger applying qualities
         final javafx.beans.property.BooleanProperty updatingGlobalCombo =
                 new javafx.beans.property.SimpleBooleanProperty(false);
 
-        Runnable updateGlobalMixedState = () -> {
-            if (updatingGlobalCombo.get()) return;
+        // Once the user touches any quality control, we allow mixed-state logic to drive the global combo.
+        final java.util.concurrent.atomic.AtomicBoolean userQualityInteracted =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
 
-            java.util.Set<String> qs = new java.util.HashSet<>();
+        // Guards so programmatic selection/check changes don't count as "user interaction"
+        final javafx.beans.property.BooleanProperty updatingSelection =
+                new javafx.beans.property.SimpleBooleanProperty(false);
+
+        // Mixed state rule (matches UX requirement):
+        // - Default shows the CURRENT global desired quality (Best by default)
+        // - If ANY selected item is manually overridden -> show CUSTOM
+        // - When manual overrides are cleared (back to global), global returns to the global desired value
+        final Runnable updateGlobalMixedState = () -> {
+            if (anyQualityPopupOpen.get() || updatingGlobalCombo.get()) {
+                pendingMixedUpdate.set(true);
+                return;
+            }
+
+            // If user never interacted, keep the global combo stable (Best by default)
+            if (!userQualityInteracted.get()) return;
+
             boolean anyManual = false;
+            boolean anySelected = false;
 
             for (PlaylistEntry it : items) {
                 if (it == null) continue;
                 if (!it.isSelected()) continue;
                 if (it.isUnavailable()) continue;
-
-                if (it.isManualQuality()) anyManual = true;
-
-                String q = it.getQuality();
-                if (q == null || q.isBlank()) q = QUALITY_BEST;
-                qs.add(q);
-                if (qs.size() > 1) break;
+                anySelected = true;
+                if (it.isManualQuality()) {
+                    anyManual = true;
+                    break;
+                }
             }
+
+            if (!anySelected) return;
+
+            String desired = globalDesiredQuality.get();
+            if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
 
             updatingGlobalCombo.set(true);
             try {
-                if (qs.isEmpty()) {
-                    globalQualityCombo.getSelectionModel().select(QUALITY_BEST);
-                } else if (qs.size() == 1 && !anyManual) {
-                    globalQualityCombo.getSelectionModel().select(qs.iterator().next());
-                } else {
+                if (anyManual) {
                     if (!globalQualityCombo.getItems().contains(QUALITY_CUSTOM)) {
                         globalQualityCombo.getItems().add(0, QUALITY_CUSTOM);
                     }
                     globalQualityCombo.getSelectionModel().select(QUALITY_CUSTOM);
+                } else {
+                    // no manual overrides -> show desired global quality
+                    if (globalQualityCombo.getItems().contains(QUALITY_CUSTOM)) {
+                        globalQualityCombo.getItems().remove(QUALITY_CUSTOM);
+                    }
+
+                    if (globalQualityCombo.getItems().contains(desired)) {
+                        globalQualityCombo.getSelectionModel().select(desired);
+                    } else {
+                        String mapped = pickClosestSupportedQuality(desired, new java.util.ArrayList<>(globalQualityCombo.getItems()));
+                        globalQualityCombo.getSelectionModel().select(mapped);
+                    }
                 }
             } finally {
                 updatingGlobalCombo.set(false);
             }
+        };
+        updateGlobalMixedStateRef.set(updateGlobalMixedState);
+
+        PauseTransition globalComboUpdateThrottle = new PauseTransition(Duration.millis(220));
+        Runnable updateGlobalQualityCombo = () -> {
+            globalComboUpdateThrottle.stop();
+            globalComboUpdateThrottle.setOnFinished(ev -> {
+
+                // Preserve selection across rebuilds (especially CUSTOM)
+                String prev = globalQualityCombo.getValue();
+                if (prev == null || prev.isBlank()) prev = QUALITY_BEST;
+
+                boolean keepCustom = QUALITY_CUSTOM.equals(prev);
+
+                updatingGlobalCombo.set(true);
+                try {
+                    globalQualityCombo.getItems().clear();
+
+                    if (keepCustom) {
+                        globalQualityCombo.getItems().add(QUALITY_CUSTOM);
+                    }
+
+                    if (globalHeightsUnion.isEmpty()) {
+                        // Safe fallback list
+                        globalQualityCombo.getItems().addAll(
+                                QUALITY_BEST,
+                                QUALITY_SEPARATOR,
+                                "1080p",
+                                "720p",
+                                "480p",
+                                "360p",
+                                "240p",
+                                "144p"
+                        );
+                    } else {
+                        // Only normalized ladder values
+                        java.util.Set<Integer> normalized = normalizeHeights(new java.util.HashSet<>(globalHeightsUnion));
+                        java.util.List<Integer> sorted = new java.util.ArrayList<>(normalized);
+                        sorted.sort(java.util.Comparator.reverseOrder());
+
+                        globalQualityCombo.getItems().add(QUALITY_BEST);
+                        globalQualityCombo.getItems().add(QUALITY_SEPARATOR);
+                        for (Integer h : sorted) {
+                            globalQualityCombo.getItems().add(formatHeightLabel(h));
+                        }
+                    }
+
+                    // Restore selection without fighting CUSTOM
+                    if (QUALITY_CUSTOM.equals(prev) && keepCustom) {
+                        globalQualityCombo.getSelectionModel().select(QUALITY_CUSTOM);
+                    } else if (globalQualityCombo.getItems().contains(prev)) {
+                        globalQualityCombo.getSelectionModel().select(prev);
+                    } else {
+                        String mapped = pickClosestSupportedQuality(prev, new java.util.ArrayList<>(globalQualityCombo.getItems()));
+                        globalQualityCombo.getSelectionModel().select(mapped);
+                    }
+
+                } finally {
+                    updatingGlobalCombo.set(false);
+                }
+
+                // If the user already interacted, re-evaluate mixed state once after rebuild.
+                Platform.runLater(() -> {
+                    Runnable r = updateGlobalMixedStateRef.get();
+                    if (r != null) r.run();
+                });
+            });
+            globalComboUpdateThrottle.playFromStart();
         };
 
         list.setCellFactory(lv -> new ListCell<>() {
@@ -1176,6 +1250,7 @@ public class MainController {
             private final Label placeholder = new Label("NO PREVIEW");
 
             private final ComboBox<String> qualityCombo = new ComboBox<>();
+            private boolean updatingRowCombo = false;
 
             private final HBox card = new HBox(12);
 
@@ -1208,7 +1283,7 @@ public class MainController {
 
                 // Quality Combo (right side)
                 qualityCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality");
-                qualityCombo.setPrefWidth(200);
+                qualityCombo.setPrefWidth(115);
                 qualityCombo.setMaxWidth(220);
                 qualityCombo.setDisable(true);
 
@@ -1231,12 +1306,31 @@ public class MainController {
                 qualityCombo.showingProperty().addListener((obs, was, isNow) -> anyQualityPopupOpen.set(isNow));
 
                 qualityCombo.valueProperty().addListener((obs, old, val) -> {
+                    if (updatingRowCombo) return;
                     if (val == null || QUALITY_SEPARATOR.equals(val)) return;
+
                     PlaylistEntry it = getItem();
                     if (it == null) return;
 
+                    // USER interaction
+                    userQualityInteracted.set(true);
+
+                    // Apply selected value to THIS item only
                     it.setQuality(val);
-                    it.setManualQuality(true);   // ✅ هذا صار اختيار يدوي
+
+                    // If chosen value equals what the GLOBAL desired would map to for this item,
+                    // then it's not a manual override.
+                    String desired = globalDesiredQuality.get();
+                    if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
+
+                    java.util.List<String> avail = it.getAvailableQualities();
+                    String globalMapped = (avail == null || avail.isEmpty())
+                            ? desired
+                            : pickClosestSupportedQuality(desired, avail);
+
+                    boolean manual = !val.equals(globalMapped);
+                    it.setManualQuality(manual);
+
                     meta.setText(buildMetaLine(it));
                     Platform.runLater(updateGlobalMixedState);
                 });
@@ -1264,7 +1358,12 @@ public class MainController {
                     }
 
                     it.setSelected(isNow);
-                    Platform.runLater(updateGlobalMixedState);
+
+                    // Only count as a user interaction when it wasn't a programmatic bulk change
+                    if (!updatingSelection.get()) {
+                        userQualityInteracted.set(true);
+                        Platform.runLater(updateGlobalMixedState);
+                    }
                 });
             }
 
@@ -1361,8 +1460,13 @@ public class MainController {
                 if (!item.isQualitiesLoaded()) {
                     item.setQualitiesLoaded(true); // mark immediately to prevent multi-threads from multiple cells
                     qualityCombo.setDisable(true);
-                    fillQualityCombo(qualityCombo);
-                    qualityCombo.getSelectionModel().select(item.getQuality());
+                    updatingRowCombo = true;
+                    try {
+                        fillQualityCombo(qualityCombo);
+                        qualityCombo.getSelectionModel().select(item.getQuality());
+                    } finally {
+                        updatingRowCombo = false;
+                    }
 
                     String videoId = item.getId();
                     String videoUrl = youtubeWatchUrl(videoId);
@@ -1420,7 +1524,7 @@ public class MainController {
                         // ✅ map desired to closest supported for THIS item
                         String supported = pickClosestSupportedQuality(desired, item.getAvailableQualities());
                         item.setQuality(supported);
-                        Platform.runLater(updateGlobalMixedState);
+//                        Platform.runLater(updateGlobalMixedState);
 
                         // ✅ refresh without closing popups
                         requestRefreshSafe.run();
@@ -1436,26 +1540,36 @@ public class MainController {
                     java.util.List<String> q = item.getAvailableQualities();
 
                     if (q != null && q.size() >= 2) { // Best + separator at minimum
-                        qualityCombo.getItems().setAll(q);
-                        qualityCombo.setDisable(false);
+                        updatingRowCombo = true;
+                        try {
+                            qualityCombo.getItems().setAll(q);
+                            qualityCombo.setDisable(false);
 
-                        String cur = item.getQuality();
-                        if (cur == null || cur.isBlank()) cur = QUALITY_BEST;
+                            String cur = item.getQuality();
+                            if (cur == null || cur.isBlank()) cur = QUALITY_BEST;
 
-                        if (!qualityCombo.getItems().contains(cur)) {
-                            String mapped = pickClosestSupportedQuality(cur, q);
-                            item.setQuality(mapped);
-                            cur = mapped;
+                            if (!qualityCombo.getItems().contains(cur)) {
+                                String mapped = pickClosestSupportedQuality(cur, q);
+                                item.setQuality(mapped);
+                                cur = mapped;
+                            }
+                            qualityCombo.getSelectionModel().select(cur);
+                        } finally {
+                            updatingRowCombo = false;
                         }
-                        qualityCombo.getSelectionModel().select(cur);
 
                     } else {
                         // Probe failed/rejected -> allow retry later instead of getting stuck disabled forever
                         item.setQualitiesLoaded(false);
 
-                        qualityCombo.getItems().setAll(QUALITY_BEST, QUALITY_SEPARATOR);
-                        qualityCombo.getSelectionModel().select(QUALITY_BEST);
-                        qualityCombo.setDisable(true);
+                        updatingRowCombo = true;
+                        try {
+                            qualityCombo.getItems().setAll(QUALITY_BEST, QUALITY_SEPARATOR);
+                            qualityCombo.getSelectionModel().select(QUALITY_BEST);
+                            qualityCombo.setDisable(true);
+                        } finally {
+                            updatingRowCombo = false;
+                        }
                     }
                 }
 
@@ -1537,14 +1651,8 @@ public class MainController {
                 labels.add(QUALITY_BEST);
                 labels.add(QUALITY_SEPARATOR);
 
-//                java.util.List<Integer> sorted = heights.stream()
-//                        .filter(h -> h != null && h > 0)
-//                        .distinct()
-//                        .sorted(java.util.Comparator.reverseOrder())
-//                        .toList();
-
-                java.util.List<Integer> sorted = new java.util.ArrayList<>(heights);
-                sorted.removeIf(h -> h == null || h <= 0);
+                java.util.Set<Integer> norm2 = normalizeHeights(heights);
+                java.util.List<Integer> sorted = new java.util.ArrayList<>(norm2);
                 sorted.sort(java.util.Comparator.reverseOrder());
 
                 for (Integer h : sorted) labels.add(formatHeightLabel(h));
@@ -1552,11 +1660,11 @@ public class MainController {
 
                 // size map: label -> "~xxx MB"
                 java.util.Map<String, String> sizeMap = new java.util.HashMap<>();
-                if (pr != null) {
+                if (pr != null && pr.sizeByHeight != null) {
                     for (Integer h : sorted) {
                         String label = formatHeightLabel(h);
                         String sz = pr.sizeByHeight.get(h);
-                        if (sz != null) sizeMap.put(label, sz);
+                        if (sz != null && !sz.isBlank()) sizeMap.put(label, sz);
                     }
                 }
                 it.setSizeByQuality(sizeMap);
@@ -1570,6 +1678,7 @@ public class MainController {
 
                 String supported = pickClosestSupportedQuality(desired, it.getAvailableQualities());
                 it.setQuality(supported);
+                // Platform.runLater(updateGlobalMixedState); // REMOVE: do not update mixed state during probing
 
                 requestRefreshSafe.run();
             });
@@ -1581,17 +1690,31 @@ public class MainController {
         };
 
         globalQualityCombo.valueProperty().addListener((obs, old, val) -> {
-            if (val == null || QUALITY_SEPARATOR.equals(val)) return;
+            if (val == null) return;
+            if (QUALITY_SEPARATOR.equals(val)) return;
             if (QUALITY_CUSTOM.equals(val)) return;
             if (updatingGlobalCombo.get()) return;
 
+            // USER action
+            userQualityInteracted.set(true);
+
+            // remember desired global quality (used by probes for items that aren't manual)
+            globalDesiredQuality.set(val);
+
             for (PlaylistEntry it : items) {
                 if (it == null) continue;
-                if (!it.isSelected()) continue;
+                // Removed: if (!it.isSelected()) continue;
                 if (it.isUnavailable()) continue;
 
                 it.setManualQuality(false);
-                it.setQuality(val);
+
+                // map to closest supported for THIS item (based on probed qualities)
+                java.util.List<String> avail = it.getAvailableQualities();
+                String mapped = (avail == null || avail.isEmpty())
+                        ? val
+                        : pickClosestSupportedQuality(val, avail);
+
+                it.setQuality(mapped);
             }
 
             requestRefreshSafe.run();
@@ -1637,10 +1760,25 @@ public class MainController {
                     status.setText("Loaded " + loaded.size() + " items" + (bad > 0 ? (" • " + bad + " unavailable") : ""));
                 }
 
-                // default select all (skip unavailable)
-                for (PlaylistEntry it : items) {
-                    it.setSelected(!it.isUnavailable());
+                // default select all (skip unavailable) - programmatic, do NOT treat as user interaction
+                updatingSelection.set(true);
+                try {
+                    for (PlaylistEntry it : items) {
+                        it.setSelected(!it.isUnavailable());
+                    }
+                } finally {
+                    updatingSelection.set(false);
                 }
+
+                // initial default: BEST (do not mark as user interaction)
+                updatingGlobalCombo.set(true);
+                try {
+                    globalQualityCombo.getSelectionModel().select(QUALITY_BEST);
+                } finally {
+                    updatingGlobalCombo.set(false);
+                }
+                globalDesiredQuality.set(QUALITY_BEST);
+
                 requestRefreshSafe.run();
                 refreshAddState.run();
                 // Prefetch progressively so sizes appear without needing scroll-to-touch
