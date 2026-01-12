@@ -16,12 +16,16 @@
     -fx-border-insets: 0;
 
 }
+.gx-btn:hover {
+    -fx-scale-x: 1.02;
+    -fx-scale-y: 1.02;
+}
 
 /* Primary */
 .gx-btn-primary {
     /*-fx-background-color: #2E5BFF;*/
     /*-fx-text-fill: white;*/
-    -fx-background-color: #2E5BFF;
+    -fx-background-color: #2E5BFF !important;
     -fx-text-fill: white;
     -fx-border-color: transparent;
 }
@@ -30,12 +34,9 @@
 }
 
 .gx-btn-primary:pressed {
-    /*-fx-effect: dropshadow(gaussian, rgba(46,91,255,0.65), 14, 0.4, 0, 0);*/
-    /*-fx-effect: dropshadow(gaussian, rgba(46,91,255,0.55), 14, 0.35, 0, 0);*/
     -fx-effect: dropshadow(gaussian, rgba(46,91,255,0.45), 10, 0.35, 0, 0);
 
     -fx-translate-y: 1;
-
 }
 
 
@@ -46,7 +47,10 @@
     -fx-border-color: rgba(255,255,255,0.10);
     -fx-border-width: 1;
 }
-.gx-btn-neutral:hover { -fx-background-color: #222A3A; }
+.gx-btn-neutral:hover {
+    -fx-background-color: #222A3A;
+}
+
 .gx-btn-neutral:pressed {
     -fx-background-color: #1A2130;
     -fx-translate-y: 1;
@@ -70,15 +74,6 @@
     -fx-effect: dropshadow(gaussian, rgba(46,91,255,0.45), 10, 0.35, 0, 0);
 
 }
-
- /*Ghost / Secondary */
-/*.gx-btn-ghost {*/
-/*    -fx-background-color: #1C2230;*/
-/*    -fx-text-fill: #E8ECF3;*/
-/*}*/
-/*.gx-btn-ghost:hover {*/
-/*    -fx-background-color: #262E40;*/
-/*}*/
 
 /* Danger (later) */
 .gx-btn-danger {
@@ -137,14 +132,10 @@
    Subtle animation (hover polish)
    ====================================================== */
 
-.gx-btn {
-    -fx-background-color: inherit;
-}
+/*.gx-btn {*/
+/*    -fx-background-color: inherit;*/
+/*}*/
 
-.gx-btn:hover {
-    -fx-scale-x: 1.02;
-    -fx-scale-y: 1.02;
-}
 
 
 /* ======================================================

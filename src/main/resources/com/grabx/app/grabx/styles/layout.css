@@ -348,6 +348,9 @@
     -fx-font-size: 12px;
     -fx-font-weight: 600;
 }
+.gx-error-text {
+    -fx-text-fill: #ff4d4d;
+}
 
 /* Button bar: خليه داخل نفس الكرت + شفاف */
 .dialog-pane.gx-dialog > .button-bar {

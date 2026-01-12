@@ -761,7 +761,11 @@ public class MainController {
 
         // Primary button = Add & Start (no checkbox)
         ButtonType addStartBtn = new ButtonType("Add & Start", ButtonBar.ButtonData.OK_DONE);
+
         pane.getButtonTypes().setAll(ButtonType.CANCEL, addStartBtn);
+
+        Button addStartButton = (Button) pane.lookupButton(addStartBtn);
+        addStartButton.getStyleClass().addAll("gx-btn", "gx-btn-primary");
 
         GridPane grid = new GridPane();
         grid.getStyleClass().add("gx-dialog-grid");
@@ -776,7 +780,7 @@ public class MainController {
 
         // GET button (analyze)
         Button getBtn = new Button("Get");
-        getBtn.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
+        getBtn.getStyleClass().addAll("gx-btn", "gx-btn-ghost");//gx-input
 
         getBtn.setMinWidth(90);
 
@@ -825,6 +829,8 @@ public class MainController {
         Label info = new Label("Paste a link then click Get.");
         info.getStyleClass().add("gx-text-muted");
         info.setWrapText(true);
+        // Keep a consistent default color; errors will override temporarily
+        info.setTextFill(Color.web("#9aa4b2"));
 
         // Rows
         int r = 0;
@@ -876,33 +882,50 @@ public class MainController {
                 modeCombo.setDisable(false);
                 qualityCombo.setDisable(false);
                 info.setText("Detected: Video. Choose mode/quality then Add & Start.");
+                info.setTextFill(Color.web("#9aa4b2"));
                 okBtn.setDisable(false);
             } else if (t == ContentType.PLAYLIST) {
                 modeCombo.setDisable(true);
                 qualityCombo.setDisable(true);
                 info.setText("Detected: Playlist. Opening Playlist screen...");
+                info.setTextFill(Color.web("#9aa4b2"));
                 // Add is handled from the Playlist screen
                 okBtn.setDisable(true);
             } else if (t == ContentType.DIRECT_FILE) {
                 modeCombo.setDisable(true);
                 qualityCombo.setDisable(true);
                 info.setText("Detected: Direct file/link. Ready to Add & Start.");
+                info.setTextFill(Color.web("#9aa4b2"));
                 okBtn.setDisable(false);
             } else {
+                // Unsupported / invalid / empty
                 modeCombo.setDisable(true);
                 qualityCombo.setDisable(true);
                 info.setText("Unsupported or invalid URL.");
+                info.setTextFill(Color.web("#ff4d4d"));
                 okBtn.setDisable(true);
             }
         };
 
         getBtn.setOnAction(e -> {
             String url = urlField.getText() == null ? "" : urlField.getText().trim();
+            if (url.isBlank()) {
+                // Empty URL -> guide the user (not “unsupported”)
+                modeCombo.setDisable(true);
+                qualityCombo.setDisable(true);
+                fillQualityCombo(qualityCombo);
+                info.setText("Paste a link then click Get.");
+                info.setTextFill(Color.web("#ff4d4d"));
+                okBtn.setDisable(true);
+                lastType[0] = ContentType.UNSUPPORTED;
+                return;
+            }
             lastType[0] = analyzeUrlType(url);
 
             // If it's a single video, probe available heights and rebuild the quality list accordingly
             if (lastType[0] == ContentType.VIDEO) {
                 info.setText("Analyzing formats...");
+                info.setTextFill(Color.web("#9aa4b2"));
 
                 new Thread(() -> {
                     Set<Integer> heights = probeHeightsWithYtDlp(url);
@@ -936,9 +959,9 @@ public class MainController {
             okBtn.setDisable(true);
             modeCombo.setDisable(true);
             qualityCombo.setDisable(true);
-//            info.setText("Paste a link then click Get.");
             fillQualityCombo(qualityCombo);
             info.setText("Paste a link then click Get.");
+            info.setTextFill(Color.web("#9aa4b2"));
         });
 
         pane.setContent(grid);
