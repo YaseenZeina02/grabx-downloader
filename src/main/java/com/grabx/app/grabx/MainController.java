@@ -4,7 +4,11 @@ import java.util.Map;
 import java.util.concurrent.*;
 
 
+import com.grabx.app.grabx.core.model.probe.AudioProbeService;
+import com.grabx.app.grabx.core.model.probe.VideoProbeService;
 import com.grabx.app.grabx.ui.components.ScrollbarAutoHide;
+import com.grabx.app.grabx.ui.probe.AudioFormatInfo;
+import com.grabx.app.grabx.ui.probe.ProbeAudioResult;
 import com.grabx.app.grabx.ui.sidebar.SidebarItem;
 import com.grabx.app.grabx.ui.playlist.PlaylistEntry;
 import javafx.animation.PauseTransition;
@@ -66,34 +70,6 @@ public class MainController {
         // Avoid creating multiple Image downloads for the same thumbnail when cells are recycled
     private static final Set<String> PLAYLIST_THUMB_INFLIGHT = ConcurrentHashMap.newKeySet();
 
-//    private static void probeVideoQualitiesAsync(String videoUrl, String videoId, java.util.function.Consumer<ProbeQualitiesResult> onDone) {
-//        if (videoUrl == null || videoUrl.isBlank() || videoId == null || videoId.isBlank()) return;
-//
-//        // cache hit
-//        ProbeQualitiesResult cached = PLAYLIST_PROBE_CACHE.get(videoId);
-//        if (cached != null) {
-//            Platform.runLater(() -> onDone.accept(cached));
-//            return;
-//        }
-//
-//        // avoid duplicate in-flight probes for same item
-//        if (!PLAYLIST_PROBE_INFLIGHT.add(videoId)) return;
-//
-//        try {
-//            PLAYLIST_PROBE_EXEC.execute(() -> {
-//                try {
-//                    ProbeQualitiesResult pr = probeQualitiesWithSizes(videoUrl);
-//                    PLAYLIST_PROBE_CACHE.put(videoId, pr);
-//                    Platform.runLater(() -> onDone.accept(pr));
-//                } finally {
-//                    PLAYLIST_PROBE_INFLIGHT.remove(videoId);
-//                }
-//            });
-//        } catch (RejectedExecutionException ignored) {
-//            // queue full -> we'll probe later when user scrolls again
-//            PLAYLIST_PROBE_INFLIGHT.remove(videoId);
-//        }
-//    }
 
     private static boolean probeVideoQualitiesAsync(
             String videoUrl,
@@ -179,6 +155,8 @@ public class MainController {
 
 //    private static final Pattern YTDLP_HEIGHT_P = Pattern.compile("\\b(\\d{3,4})p\\b");
 //    private static final Pattern YTDLP_HEIGHT_X = Pattern.compile("\\b\\d{3,4}x(\\d{3,4})\\b");
+
+
 
     // Matches: 1080p, 1080p60, 2160p, 2160p60 ... (yt-dlp often prints p60 without WxH)
     private static final Pattern YTDLP_HEIGHT_P = Pattern.compile("\\b(\\d{3,4})p(?:\\d{1,3})?\\b");
@@ -624,9 +602,25 @@ public class MainController {
         n.setManaged(visible);
     }
 
-    private static final String QUALITY_BEST = "Best quality (Recommended)";
-    private static final String QUALITY_SEPARATOR = "──────────────";
-    private static final String QUALITY_CUSTOM = "Custom (Mixed)";
+private static final String QUALITY_BEST = "Best quality (Recommended)";
+private static final String QUALITY_SEPARATOR = "──────────────";
+private static final String QUALITY_CUSTOM = "Custom (Mixed)";
+private static final String MODE_VIDEO = "Video";
+private static final String MODE_AUDIO = "Audio only";
+
+    private static final String AUDIO_BEST = "Best audio (Recommended)";
+    private static final String AUDIO_DEFAULT_FORMAT = "mp3";
+    private static final java.util.List<String> AUDIO_FORMATS = java.util.List.of(
+            "m4a", "mp3", "opus", "aac", "wav", "flac"
+    );
+
+    private static java.util.List<String> buildAudioOptions() {
+        java.util.ArrayList<String> out = new java.util.ArrayList<>();
+        out.add(AUDIO_BEST);
+        out.add(QUALITY_SEPARATOR);
+        out.addAll(AUDIO_FORMATS);
+        return out;
+    }
 
     private static void fillQualityCombo(ComboBox<String> qualityCombo) {
         if (qualityCombo == null) return;
@@ -786,8 +780,9 @@ public class MainController {
 
         // Mode + Quality (disabled until analyzed as VIDEO)
         ComboBox<String> modeCombo = new ComboBox<>();
-        modeCombo.getItems().addAll("Video", "Audio only");
-        modeCombo.getSelectionModel().selectFirst();
+        // Use the same constants everywhere so comparisons never break
+        modeCombo.getItems().setAll(MODE_VIDEO, MODE_AUDIO);
+        modeCombo.getSelectionModel().select(MODE_VIDEO);
         modeCombo.getStyleClass().add("gx-combo");
 
         ComboBox<String> qualityCombo = new ComboBox<>();
@@ -1019,6 +1014,14 @@ public class MainController {
         Label globalQLabel = new Label("Quality for all");
         globalQLabel.getStyleClass().add("gx-text-muted");
 
+        Label globalModeLabel = new Label("Mode for all");
+        globalModeLabel.getStyleClass().add("gx-text-muted");
+
+        ComboBox<String> globalModeCombo = new ComboBox<>();
+        globalModeCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality");
+        globalModeCombo.setPrefWidth(140);
+        globalModeCombo.getItems().setAll(MODE_VIDEO, MODE_AUDIO);
+
         ComboBox<String> globalQualityCombo = new ComboBox<>();
         globalQualityCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality");
         globalQualityCombo.setPrefWidth(160);
@@ -1046,15 +1049,22 @@ public class MainController {
             }
         });
 
-        // store desired global quality (used as default for items that are not manual)
+        // store desired global mode/quality (used as default for items that are not manual)
+        StringProperty globalDesiredMode = new SimpleStringProperty(MODE_VIDEO);
         StringProperty globalDesiredQuality = new SimpleStringProperty(QUALITY_BEST);
-        globalQualityCombo.getSelectionModel().select(QUALITY_BEST);
 
-        // NOTE: we DO NOT bind; we only update this on USER changes to the global combo.
+        globalModeCombo.getSelectionModel().select(MODE_VIDEO);
+        globalQualityCombo.getSelectionModel().select(QUALITY_BEST);
+        globalDesiredMode.set(MODE_VIDEO);
+        globalDesiredQuality.set(QUALITY_BEST);
+
+        // NOTE: we DO NOT bind; we only update these on USER changes to the global combos.
 
         HBox globalRow = new HBox(10);
         globalRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
-        globalRow.getChildren().addAll(globalQLabel, globalQualityCombo);
+//        globalRow.getChildren().addAll(globalQLabel, globalQualityCombo);
+        globalRow.getChildren().addAll(globalModeLabel, globalModeCombo, globalQLabel, globalQualityCombo);
+
 
         Label status = new Label("Loading playlist...");
         status.getStyleClass().add("gx-text-muted");
@@ -1193,10 +1203,15 @@ public class MainController {
         };
         updateGlobalMixedStateRef.set(updateGlobalMixedState);
 
+
         PauseTransition globalComboUpdateThrottle = new PauseTransition(Duration.millis(220));
         Runnable updateGlobalQualityCombo = () -> {
             globalComboUpdateThrottle.stop();
             globalComboUpdateThrottle.setOnFinished(ev -> {
+                // If we're in AUDIO mode, never rebuild the global quality list from video heights.
+                if (MODE_AUDIO.equals(globalDesiredMode.get())) {
+                    return;
+                }
 
                 // Preserve selection across rebuilds (especially CUSTOM)
                 String prev = globalQualityCombo.getValue();
@@ -1259,6 +1274,44 @@ public class MainController {
             });
             globalComboUpdateThrottle.playFromStart();
         };
+
+        // =============================
+        // Global mode listener (put here so items/requestRefreshSafe/updateGlobalMixedState/updateGlobalQualityCombo are in-scope)
+        // =============================
+        globalModeCombo.valueProperty().addListener((obs, old, val) -> {
+            if (val == null) return;
+
+            globalDesiredMode.set(val);
+
+            // Switch the global quality list based on mode (guard to avoid triggering globalQuality listener)
+            updatingGlobalCombo.set(true);
+            try {
+                if (MODE_AUDIO.equals(val)) {
+                    globalQualityCombo.getItems().setAll(buildAudioOptions());
+                    globalQualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
+                    globalDesiredQuality.set(AUDIO_DEFAULT_FORMAT);
+                } else {
+                    // rebuild video list from union (keeps best default)
+                    updateGlobalQualityCombo.run();
+                    globalQualityCombo.getSelectionModel().select(QUALITY_BEST);
+                    globalDesiredQuality.set(QUALITY_BEST);
+                }
+            } finally {
+                updatingGlobalCombo.set(false);
+            }
+
+            // Priority to global: apply to ALL items
+            for (PlaylistEntry it : items) {
+                if (it == null || it.isUnavailable()) continue;
+                it.setManualQuality(false);
+                it.setQuality(MODE_AUDIO.equals(val) ? globalDesiredQuality.get() : QUALITY_BEST);
+            }
+
+            requestRefreshSafe.run();
+            Platform.runLater(updateGlobalMixedState);
+            // Now that the user explicitly changed mode, allow mixed-state logic (for quality) later.
+            userQualityInteracted.set(true);
+        });
 
         list.setCellFactory(lv -> new ListCell<>() {
 
@@ -1346,10 +1399,19 @@ public class MainController {
                     String desired = globalDesiredQuality.get();
                     if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
 
-                    java.util.List<String> avail = it.getAvailableQualities();
-                    String globalMapped = (avail == null || avail.isEmpty())
-                            ? desired
-                            : pickClosestSupportedQuality(desired, avail);
+                    String modeNow = globalDesiredMode.get();
+                    if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
+
+                    String globalMapped;
+                    if (MODE_AUDIO.equals(modeNow)) {
+                        // In audio mode, global desired is the selected format (e.g., mp3)
+                        globalMapped = desired;
+                    } else {
+                        java.util.List<String> avail = it.getAvailableQualities();
+                        globalMapped = (avail == null || avail.isEmpty())
+                                ? desired
+                                : pickClosestSupportedQuality(desired, avail);
+                    }
 
                     boolean manual = !val.equals(globalMapped);
                     it.setManualQuality(manual);
@@ -1429,6 +1491,32 @@ public class MainController {
                 // Set placeholder text for normal items
                 placeholder.setText("NO PREVIEW");
 
+                // ===== AUDIO MODE: show audio formats in each row and skip video probing/quality lists =====
+                String modeNow = globalDesiredMode.get();
+                if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
+
+                if (MODE_AUDIO.equals(modeNow)) {
+                    updatingRowCombo = true;
+                    try {
+                        qualityCombo.getItems().setAll(buildAudioOptions());
+                        qualityCombo.setDisable(false);
+
+                        String cur = item.getQuality();
+                        if (cur == null || cur.isBlank() || QUALITY_BEST.equals(cur)) {
+                            cur = globalDesiredQuality.get();
+                        }
+                        if (cur == null || cur.isBlank()) cur = AUDIO_DEFAULT_FORMAT;
+                        if (!qualityCombo.getItems().contains(cur)) cur = AUDIO_DEFAULT_FORMAT;
+
+                        qualityCombo.getSelectionModel().select(cur);
+                    } finally {
+                        updatingRowCombo = false;
+                    }
+
+                    meta.setText(buildMetaLine(item));
+                    setGraphic(card);
+                    return;
+                }
 
                 // Thumbnail load (cached + inflight guard)
                 String tid = item.getId();
@@ -1537,17 +1625,18 @@ public class MainController {
                         }
                         item.setSizeByQuality(sizeMap);
 
-                        // ✅ pick desired: global unless manual
-                        String desired = item.getQuality();
-                        if (!item.isManualQuality()) {
-                            desired = globalDesiredQuality.get();
-                            if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
-                        }
+                        // ✅ pick desired + apply ONLY in VIDEO mode (do not overwrite AUDIO format selection)
+                        if (!MODE_AUDIO.equals(globalDesiredMode.get())) {
+                            String desired = item.getQuality();
+                            if (!item.isManualQuality()) {
+                                desired = globalDesiredQuality.get();
+                                if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
+                            }
 
-                        // ✅ map desired to closest supported for THIS item
-                        String supported = pickClosestSupportedQuality(desired, item.getAvailableQualities());
-                        item.setQuality(supported);
-//                        Platform.runLater(updateGlobalMixedState);
+                            String supported = pickClosestSupportedQuality(desired, item.getAvailableQualities());
+                            item.setQuality(supported);
+                        }
+                        // Platform.runLater(updateGlobalMixedState);
 
                         // ✅ refresh without closing popups
                         requestRefreshSafe.run();
@@ -1692,15 +1781,17 @@ public class MainController {
                 }
                 it.setSizeByQuality(sizeMap);
 
-                // pick desired: global unless manual
-                String desired = it.getQuality();
-                if (!it.isManualQuality()) {
-                    desired = globalDesiredQuality.get();
-                    if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
-                }
+                // pick desired + apply ONLY in VIDEO mode (do not overwrite AUDIO format selection)
+                if (!MODE_AUDIO.equals(globalDesiredMode.get())) {
+                    String desired = it.getQuality();
+                    if (!it.isManualQuality()) {
+                        desired = globalDesiredQuality.get();
+                        if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
+                    }
 
-                String supported = pickClosestSupportedQuality(desired, it.getAvailableQualities());
-                it.setQuality(supported);
+                    String supported = pickClosestSupportedQuality(desired, it.getAvailableQualities());
+                    it.setQuality(supported);
+                }
                 // Platform.runLater(updateGlobalMixedState); // REMOVE: do not update mixed state during probing
 
                 requestRefreshSafe.run();
@@ -1712,32 +1803,65 @@ public class MainController {
             }
         };
 
+//        globalQualityCombo.valueProperty().addListener((obs, old, val) -> {
+//            if (val == null) return;
+//            if (QUALITY_SEPARATOR.equals(val)) return;
+//            if (QUALITY_CUSTOM.equals(val)) return;
+//            if (updatingGlobalCombo.get()) return;
+//
+//            // USER action
+//            userQualityInteracted.set(true);
+//
+//            // remember desired global quality (used by probes for items that aren't manual)
+//            globalDesiredQuality.set(val);
+//
+//            for (PlaylistEntry it : items) {
+//                if (it == null) continue;
+//                // Removed: if (!it.isSelected()) continue;
+//                if (it.isUnavailable()) continue;
+//
+//                it.setManualQuality(false);
+//
+//                // map to closest supported for THIS item (based on probed qualities)
+//                java.util.List<String> avail = it.getAvailableQualities();
+//                String mapped = (avail == null || avail.isEmpty())
+//                        ? val
+//                        : pickClosestSupportedQuality(val, avail);
+//
+//                it.setQuality(mapped);
+//            }
+//
+//            requestRefreshSafe.run();
+//            Platform.runLater(updateGlobalMixedState);
+//        });
+
+
         globalQualityCombo.valueProperty().addListener((obs, old, val) -> {
             if (val == null) return;
             if (QUALITY_SEPARATOR.equals(val)) return;
             if (QUALITY_CUSTOM.equals(val)) return;
             if (updatingGlobalCombo.get()) return;
 
-            // USER action
             userQualityInteracted.set(true);
-
-            // remember desired global quality (used by probes for items that aren't manual)
             globalDesiredQuality.set(val);
 
+            String modeNow = globalDesiredMode.get();
+            if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
+
             for (PlaylistEntry it : items) {
-                if (it == null) continue;
-                // Removed: if (!it.isSelected()) continue;
-                if (it.isUnavailable()) continue;
+                if (it == null || it.isUnavailable()) continue;
 
                 it.setManualQuality(false);
 
-                // map to closest supported for THIS item (based on probed qualities)
-                java.util.List<String> avail = it.getAvailableQualities();
-                String mapped = (avail == null || avail.isEmpty())
-                        ? val
-                        : pickClosestSupportedQuality(val, avail);
-
-                it.setQuality(mapped);
+                if (MODE_AUDIO.equals(modeNow)) {
+                    it.setQuality(val); // format
+                } else {
+                    java.util.List<String> avail = it.getAvailableQualities();
+                    String mapped = (avail == null || avail.isEmpty())
+                            ? val
+                            : pickClosestSupportedQuality(val, avail);
+                    it.setQuality(mapped);
+                }
             }
 
             requestRefreshSafe.run();
