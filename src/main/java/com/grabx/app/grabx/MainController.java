@@ -24,6 +24,7 @@ import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
 import javafx.stage.DirectoryChooser;
@@ -67,7 +68,7 @@ public class MainController {
     // Cache thumbnails to avoid re-downloading when cells are recycled
     private static final Map<String, Image> PLAYLIST_THUMB_CACHE = new ConcurrentHashMap<>();
     private static final Set<String> PLAYLIST_PROBE_INFLIGHT = ConcurrentHashMap.newKeySet();
-        // Avoid creating multiple Image downloads for the same thumbnail when cells are recycled
+    // Avoid creating multiple Image downloads for the same thumbnail when cells are recycled
     private static final Set<String> PLAYLIST_THUMB_INFLIGHT = ConcurrentHashMap.newKeySet();
 
 
@@ -106,24 +107,37 @@ public class MainController {
         }
     }
 
-    @FXML private Label statusText;
-    @FXML private BorderPane root;
+    @FXML
+    private Label statusText;
+    @FXML
+    private BorderPane root;
 
-    @FXML private Button pauseAllButton;
-    @FXML private Button resumeAllButton;
-    @FXML private Button clearAllButton;
+    @FXML
+    private Button pauseAllButton;
+    @FXML
+    private Button resumeAllButton;
+    @FXML
+    private Button clearAllButton;
 
-    @FXML private Button addLinkButton;
-    @FXML private Button settingsButton;
+    @FXML
+    private Button addLinkButton;
+    @FXML
+    private Button settingsButton;
 
-    @FXML private Label contentTitle;
-    @FXML private ListView<SidebarItem> sidebarList;
+    @FXML
+    private Label contentTitle;
+    @FXML
+    private ListView<SidebarItem> sidebarList;
+
+    private Dialog<ButtonType> activeAddLinkDialog = null;
+
 
     // ========= Actions =========
 
     @FXML
     public void onAddLink(ActionEvent event) {
-        showAddLinkDialog();
+        String clip = readClipboardTextSafe();
+        showAddLinkDialog(isHttpUrl(clip) ? clip : null);
     }
 
     @FXML
@@ -155,7 +169,6 @@ public class MainController {
 
 //    private static final Pattern YTDLP_HEIGHT_P = Pattern.compile("\\b(\\d{3,4})p\\b");
 //    private static final Pattern YTDLP_HEIGHT_X = Pattern.compile("\\b\\d{3,4}x(\\d{3,4})\\b");
-
 
 
     // Matches: 1080p, 1080p60, 2160p, 2160p60 ... (yt-dlp often prints p60 without WxH)
@@ -202,7 +215,8 @@ public class MainController {
             }
 
             p.waitFor();
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
         // keep ONLY ladder values
         return normalizeHeights(heights);
@@ -248,7 +262,7 @@ public class MainController {
             double gb = mb / 1024.0;
             return String.format(" %.1f GB", gb);
         }
-        return  Math.round(mb) + " MB";
+        return Math.round(mb) + " MB";
     }
 
     private static String buildMetaLine(com.grabx.app.grabx.ui.playlist.PlaylistEntry it) {
@@ -362,7 +376,8 @@ public class MainController {
             }
 
             p.waitFor();
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
         heights = normalizeHeights(heights);
         sizeByHeight.keySet().retainAll(heights);
@@ -372,6 +387,7 @@ public class MainController {
     private static final class ProbeQualitiesResult {
         final java.util.Set<Integer> heights;
         final java.util.Map<Integer, String> sizeByHeight;
+
         ProbeQualitiesResult(java.util.Set<Integer> heights, java.util.Map<Integer, String> sizeByHeight) {
             this.heights = heights;
             this.sizeByHeight = sizeByHeight;
@@ -400,6 +416,8 @@ public class MainController {
             if (root != null) root.requestFocus();
         });
 
+        installClickToDefocus(root);
+
         installTooltips();
 
         // ✅ Make hover/press work on the whole Button (not only the icon node)
@@ -408,6 +426,22 @@ public class MainController {
         normalizeIconButton(clearAllButton);
         normalizeIconButton(addLinkButton);
         normalizeIconButton(settingsButton);
+
+        setupClipboardAutoPaste();
+
+        // + button: open Add Link and prefill from clipboard if URL
+        if (addLinkButton != null) {
+            addLinkButton.setOnAction(ev -> openAddLinkFromClipboardOrEmpty());
+
+            addLinkButton.setOnAction(ev -> {
+                String clip = readClipboardTextSafe();
+                if (isHttpUrl(clip)) {
+                    openOrUpdateAddLinkDialog(clip);
+                } else {
+                    openOrUpdateAddLinkDialog(null);
+                }
+            });
+        }
 
         // Sidebar
         sidebarList.getItems().setAll(
@@ -443,6 +477,56 @@ public class MainController {
 
             // TODO لاحقاً: applyFilter(newV.getKey());
         });
+
+        Platform.runLater(() -> {
+            String clip = readClipboardTextSafe();
+            if (!isHttpUrl(clip)) return;
+
+            lastClipboardText = clip;
+
+            UI_DELAY_EXEC.schedule(() -> Platform.runLater(() -> openAddLinkDialogDeferred(clip)),
+                    350, TimeUnit.MILLISECONDS);
+        });
+    }
+
+    // ========= AddLink open helpers (safe showAndWait) =========
+
+    // Small delay helper (avoids calling showAndWait from animation/layout pulses)
+    private static final ScheduledExecutorService UI_DELAY_EXEC = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "ui-delay");
+        t.setDaemon(true);
+        return t;
+    });
+
+    private void openAddLinkFromClipboardOrEmpty() {
+        String clip = readClipboardTextSafe();
+        String prefill = isHttpUrl(clip) ? clip.trim() : null;
+        openAddLinkDialogDeferred(prefill);
+    }
+
+    private void openAddLinkDialogDeferred(String prefillUrl) {
+        // Avoid: IllegalStateException: showAndWait is not allowed during animation or layout processing
+        UI_DELAY_EXEC.schedule(() -> Platform.runLater(() -> showAddLinkDialog(prefillUrl)),
+                80, TimeUnit.MILLISECONDS);
+    }
+
+    // open add link page when copy now link
+    private void handleClipboardUrl(String url) {
+        if (!isHttpUrl(url)) return;
+
+        // إذا نافذة AddLink مفتوحة → حدّث الحقل
+        if (addLinkDialogOpen && activeAddLinkUrlField != null) {
+            activeAddLinkUrlField.setText(url);
+            activeAddLinkUrlField.positionCaret(url.length());
+            return;
+        }
+
+        // غير مفتوحة → افتح AddLink مع prefill (deferred) بدل fire أثناء layout/animation
+        pendingAddLinkPrefillUrl = url;
+        openAddLinkDialogDeferred(url);
+    }
+    private void onClipboardChanged(String newText) {
+        handleClipboardUrl(newText);
     }
 
     // ========= Fix icon buttons hover/press =========
@@ -463,11 +547,11 @@ public class MainController {
     // ========= Tooltips (stable + no flicker) =========
 
     private void installTooltips() {
-        installTooltip(pauseAllButton,  "Pause all");
+        installTooltip(pauseAllButton, "Pause all");
         installTooltip(resumeAllButton, "Resume all");
-        installTooltip(clearAllButton,  "Clear all");
-        installTooltip(addLinkButton,   "Add link");
-        installTooltip(settingsButton,  "Settings");
+        installTooltip(clearAllButton, "Clear all");
+        installTooltip(addLinkButton, "Add link");
+        installTooltip(settingsButton, "Settings");
     }
 
     private void installTooltip(Button btn, String text) {
@@ -505,7 +589,8 @@ public class MainController {
                     double y = bb.getMaxY() + 6;
                     w.setX(x);
                     w.setY(y);
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             });
         };
 
@@ -602,11 +687,11 @@ public class MainController {
         n.setManaged(visible);
     }
 
-private static final String QUALITY_BEST = "Best quality (Recommended)";
-private static final String QUALITY_SEPARATOR = "──────────────";
-private static final String QUALITY_CUSTOM = "Custom (Mixed)";
-private static final String MODE_VIDEO = "Video";
-private static final String MODE_AUDIO = "Audio only";
+    private static final String QUALITY_BEST = "Best quality (Recommended)";
+    private static final String QUALITY_SEPARATOR = "──────────────";
+    private static final String QUALITY_CUSTOM = "Custom (Mixed)";
+    private static final String MODE_VIDEO = "Video";
+    private static final String MODE_AUDIO = "Audio only";
 
     private static final String AUDIO_BEST = "Best audio (Recommended)";
     private static final String AUDIO_DEFAULT_FORMAT = "mp3";
@@ -648,13 +733,6 @@ private static final String MODE_AUDIO = "Audio only";
             return;
         }
 
-        // Only qualities that actually exist (descending)
-//        java.util.List<Integer> sorted = heights.stream()
-//                .filter(h -> h != null && h > 0)
-//                .distinct()
-//                .sorted(java.util.Comparator.reverseOrder())
-//                .toList();
-
         java.util.List<Integer> sorted = new java.util.ArrayList<>(heights);
         sorted.removeIf(h -> h == null || h <= 0);
         sorted.sort(java.util.Comparator.reverseOrder());
@@ -676,6 +754,7 @@ private static final String MODE_AUDIO = "Audio only";
         if (h >= 1440) return "1440p (2K)";
         return h + "p";
     }
+
     // Normalize slightly-off heights from yt-dlp (e.g., 1434 -> 1440, 1076 -> 1080, 718 -> 720)
     private static int normalizeHeight(int raw) {
         if (raw <= 0) return raw;
@@ -721,13 +800,48 @@ private static final String MODE_AUDIO = "Audio only";
 
     // ========= Add Link dialog =========
 
-    private void showAddLinkDialog() {
+    // ========== Add Link dialog state tracking for clipboard auto-paste ==========
+    private boolean addLinkDialogOpen = false;
+    private TextField activeAddLinkUrlField = null;
+    private String pendingAddLinkPrefillUrl = null;
+    // Keep a strong reference so the poll Timeline doesn't get GC'ed
+    private javafx.animation.Timeline clipboardPollTimeline;
 
+    private void showAddLinkDialog() {
+        showAddLinkDialog(null);
+    }
+
+    private void showAddLinkDialog(String prefillUrl) {
+        if (addLinkDialogOpen) {
+            // If already open, just update the field if we can.
+            if (prefillUrl != null && isHttpUrl(prefillUrl) && activeAddLinkUrlField != null) {
+                activeAddLinkUrlField.setText(prefillUrl.trim());
+                activeAddLinkUrlField.positionCaret(activeAddLinkUrlField.getText().length());
+                Platform.runLater(activeAddLinkUrlField::requestFocus);
+            }
+            return;
+        }
+
+        addLinkDialogOpen = true;
+        activeAddLinkUrlField = null;
+
+//        Dialog<ButtonType> dialog = new Dialog<>();
         Dialog<ButtonType> dialog = new Dialog<>();
+        activeAddLinkDialog = dialog;
         dialog.setTitle("Add Link");
         dialog.setHeaderText(null);
 
+        try {
+            if (root != null && root.getScene() != null && root.getScene().getWindow() != null) {
+                dialog.initOwner(root.getScene().getWindow());
+                dialog.initModality(javafx.stage.Modality.WINDOW_MODAL);
+            }
+        } catch (Exception ignored) {}
+
+
         DialogPane pane = dialog.getDialogPane();
+
+        installClickToDefocus(pane);
 
         // ✅ class + inline fallback (prevents white flash even if CSS applies late)
         pane.getStyleClass().add("gx-dialog");
@@ -771,6 +885,7 @@ private static final String MODE_AUDIO = "Audio only";
         TextField urlField = new TextField();
         urlField.setPromptText("Paste URL...");
         urlField.getStyleClass().add("gx-input");
+        activeAddLinkUrlField = urlField;
 
         // GET button (analyze)
         Button getBtn = new Button("Get");
@@ -868,7 +983,7 @@ private static final String MODE_AUDIO = "Audio only";
         okBtn.setDisable(true);
 
         // keep last analysis
-        final ContentType[] lastType = { ContentType.UNSUPPORTED };
+        final ContentType[] lastType = {ContentType.UNSUPPORTED};
 
         Runnable applyTypeToUi = () -> {
             ContentType t = lastType[0];
@@ -962,30 +1077,65 @@ private static final String MODE_AUDIO = "Audio only";
         pane.setContent(grid);
         pane.setPrefWidth(760);
 
-        Optional<ButtonType> result = dialog.showAndWait();
-        if (result.isEmpty() || result.get() != addStartBtn) return;
+        final String effectivePrefill = (prefillUrl != null && !prefillUrl.isBlank())
+                ? prefillUrl.trim()
+                : (pendingAddLinkPrefillUrl != null && !pendingAddLinkPrefillUrl.isBlank()
+                ? pendingAddLinkPrefillUrl.trim()
+                : null);
 
-        String url = urlField.getText() == null ? "" : urlField.getText().trim();
-        ContentType t = lastType[0];
-
-        // Temporary behavior until we wire the real downloader engine:
-        if (statusText != null) {
-            if (t == ContentType.VIDEO) {
-                statusText.setText("Start: " + shorten(url) + " | " + modeCombo.getValue() + " | " + qualityCombo.getValue());
-            } else if (t == ContentType.DIRECT_FILE) {
-                statusText.setText("Start: " + shorten(url) + " | Direct");
-            } else if (t == ContentType.PLAYLIST) {
-                statusText.setText("Playlist detected (UI next): " + shorten(url));
-            } else {
-                statusText.setText("Unsupported: " + shorten(url));
-            }
+        if (effectivePrefill != null) {
+            urlField.setText(effectivePrefill);
+            pendingAddLinkPrefillUrl = null; // consume once
         }
 
-        // TODO NEXT STEP:
-        // 1) if PLAYLIST: openPlaylistDialog(url)
-        // 2) if VIDEO: probe formats (yt-dlp -J/-F) then start task
-        // 3) if DIRECT_FILE: enqueue direct download task
+
+        dialog.setOnShown(ev -> Platform.runLater(() -> {
+            bringWindowToFront(pane.getScene() == null ? null : pane.getScene().getWindow());
+            urlField.requestFocus();
+            urlField.positionCaret(urlField.getText() == null ? 0 : urlField.getText().length());
+        }));
+
+        dialog.setOnHidden(ev -> {
+            addLinkDialogOpen = false;
+            activeAddLinkUrlField = null;
+            activeAddLinkDialog = null;
+        });
+
+        // ===== IMPORTANT =====
+        // Do NOT use showAndWait(): it blocks the JavaFX Application Thread.
+        // Blocking prevents our clipboard poll/focus listeners from running,
+        // so the URL field cannot live-update while the dialog is open.
+        dialog.setResultConverter(btn -> btn);
+
+        dialog.resultProperty().addListener((obs, oldRes, res) -> {
+            if (res != addStartBtn) return;
+
+            String url = urlField.getText() == null ? "" : urlField.getText().trim();
+            ContentType t = lastType[0];
+
+            // Temporary behavior until we wire the real downloader engine:
+            if (statusText != null) {
+                if (t == ContentType.VIDEO) {
+                    statusText.setText("Start: " + shorten(url) + " | " + modeCombo.getValue() + " | " + qualityCombo.getValue());
+                } else if (t == ContentType.DIRECT_FILE) {
+                    statusText.setText("Start: " + shorten(url) + " | Direct");
+                } else if (t == ContentType.PLAYLIST) {
+                    statusText.setText("Playlist detected (UI next): " + shorten(url));
+                } else {
+                    statusText.setText("Unsupported: " + shorten(url));
+                }
+            }
+
+            // TODO NEXT STEP:
+            // 1) if PLAYLIST: openPlaylistDialog(url)
+            // 2) if VIDEO: probe formats (yt-dlp -J/-F) then start task
+            // 3) if DIRECT_FILE: enqueue direct download task
+        });
+
+        // Show modelessly so FX thread keeps running (clipboard auto-paste keeps working)
+        dialog.show();
     }
+
 
 
     // ========= Playlist Screen (v1 - lightweight) =========
@@ -994,9 +1144,24 @@ private static final String MODE_AUDIO = "Audio only";
 
         Stage stage = new Stage();
         stage.setTitle("Playlist");
-        stage.initModality(Modality.APPLICATION_MODAL);
+//        stage.initModality(Modality.APPLICATION_MODAL);
+
+        try {
+            if (root != null && root.getScene() != null && root.getScene().getWindow() != null) {
+                stage.initOwner(root.getScene().getWindow());
+                stage.initModality(javafx.stage.Modality.WINDOW_MODAL);
+            } else {
+                stage.initModality(javafx.stage.Modality.APPLICATION_MODAL);
+            }
+        } catch (Exception ignored) {
+            stage.initModality(javafx.stage.Modality.APPLICATION_MODAL);
+        }
+
+// لما تنعرض، خلّيها Key فورًا
+        stage.setOnShown(ev -> Platform.runLater(() -> bringWindowToFront(stage)));
 
         VBox rootBox = new VBox(12);
+        installClickToDefocus(rootBox);
         rootBox.getStyleClass().addAll("gx-panel", "gx-playlist-root");
         rootBox.setPadding(new Insets(16));
         rootBox.setFillWidth(true);
@@ -1031,7 +1196,8 @@ private static final String MODE_AUDIO = "Audio only";
 
         // separator behavior
         globalQualityCombo.setCellFactory(lv -> new ListCell<>() {
-            @Override protected void updateItem(String item, boolean empty) {
+            @Override
+            protected void updateItem(String item, boolean empty) {
                 super.updateItem(item, empty);
                 setText(empty ? null : item);
 //                setDisable(QUALITY_SEPARATOR.equals(item));
@@ -1043,7 +1209,8 @@ private static final String MODE_AUDIO = "Audio only";
             }
         });
         globalQualityCombo.setButtonCell(new ListCell<>() {
-            @Override protected void updateItem(String item, boolean empty) {
+            @Override
+            protected void updateItem(String item, boolean empty) {
                 super.updateItem(item, empty);
                 setText(empty ? null : item);
             }
@@ -1330,6 +1497,7 @@ private static final String MODE_AUDIO = "Audio only";
 
             private final HBox card = new HBox(12);
 
+
             {
                 setStyle("-fx-background-color: transparent;");
 
@@ -1364,7 +1532,8 @@ private static final String MODE_AUDIO = "Audio only";
                 qualityCombo.setDisable(true);
 
                 qualityCombo.setCellFactory(x -> new ListCell<>() {
-                    @Override protected void updateItem(String item, boolean empty) {
+                    @Override
+                    protected void updateItem(String item, boolean empty) {
                         super.updateItem(item, empty);
                         setText(empty ? null : item);
                         setDisable(QUALITY_SEPARATOR.equals(item));
@@ -1372,7 +1541,8 @@ private static final String MODE_AUDIO = "Audio only";
                     }
                 });
                 qualityCombo.setButtonCell(new ListCell<>() {
-                    @Override protected void updateItem(String item, boolean empty) {
+                    @Override
+                    protected void updateItem(String item, boolean empty) {
                         super.updateItem(item, empty);
                         setText(empty ? null : item);
                     }
@@ -1728,14 +1898,11 @@ private static final String MODE_AUDIO = "Audio only";
         );
 
 
-
         // ✅ خلي CSS يتطبق قبل ما تبان النافذة (تقليل الوميض)
         rootBox.applyCss();
         rootBox.layout();
 
         stage.setScene(scene);
-
-
 
 
         // Background prefetch a limited number of items so sizes/qualities appear without requiring scroll-to-touch.
@@ -1802,39 +1969,6 @@ private static final String MODE_AUDIO = "Audio only";
                 it.setQualitiesLoaded(false);
             }
         };
-
-//        globalQualityCombo.valueProperty().addListener((obs, old, val) -> {
-//            if (val == null) return;
-//            if (QUALITY_SEPARATOR.equals(val)) return;
-//            if (QUALITY_CUSTOM.equals(val)) return;
-//            if (updatingGlobalCombo.get()) return;
-//
-//            // USER action
-//            userQualityInteracted.set(true);
-//
-//            // remember desired global quality (used by probes for items that aren't manual)
-//            globalDesiredQuality.set(val);
-//
-//            for (PlaylistEntry it : items) {
-//                if (it == null) continue;
-//                // Removed: if (!it.isSelected()) continue;
-//                if (it.isUnavailable()) continue;
-//
-//                it.setManualQuality(false);
-//
-//                // map to closest supported for THIS item (based on probed qualities)
-//                java.util.List<String> avail = it.getAvailableQualities();
-//                String mapped = (avail == null || avail.isEmpty())
-//                        ? val
-//                        : pickClosestSupportedQuality(val, avail);
-//
-//                it.setQuality(mapped);
-//            }
-//
-//            requestRefreshSafe.run();
-//            Platform.runLater(updateGlobalMixedState);
-//        });
-
 
         globalQualityCombo.valueProperty().addListener((obs, old, val) -> {
             if (val == null) return;
@@ -1947,13 +2081,45 @@ private static final String MODE_AUDIO = "Audio only";
                             }
                             Thread.sleep(60);
                         }
-                    } catch (InterruptedException ignored) {}
+                    } catch (InterruptedException ignored) {
+                    }
                 }, "playlist-prefetch").start();
             });
         }, "probe-playlist").start();
 
         stage.showAndWait();
     }
+
+
+    // UX: prevent “first click just removes focus” feeling
+    private static void installClickToDefocus(Node rootNode) {
+        if (rootNode == null) return;
+
+        rootNode.addEventFilter(MouseEvent.MOUSE_PRESSED, e -> {
+            try {
+                Scene sc = rootNode.getScene();
+                if (sc == null) return;
+
+                Node fo = sc.getFocusOwner();
+                if (fo instanceof TextInputControl) {
+                    // remove focus from the text input but DON'T consume the click
+                    rootNode.requestFocus();
+                }
+            } catch (Exception ignored) {}
+        });
+    }
+
+    private static void bringWindowToFront(javafx.stage.Window w) {
+        if (w == null) return;
+        try {
+            w.requestFocus();
+            if (w instanceof javafx.stage.Stage s) {
+                s.toFront();
+                s.requestFocus();
+            }
+        } catch (Exception ignored) {}
+    }
+
 
     private static java.util.List<PlaylistEntry> probePlaylistFlat(String playlistUrl) {
         java.util.List<PlaylistEntry> out = new java.util.ArrayList<>();
@@ -2017,21 +2183,69 @@ private static final String MODE_AUDIO = "Audio only";
 
     // Disable ListView selection (we use checkboxes for selection instead)
     private static final class NoSelectionModel<T> extends MultipleSelectionModel<T> {
-        @Override public ObservableList<Integer> getSelectedIndices() { return FXCollections.emptyObservableList(); }
-        @Override public ObservableList<T> getSelectedItems() { return FXCollections.emptyObservableList(); }
-        @Override public void selectIndices(int index, int... indices) {}
-        @Override public void selectAll() {}
-        @Override public void clearAndSelect(int index) {}
-        @Override public void select(int index) {}
-        @Override public void select(T obj) {}
-        @Override public void clearSelection(int index) {}
-        @Override public void clearSelection() {}
-        @Override public boolean isSelected(int index) { return false; }
-        @Override public boolean isEmpty() { return true; }
-        @Override public void selectPrevious() {}
-        @Override public void selectNext() {}
-        @Override public void selectFirst() {}
-        @Override public void selectLast() {}
+        @Override
+        public ObservableList<Integer> getSelectedIndices() {
+            return FXCollections.emptyObservableList();
+        }
+
+        @Override
+        public ObservableList<T> getSelectedItems() {
+            return FXCollections.emptyObservableList();
+        }
+
+        @Override
+        public void selectIndices(int index, int... indices) {
+        }
+
+        @Override
+        public void selectAll() {
+        }
+
+        @Override
+        public void clearAndSelect(int index) {
+        }
+
+        @Override
+        public void select(int index) {
+        }
+
+        @Override
+        public void select(T obj) {
+        }
+
+        @Override
+        public void clearSelection(int index) {
+        }
+
+        @Override
+        public void clearSelection() {
+        }
+
+        @Override
+        public boolean isSelected(int index) {
+            return false;
+        }
+
+        @Override
+        public boolean isEmpty() {
+            return true;
+        }
+
+        @Override
+        public void selectPrevious() {
+        }
+
+        @Override
+        public void selectNext() {
+        }
+
+        @Override
+        public void selectFirst() {
+        }
+
+        @Override
+        public void selectLast() {
+        }
     }
 
     private static String shorten(String s) {
@@ -2039,5 +2253,211 @@ private static final String MODE_AUDIO = "Audio only";
         s = s.trim();
         return s.length() > 46 ? s.substring(0, 43) + "..." : s;
     }
+
+    // ========= Clipboard auto-paste (v1) =========
+    private String lastClipboardText = "";
+
+    private void setupClipboardAutoPaste() {
+        if (root == null) return;
+
+        // Only run once
+        if (Boolean.TRUE.equals(root.getProperties().get("gx-clip-listener"))) return;
+        root.getProperties().put("gx-clip-listener", Boolean.TRUE);
+
+        // Window focus: fire when app is focused (to catch when user returns from copying a URL)
+        root.sceneProperty().addListener((o1, oldScene, newScene) -> {
+            if (newScene == null) return;
+            newScene.windowProperty().addListener((o2, oldW, newW) -> {
+                if (newW == null) return;
+                newW.focusedProperty().addListener((o3, was, isNow) -> {
+                    if (!isNow) return;
+
+                    String clip = readClipboardTextSafe();
+                    if (addLinkDialogOpen && activeAddLinkUrlField != null && clip.equals(activeAddLinkUrlField.getText())) {
+                        return;
+                    }
+                    if (clip.equals(lastClipboardText)) return;
+                    lastClipboardText = clip;
+
+                    if (!isHttpUrl(clip)) return;
+
+                    // If dialog is open -> update field and focus it.
+                    if (addLinkDialogOpen) {
+                        pendingAddLinkPrefillUrl = clip;
+                        if (activeAddLinkUrlField != null) {
+                            activeAddLinkUrlField.setText(clip);
+                            activeAddLinkUrlField.positionCaret(activeAddLinkUrlField.getText().length());
+                            Platform.runLater(activeAddLinkUrlField::requestFocus);
+                        }
+                        return;
+                    }
+
+                    // If dialog is NOT open -> auto-open it on app focus with the new clipboard URL.
+                    openOrUpdateAddLinkDialog(clip);
+                });
+            });
+        });
+
+        // One-time startup: if clipboard already has a URL when the window is first shown, open Add Link (slight delay)
+        if (root.getProperties().get("gx-clip-startup") == null) {
+            root.getProperties().put("gx-clip-startup", Boolean.TRUE);
+
+            root.sceneProperty().addListener((sx, oldS, newS) -> {
+                if (newS == null) return;
+                newS.windowProperty().addListener((wx, oldW, newW) -> {
+                    if (newW == null) return;
+
+                    newW.showingProperty().addListener((shx, wasShowing, isShowing) -> {
+                        if (!isShowing) return;
+                        if (Boolean.TRUE.equals(newW.getProperties().get("gx-clip-startup-done"))) return;
+                        newW.getProperties().put("gx-clip-startup-done", Boolean.TRUE);
+
+                        String clip = readClipboardTextSafe();
+                        lastClipboardText = clip;
+                        if (!isHttpUrl(clip)) return;
+
+                        // slight delay so main UI finishes layout before show
+                        PauseTransition pt = new PauseTransition(Duration.millis(260));
+                        pt.setOnFinished(e -> openOrUpdateAddLinkDialog(clip));
+                        pt.playFromStart();
+                    });
+                });
+            });
+        }
+
+        // Timeline polling: keep this for live update if dialog is open, and for auto-open while app is focused
+        try {
+            if (clipboardPollTimeline != null) {
+                clipboardPollTimeline.stop();
+            }
+        } catch (Exception ignored) {}
+
+        clipboardPollTimeline = new javafx.animation.Timeline(
+                new javafx.animation.KeyFrame(Duration.millis(900), ev -> {
+                    String clip = readClipboardTextSafe();
+                    if (clip.equals(lastClipboardText)) return;
+                    lastClipboardText = clip;
+
+                    // If Add Link dialog is open -> live update its URL field ONLY when clipboard is a URL.
+                    if (addLinkDialogOpen) {
+                        if (isHttpUrl(clip)) {
+                            pendingAddLinkPrefillUrl = clip;
+                            if (activeAddLinkUrlField != null) {
+                                activeAddLinkUrlField.setText(clip);
+                                activeAddLinkUrlField.positionCaret(activeAddLinkUrlField.getText().length());
+                            }
+                        }
+                        return;
+                    }
+
+                    // If dialog is NOT open and the main window is currently focused,
+                    // auto-open Add Link dialog when user copies a NEW URL while app is in foreground.
+                    if (isHttpUrl(clip)) {
+                        try {
+                            var sc = root.getScene();
+                            var w = (sc == null) ? null : sc.getWindow();
+                            boolean focused = (w != null) && w.isFocused();
+                            if (focused) {
+                                openOrUpdateAddLinkDialog(clip);
+                            }
+                        } catch (Exception ignored) {
+                        }
+                    }
+                })
+        );
+        clipboardPollTimeline.setCycleCount(javafx.animation.Animation.INDEFINITE);
+        clipboardPollTimeline.play();
+    }
+
+
+
+    // ================== Safe deferred open for Add Link dialog ==================
+    private final java.util.concurrent.atomic.AtomicBoolean addLinkOpenScheduled =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+
+    /**
+     * Opens Add Link safely OR updates it if already open.
+     */
+    private void openOrUpdateAddLinkDialog(String prefillUrl) {
+        String url = (prefillUrl != null && isHttpUrl(prefillUrl)) ? prefillUrl.trim() : null;
+        if (url != null) pendingAddLinkPrefillUrl = url;
+
+        // If already open -> update field immediately
+        if (addLinkDialogOpen) {
+            if (url != null) {
+                if (activeAddLinkUrlField != null) {
+                    activeAddLinkUrlField.setText(url);
+                    activeAddLinkUrlField.positionCaret(activeAddLinkUrlField.getText().length());
+                    Platform.runLater(activeAddLinkUrlField::requestFocus);
+                } else {
+                    // dialog is opening but field not ready yet
+                    pendingAddLinkPrefillUrl = url;
+                }
+            }
+            return;
+        }
+
+        // prevent rapid duplicate opens
+        if (!addLinkOpenScheduled.compareAndSet(false, true)) return;
+
+        final String captured = (url != null) ? url : null;
+
+        Platform.runLater(() -> {
+            try {
+                // tiny delay avoids "show during layout/animation"
+                PauseTransition pt = new PauseTransition(Duration.millis(80));
+                pt.setOnFinished(e -> {
+                    try {
+                        showAddLinkDialog(captured);
+                    } finally {
+                        addLinkOpenScheduled.set(false);
+                    }
+                });
+                pt.playFromStart();
+            } catch (Exception ex) {
+                addLinkOpenScheduled.set(false);
+            }
+        });
+    }
+
+    // Helper: read clipboard text, never throws
+    private String readClipboardTextSafe() {
+        try {
+            javafx.scene.input.Clipboard cb = javafx.scene.input.Clipboard.getSystemClipboard();
+            if (cb != null && cb.hasString()) {
+                return cb.getString().trim();
+            }
+        } catch (Exception ignored) {
+        }
+        return "";
+    }
+
+    // Helper: is this string an HTTP/HTTPS URL
+    private boolean isHttpUrl(String s) {
+        if (s == null) return false;
+        String ss = s.trim().toLowerCase();
+        return ss.startsWith("http://") || ss.startsWith("https://");
+    }
+    // ========= Initialization code (wiring + button) =========
+    // ... other initialization code ...
+    // Clipboard-driven Add Link behavior
+    // Call this in initialize():
+    // setupClipboardAutoPaste();
+    // + button: open Add Link and prefill from clipboard if URL
+    // If there is an addLinkButton, wire it here:
+    // This should be placed in your initialize() or setup method, after setupClipboardAutoPaste();
+    // For example:
+    // setupClipboardAutoPaste();
+    // + button: open Add Link; if clipboard has a URL, prefill it (no auto-Get)
+
+    // Example: in initialize()
+//    public void initialize() {
+//        // ... other initialization code ...
+//
+//        // Clipboard-driven Add Link behavior
+//
+//        // ... rest of initialize ...
+//    }
 
 }
