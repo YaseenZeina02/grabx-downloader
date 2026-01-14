@@ -1,8 +1,11 @@
 package com.grabx.app.grabx;
 
+import javafx.scene.layout.HBox;
+
+import java.awt.Desktop;
+import java.net.URI;
 import java.util.Map;
 import java.util.concurrent.*;
-
 
 import com.grabx.app.grabx.core.model.probe.AudioProbeService;
 import com.grabx.app.grabx.core.model.probe.VideoProbeService;
@@ -130,6 +133,12 @@ public class MainController {
     private ListView<SidebarItem> sidebarList;
 
     private Dialog<ButtonType> activeAddLinkDialog = null;
+
+    @FXML
+    private ListView<DownloadRow> downloadsList;
+
+    private final ObservableList<DownloadRow> downloadItems = FXCollections.observableArrayList();
+
 
 
     // ========= Actions =========
@@ -427,20 +436,14 @@ public class MainController {
         normalizeIconButton(addLinkButton);
         normalizeIconButton(settingsButton);
 
+        // Main downloads list (center)
+        ensureDownloadsListView();
+
         setupClipboardAutoPaste();
 
         // + button: open Add Link and prefill from clipboard if URL
         if (addLinkButton != null) {
             addLinkButton.setOnAction(ev -> openAddLinkFromClipboardOrEmpty());
-
-            addLinkButton.setOnAction(ev -> {
-                String clip = readClipboardTextSafe();
-                if (isHttpUrl(clip)) {
-                    openOrUpdateAddLinkDialog(clip);
-                } else {
-                    openOrUpdateAddLinkDialog(null);
-                }
-            });
         }
 
         // Sidebar
@@ -554,15 +557,20 @@ public class MainController {
         installTooltip(settingsButton, "Settings");
     }
 
-    private void installTooltip(Button btn, String text) {
+    private static void installTooltip(Button btn, String text) {
         if (btn == null) return;
 
         Tooltip tip = new Tooltip(text);
         tip.getStyleClass().add("gx-tooltip");
 
         // Stable delays (no blinking)
-        Duration showDelay = Duration.millis(220);
-        Duration hideDelay = Duration.millis(80);
+//        Duration showDelay = Duration.millis(220);
+//        Duration hideDelay = Duration.millis(80);
+
+        Duration showDelay = Duration.millis(160);
+        Duration hideDelay = Duration.millis(180);
+
+        final double GAP_Y = 2;
 
         PauseTransition showTimer = new PauseTransition(showDelay);
         PauseTransition hideTimer = new PauseTransition(hideDelay);
@@ -576,22 +584,31 @@ public class MainController {
                 tip.show(btn, b.getMinX(), b.getMaxY() + 6);
             }
 
+            // Keep inside screen bounds (prevents jitter/auto-hide near edges)
             Platform.runLater(() -> {
-                if (!btn.isHover() || !tip.isShowing()) return;
-
-                Bounds bb = btn.localToScreen(btn.getBoundsInLocal());
-                if (bb == null) return;
-
+                if (!tip.isShowing()) return;
                 try {
+                    Bounds bb = btn.localToScreen(btn.getBoundsInLocal());
+                    if (bb == null) return;
+
                     var w = tip.getScene().getWindow();
-                    // place centered under button
-                    double x = bb.getMinX() + (bb.getWidth() - w.getWidth()) / 2.0;
-                    double y = bb.getMaxY() + 6;
+                    javafx.geometry.Rectangle2D screen = javafx.stage.Screen.getPrimary().getVisualBounds();
+
+                    double x = w.getX();
+                    double y = w.getY();
+
+                    if (x + w.getWidth() > screen.getMaxX()) x = screen.getMaxX() - w.getWidth() - 6;
+                    if (x < screen.getMinX()) x = screen.getMinX() + 6;
+
+                    // If bottom overflow, flip above the button
+                    if (y + w.getHeight() > screen.getMaxY()) y = bb.getMinY() - w.getHeight() - 10;
+                    if (y < screen.getMinY()) y = screen.getMinY() + 6;
+
                     w.setX(x);
                     w.setY(y);
-                } catch (Exception ignored) {
-                }
+                } catch (Exception ignored) {}
             });
+
         };
 
         showTimer.setOnFinished(e -> {
@@ -1114,28 +1131,507 @@ public class MainController {
             ContentType t = lastType[0];
 
             // Temporary behavior until we wire the real downloader engine:
-            if (statusText != null) {
-                if (t == ContentType.VIDEO) {
-                    statusText.setText("Start: " + shorten(url) + " | " + modeCombo.getValue() + " | " + qualityCombo.getValue());
-                } else if (t == ContentType.DIRECT_FILE) {
-                    statusText.setText("Start: " + shorten(url) + " | Direct");
-                } else if (t == ContentType.PLAYLIST) {
-                    statusText.setText("Playlist detected (UI next): " + shorten(url));
-                } else {
-                    statusText.setText("Unsupported: " + shorten(url));
-                }
+            if (t == ContentType.VIDEO) {
+                addDownloadItemToList(url, folderField.getText(), modeCombo.getValue(), qualityCombo.getValue());
+            } else if (t == ContentType.DIRECT_FILE) {
+                addDownloadItemToList(url, folderField.getText(), "Direct", "Auto");
+            } else if (t == ContentType.PLAYLIST) {
+                if (statusText != null) statusText.setText("Playlist detected (UI next): " + shorten(url));
+            } else {
+                if (statusText != null) statusText.setText("Unsupported: " + shorten(url));
             }
-
-            // TODO NEXT STEP:
-            // 1) if PLAYLIST: openPlaylistDialog(url)
-            // 2) if VIDEO: probe formats (yt-dlp -J/-F) then start task
-            // 3) if DIRECT_FILE: enqueue direct download task
         });
 
         // Show modelessly so FX thread keeps running (clipboard auto-paste keeps working)
         dialog.show();
     }
 
+    // ========= Main downloads list (center) =========
+    private static final String ICON_FOLDER_OUTLINE =
+            "M20 6h-8.17L10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 14H4V6h5.17l2 2H20v12z";
+
+
+    private static final String ICON_FOLDER_OPEN =
+            "M3 6.5C3 5.12 4.12 4 5.5 4H10L12 6H18.5C19.88 6 21 7.12 21 8.5V17.5C21 18.88 19.88 20 18.5 20H5.5C4.12 20 3 18.88 3 17.5V6.5Z";
+
+    private static final String ICON_PAUSE =
+            "M6 5h4v14H6V5zm8 0h4v14h-4V5z";
+
+    private static final String ICON_PLAY =
+            "M8 5v14l11-7L8 5z";
+
+    private static final String ICON_CANCEL =
+            "M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.29 9.17 12 2.89 5.71 4.3 4.29 10.59 10.6 16.89 4.29z";
+
+    private static final String ICON_RETRY =
+            "M12 5a7 7 0 1 1-6.32 4H3l3.5-3.5L10 9H7.76A5.5 5.5 0 1 0 12 6.5V5z";
+
+    private static Node svgIcon(String path, double boxSize) {
+        javafx.scene.shape.SVGPath svg = new javafx.scene.shape.SVGPath();
+        svg.setContent(path);
+        svg.getStyleClass().add("gx-svg-icon");
+
+        StackPane box = new StackPane(svg);
+        box.setMinSize(boxSize, boxSize);
+        box.setPrefSize(boxSize, boxSize);
+        box.setMaxSize(boxSize, boxSize);
+
+        // Scale to fit nicely
+        Platform.runLater(() -> {
+            var b = svg.getBoundsInLocal();
+            double iw = b.getWidth(), ih = b.getHeight();
+            if (iw <= 0 || ih <= 0) return;
+            double target = boxSize * 0.52;
+            double s = Math.min(target / iw, target / ih);
+            svg.setScaleX(s);
+            svg.setScaleY(s);
+        });
+
+        return box;
+    }
+
+    private static void setupSvgButton(Button b, String svgPath) {
+        // Match Topbar icon buttons look
+        b.getStyleClass().addAll("gx-icon-btn", "gx-task-action");
+        b.setFocusTraversable(false);
+        b.setText(null);
+        b.setGraphic(svgIcon(svgPath, 34));
+
+//        if (tooltipText != null && !tooltipText.isBlank()) {
+//            Tooltip t = new Tooltip(tooltipText);
+//            t.getStyleClass().add("gx-tooltip");
+//            b.setTooltip(t);
+//        }
+    }
+
+
+    private void ensureDownloadsListView() {
+        // If FXML did not inject it, create it and mount it in the center.
+        if (downloadsList == null) {
+            downloadsList = new ListView<>();
+            downloadsList.getStyleClass().add("gx-task-list");
+            downloadsList.setStyle("-fx-background-color: transparent;");
+            // If root is BorderPane and center is empty, mount it.
+            try {
+                if (root instanceof BorderPane bp && bp.getCenter() == null) {
+                    bp.setCenter(downloadsList);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        downloadsList.setItems(downloadItems);
+        downloadsList.setFocusTraversable(false);
+
+        downloadsList.setCellFactory(lv -> new ListCell<>() {
+            private final Label title = new Label();
+            private final Label meta = new Label();
+            private final Label status = new Label();
+            private final Label speed = new Label();
+            private final Label eta = new Label();
+
+            // Thumbnail (left)
+            private final StackPane thumbBox = new StackPane();
+            private final ImageView thumb = new ImageView();
+            private final Label thumbPlaceholder = new Label("NO PREVIEW");
+
+            private final ProgressBar bar = new ProgressBar(0);
+
+            private final Button pauseBtn = new Button();
+            private final Button resumeBtn = new Button();
+            private final Button cancelBtn = new Button();
+            private final Button folderBtn = new Button();
+            private final Button retryBtn = new Button();
+
+            private final HBox actions = new HBox(8);
+            private final VBox textBox = new VBox(6);
+            private final HBox headerRow = new HBox(12);
+            private final HBox footerRow = new HBox(10);
+            private final VBox card = new VBox(10);
+
+            {
+                setStyle("-fx-background-color: transparent;");
+
+                title.getStyleClass().add("gx-task-title");
+                title.setWrapText(false);
+
+                meta.getStyleClass().add("gx-task-meta");
+                status.getStyleClass().add("gx-task-status");
+                speed.getStyleClass().add("gx-task-status");
+                eta.getStyleClass().add("gx-task-status");
+
+                bar.getStyleClass().add("gx-task-progress");
+                bar.setMaxWidth(Double.MAX_VALUE);
+                bar.setPrefHeight(6);
+                bar.setMinHeight(6);
+
+                // Thumbnail
+                thumb.setFitWidth(108);
+                thumb.setFitHeight(66);
+                thumb.setPreserveRatio(true);
+                thumb.setPreserveRatio(true);
+                thumb.setSmooth(true);
+
+                thumbBox.getStyleClass().add("gx-task-thumb");
+                thumbPlaceholder.getStyleClass().add("gx-task-thumb-placeholder");
+                thumbBox.getChildren().addAll(thumb, thumbPlaceholder);
+
+                applyRoundedClip(thumbBox, 14);
+
+                // Icon buttons (SVG) — unified with topbar style
+                setupSvgButton(pauseBtn, ICON_PAUSE);
+                setupSvgButton(resumeBtn, ICON_PLAY);
+                setupSvgButton(cancelBtn, ICON_CANCEL);
+                cancelBtn.getStyleClass().add("cancel");
+                cancelBtn.setGraphic(svgIcon(ICON_CANCEL, 30)); // بدل 34
+                setupSvgButton(folderBtn, ICON_FOLDER_OPEN);
+                setupSvgButton(retryBtn, ICON_RETRY);
+
+                installTooltip(pauseBtn, "Pause download");
+                installTooltip(resumeBtn, "Resume download");
+                installTooltip(cancelBtn, "Cancel download");
+                installTooltip(retryBtn, "Retry download");
+                installTooltip(folderBtn, "Open folder");
+
+
+                actions.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
+                actions.getChildren().addAll(pauseBtn, resumeBtn, cancelBtn, folderBtn, retryBtn);
+
+                textBox.getChildren().addAll(title, meta);
+                HBox.setHgrow(textBox, Priority.ALWAYS);
+
+                headerRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+                headerRow.getChildren().addAll(thumbBox, textBox, actions);
+
+                Region spacer = new Region();
+                HBox.setHgrow(spacer, Priority.ALWAYS);
+
+                footerRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+                footerRow.getChildren().addAll(status, spacer, speed, eta);
+
+                card.getStyleClass().add("gx-task-card");
+                card.getChildren().addAll(headerRow, bar, footerRow);
+                VBox.setVgrow(card, Priority.NEVER);
+
+                // Actions (UI-only for now)
+                pauseBtn.setOnAction(e -> {
+                    DownloadRow it = getItem();
+                    if (it == null) return;
+                    it.status.set("Paused");
+                });
+
+                resumeBtn.setOnAction(e -> {
+                    DownloadRow it = getItem();
+                    if (it == null) return;
+                    it.status.set("Downloading");
+                });
+
+                cancelBtn.setOnAction(e -> {
+                    DownloadRow it = getItem();
+                    if (it == null) return;
+                    it.status.set("Cancelled");
+                    it.progress.set(0);
+                });
+
+                folderBtn.setOnAction(e -> {
+                    DownloadRow it = getItem();
+                    if (it == null) return;
+                    try {
+                        File f = new File(it.folder);
+                        if (Desktop.isDesktopSupported()) {
+                            Desktop.getDesktop().open(f);
+                        }
+                    } catch (Exception ignored) {
+                    }
+                });
+
+                retryBtn.setOnAction(e -> {
+                    DownloadRow it = getItem();
+                    if (it == null) return;
+
+                    // UI retry (engine wiring later): reset to queued and restart from 0
+                    it.status.set("Queued");
+                    it.progress.set(0);
+                    it.speed.set("0 KB/s");
+                    it.eta.set("--");
+
+                    if (statusText != null) {
+                        statusText.setText("Retry: " + it.title.get());
+                    }
+                });
+            }
+
+            @Override
+            protected void updateItem(DownloadRow item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty || item == null) {
+                    setText(null);
+                    setGraphic(null);
+                    return;
+                }
+
+                // Thumbnail reset
+                thumb.setImage(null);
+                thumbPlaceholder.setVisible(true);
+
+                title.textProperty().unbind();
+                title.textProperty().bind(item.title);
+                meta.setText(item.mode + " • " + item.quality + " • " + item.folder);
+
+                final String turl = (item.thumbUrl == null) ? null : item.thumbUrl.get();
+                if (turl != null && !turl.isBlank()) {
+
+                    Image img = MAIN_THUMB_CACHE.get(turl);
+                    if (img == null) {
+                        img = new Image(turl, true);
+                        MAIN_THUMB_CACHE.put(turl, img);
+                    }
+
+                    final Image imgRef = img;
+                    thumb.setImage(imgRef);
+
+                    Runnable applyCover = () -> {
+                        DownloadRow now = getItem();
+                        if (now == null) return;
+
+                        String nowUrl = (now.thumbUrl == null) ? null : now.thumbUrl.get();
+                        if (nowUrl == null || !nowUrl.equals(turl)) return;
+                        if (imgRef.getException() != null) return;
+
+                        applyCoverViewport(thumb, imgRef, 108, 66);
+                        thumbPlaceholder.setVisible(false);
+                    };
+
+                    if (imgRef.getProgress() >= 1.0 && imgRef.getException() == null) {
+                        applyCover.run();
+                    } else {
+                        thumbPlaceholder.setVisible(true);
+                        imgRef.progressProperty().addListener((o, a, b) -> {
+                            if (b != null && b.doubleValue() >= 1.0) {
+                                Platform.runLater(applyCover);
+                            }
+                        });
+                    }
+
+                } else {
+                    thumb.setViewport(null);
+                    thumb.setImage(null);
+                    thumbPlaceholder.setVisible(true);
+                }
+
+
+                bar.progressProperty().unbind();
+                status.textProperty().unbind();
+                speed.textProperty().unbind();
+                eta.textProperty().unbind();
+
+                bar.progressProperty().bind(item.progress);
+                status.textProperty().bind(item.status);
+                speed.textProperty().bind(item.speed);
+                eta.textProperty().bind(item.eta);
+
+                // Toggle which buttons show based on status
+                String s = item.status.get();
+                boolean paused = s != null && s.toLowerCase().contains("pause");
+                boolean cancelled = s != null && s.toLowerCase().contains("cancel");
+
+                pauseBtn.setDisable(paused || cancelled);
+                resumeBtn.setDisable(!paused || cancelled);
+                cancelBtn.setDisable(cancelled);
+
+                // Retry is useful mainly when cancelled/failed; keep enabled when not actively downloading
+                boolean downloading = s != null && s.toLowerCase().contains("down");
+                retryBtn.setDisable(downloading);
+
+                setGraphic(card);
+            }
+        });
+
+        // Make it look nicer without selection highlight
+        downloadsList.setSelectionModel(new NoSelectionModel<>());
+    }
+
+
+
+
+    private String fetchTitleWithYtDlp(String url) {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(
+                    "yt-dlp",
+                    "--no-warnings",
+                    "--print", "title",
+                    url
+            );
+            pb.redirectErrorStream(true);
+            Process p = pb.start();
+
+            try (var br = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()))) {
+                String line = br.readLine();
+                p.waitFor();
+                if (line != null && !line.isBlank()) return line.trim();
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private static void setupIconButton(Button b, String fallbackText, String tooltipText) {
+        b.getStyleClass().addAll("gx-btn", "gx-btn-ghost", "gx-task-action");
+        b.setFocusTraversable(false);
+        b.setText(fallbackText);
+        if (tooltipText != null && !tooltipText.isBlank()) {
+
+            installTooltip(b,tooltipText);
+        }
+    }
+
+
+    private void addDownloadItemToList(String url, String folder, String mode, String quality) {
+        ensureDownloadsListView();
+
+        // 1) عنوان مبدئي
+        String initialTitle = "Fetching title…";
+        if (url == null || url.isBlank()) {
+            initialTitle = "(empty link)";
+        }
+
+        // 2) أنشئ صف التحميل
+        DownloadRow row = new DownloadRow(url, initialTitle, folder, mode, quality);
+
+        // 3) أضِف في أعلى القائمة
+        downloadItems.add(0, row);
+
+        // 4) حدّث شريط الحالة
+        if (statusText != null) {
+            statusText.setText("Queued: " + row.title.get());
+        }
+
+        // 5) جلب العنوان الحقيقي بالخلفية (بدون تجميد الواجهة)
+        if (url != null && !url.isBlank()) {
+            new Thread(() -> {
+                String realTitle = fetchTitleWithYtDlp(url);
+                if (realTitle != null && !realTitle.isBlank()) {
+                    Platform.runLater(() -> {
+                        row.title.set(realTitle);
+
+                        if (statusText != null) {
+                            statusText.setText("Queued: " + realTitle);
+                        }
+                    });
+                }
+            }, "yt-title-probe").start();
+        }
+    }
+
+    private static final class DownloadRow {
+        final String url;
+        final String folder;
+        final String mode;
+        final String quality;
+
+        final javafx.beans.property.StringProperty title = new javafx.beans.property.SimpleStringProperty("New item");
+        final javafx.beans.property.StringProperty thumbUrl = new javafx.beans.property.SimpleStringProperty(null);
+
+        final javafx.beans.property.StringProperty status = new javafx.beans.property.SimpleStringProperty("Queued");
+        final javafx.beans.property.DoubleProperty progress = new javafx.beans.property.SimpleDoubleProperty(0);
+        final javafx.beans.property.StringProperty speed = new javafx.beans.property.SimpleStringProperty("0 KB/s");
+        final javafx.beans.property.StringProperty eta = new javafx.beans.property.SimpleStringProperty("--");
+
+        DownloadRow(String url, String initialTitle, String folder, String mode, String quality) {
+            this.url = url;
+            this.folder = folder;
+            this.mode = mode;
+            this.quality = quality;
+            if (initialTitle != null && !initialTitle.isBlank()) {
+                this.title.set(initialTitle);
+            }
+            this.thumbUrl.set(thumbFromUrl(url));
+        }
+    }
+    // --- Thumbnail helpers and cache ---
+    private static final java.util.Map<String, javafx.scene.image.Image> MAIN_THUMB_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static String extractYoutubeId(String url) {
+        if (url == null) return null;
+        String u = url.trim();
+        if (u.isEmpty()) return null;
+
+        // youtu.be/<id>
+        int yb = u.indexOf("youtu.be/");
+        if (yb >= 0) {
+            String s = u.substring(yb + "youtu.be/".length());
+            int q = s.indexOf('?');
+            if (q >= 0) s = s.substring(0, q);
+            int a = s.indexOf('&');
+            if (a >= 0) s = s.substring(0, a);
+            s = s.trim();
+            return s.isEmpty() ? null : s;
+        }
+
+        // watch?v=<id>
+        int v = u.indexOf("v=");
+        if (v >= 0) {
+            String s = u.substring(v + 2);
+            int a = s.indexOf('&');
+            if (a >= 0) s = s.substring(0, a);
+            int h = s.indexOf('#');
+            if (h >= 0) s = s.substring(0, h);
+            s = s.trim();
+            return s.isEmpty() ? null : s;
+        }
+
+        return null;
+    }
+
+    private static String thumbFromUrl(String url) {
+        String id = extractYoutubeId(url);
+        if (id == null || id.isBlank()) return null;
+        return "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg";
+    }
+
+
+    // === Thumbnail rendering helpers (cover crop + rounded clip) ===
+    private static void applyCoverViewport(ImageView iv, Image img, double targetW, double targetH) {
+        if (iv == null || img == null) return;
+
+        double iw = img.getWidth();
+        double ih = img.getHeight();
+        if (iw <= 0 || ih <= 0 || targetW <= 0 || targetH <= 0) {
+            iv.setViewport(null);
+            return;
+        }
+
+        double targetRatio = targetW / targetH;
+        double imgRatio = iw / ih;
+
+        double cropW, cropH;
+
+        if (imgRatio > targetRatio) {
+            // wider than target -> crop left/right
+            cropH = ih;
+            cropW = ih * targetRatio;
+        } else {
+            // taller than target -> crop top/bottom
+            cropW = iw;
+            cropH = iw / targetRatio;
+        }
+
+        double x = Math.max(0, (iw - cropW) / 2.0);
+        double y = Math.max(0, (ih - cropH) / 2.0);
+
+        iv.setViewport(new javafx.geometry.Rectangle2D(x, y, cropW, cropH));
+    }
+
+    private static void applyRoundedClip(Region region, double arc) {
+        if (region == null) return;
+
+        javafx.scene.shape.Rectangle clip = new javafx.scene.shape.Rectangle();
+        clip.setArcWidth(arc * 2);
+        clip.setArcHeight(arc * 2);
+        clip.widthProperty().bind(region.widthProperty());
+        clip.heightProperty().bind(region.heightProperty());
+        region.setClip(clip);
+    }
 
 
     // ========= Playlist Screen (v1 - lightweight) =========
@@ -2439,25 +2935,5 @@ public class MainController {
         String ss = s.trim().toLowerCase();
         return ss.startsWith("http://") || ss.startsWith("https://");
     }
-    // ========= Initialization code (wiring + button) =========
-    // ... other initialization code ...
-    // Clipboard-driven Add Link behavior
-    // Call this in initialize():
-    // setupClipboardAutoPaste();
-    // + button: open Add Link and prefill from clipboard if URL
-    // If there is an addLinkButton, wire it here:
-    // This should be placed in your initialize() or setup method, after setupClipboardAutoPaste();
-    // For example:
-    // setupClipboardAutoPaste();
-    // + button: open Add Link; if clipboard has a URL, prefill it (no auto-Get)
-
-    // Example: in initialize()
-//    public void initialize() {
-//        // ... other initialization code ...
-//
-//        // Clipboard-driven Add Link behavior
-//
-//        // ... rest of initialize ...
-//    }
 
 }

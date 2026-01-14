@@ -233,7 +233,7 @@
     -fx-font-weight: 600;
     -fx-text-fill: rgba(255,255,255,0.92);
 
-    -fx-background-color: rgba(12, 16, 24, 0.95);
+    -fx-background-color: rgba(12, 16, 24, 0.90);
     -fx-background-radius: 10;
 
     -fx-padding: 8 10;
@@ -242,4 +242,109 @@
     -fx-border-radius: 10;
 
     -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.55), 18, 0.2, 0, 6);
+}
+
+/* ===============================
+   Main Download List (cards)
+   =============================== */
+
+.gx-task-list {
+    -fx-background-color: transparent;
+}
+
+.gx-task-card {
+    -fx-background-color: rgba(255,255,255,0.05);
+    -fx-background-radius: 16;
+    -fx-border-radius: 16;
+    -fx-border-color: rgba(255,255,255,0.10);
+    -fx-border-width: 1;
+    -fx-padding: 14 14;
+}
+
+.gx-task-title {
+    -fx-text-fill: #E8ECF3;
+    -fx-font-size: 14;
+    -fx-font-weight: 800;
+}
+
+.gx-task-meta {
+    -fx-text-fill: #9AA4B2;
+    -fx-font-size: 11;
+}
+
+.gx-task-status {
+    -fx-text-fill: #9AA4B2;
+    -fx-font-size: 11;
+}
+
+.gx-task-progress {
+    -fx-accent: #2E5BFF;
+    -fx-pref-height: 6;
+    -fx-min-height: 6;
+    -fx-max-height: 6;
+}
+
+.gx-task-progress .track {
+    -fx-background-color: rgba(255,255,255,0.10);
+    -fx-background-radius: 999;
+}
+
+.gx-task-progress .bar {
+    -fx-background-radius: 999;
+    -fx-background-insets: 0;
+}
+
+.gx-task-action {
+    -fx-min-width: 40;
+    -fx-min-height: 34;
+    -fx-padding: 0;
+    -fx-background-radius: 12;
+    -fx-border-radius: 12;
+    -fx-font-size: 13px;
+}
+
+.gx-task-action:hover {
+    -fx-text-fill: #9FB6FF;
+}
+
+
+
+
+.gx-svg-icon {
+    -fx-fill: #E8ECF3;          /* نفس لون النص/الأيقونات */
+    -fx-opacity: 0.9;
+}
+
+
+.gx-task-action:pressed .gx-svg-icon {
+    -fx-opacity: 1;
+}
+
+.gx-task-action:hover .gx-svg-icon {
+    -fx-fill: #9FB6FF;
+}
+
+.gx-task-action:hover {
+    -fx-background-color: rgba(255,255,255,0.16);
+}
+
+/* ===============================
+   Main Task Thumbnail
+   =============================== */
+
+.gx-task-thumb {
+    -fx-background-color: rgba(255,255,255,0.05);
+    -fx-background-radius: 14;
+    -fx-border-color: rgba(255,255,255,0.10);
+    -fx-border-radius: 14;
+    -fx-border-width: 1;
+    -fx-min-width: 108;
+    -fx-min-height: 66;
+    -fx-alignment: center;
+}
+
+.gx-task-thumb-placeholder {
+    -fx-text-fill: rgba(255,255,255,0.45);
+    -fx-font-size: 10px;
+    -fx-font-weight: 800;
 }

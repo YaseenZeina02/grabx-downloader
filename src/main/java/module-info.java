@@ -3,6 +3,7 @@ module com.grabx.app.grabx {
     requires javafx.fxml;
     requires org.kordamp.ikonli.javafx;
     requires org.kordamp.ikonli.materialdesign2;
+    requires java.desktop;
 
     // Current controller package
     opens com.grabx.app.grabx to javafx.fxml;
