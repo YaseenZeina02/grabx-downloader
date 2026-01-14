@@ -570,7 +570,6 @@ public class MainController {
         Duration showDelay = Duration.millis(160);
         Duration hideDelay = Duration.millis(180);
 
-        final double GAP_Y = 2;
 
         PauseTransition showTimer = new PauseTransition(showDelay);
         PauseTransition hideTimer = new PauseTransition(hideDelay);

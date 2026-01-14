@@ -241,7 +241,9 @@
     -fx-border-color: rgba(255,255,255,0.10);
     -fx-border-radius: 10;
 
-    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.55), 18, 0.2, 0, 6);
+    /*-fx-effect: dropshadow(gaussian, rgba(0,0,0,0.55), 18, 0.2, 0, 6);*/
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.55), 14, 0.18, 0, 4);
+
 }
 
 /* ===============================
