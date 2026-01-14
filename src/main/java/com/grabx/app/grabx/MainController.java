@@ -139,6 +139,13 @@ public class MainController {
 
     private final ObservableList<DownloadRow> downloadItems = FXCollections.observableArrayList();
 
+    // ========= In-scene hover tooltip (no jitter) =========
+    private Pane hoverLayer;
+    private HoverBubble hoverBubble;
+    // Pending tooltips until hoverBubble is ready (scene/root not ready during initialize)
+    private final java.util.List<javafx.util.Pair<Button, String>> pendingTooltips = new java.util.ArrayList<>();
+    private volatile boolean hoverBubbleReady = false;
+
 
 
     // ========= Actions =========
@@ -428,6 +435,7 @@ public class MainController {
         installClickToDefocus(root);
 
         installTooltips();
+        setupHoverBubbleLayer();
 
         // ✅ Make hover/press work on the whole Button (not only the icon node)
         normalizeIconButton(pauseAllButton);
@@ -557,85 +565,278 @@ public class MainController {
         installTooltip(settingsButton, "Settings");
     }
 
-    private static void installTooltip(Button btn, String text) {
+    private void installTooltip(Button btn, String text) {
         if (btn == null) return;
 
-        Tooltip tip = new Tooltip(text);
-        tip.getStyleClass().add("gx-tooltip");
+        // If bubble not ready yet, queue it and apply once the scene is ready.
+        if (hoverBubble == null || !hoverBubbleReady) {
+            // keep latest text on the button
+            btn.getProperties().put("gx-hover-text", text);
+            pendingTooltips.add(new javafx.util.Pair<>(btn, text));
+            Platform.runLater(this::flushPendingTooltips);
+            return;
+        }
 
-        // Stable delays (no blinking)
-//        Duration showDelay = Duration.millis(220);
-//        Duration hideDelay = Duration.millis(80);
+        hoverBubble.install(btn, text);
+    }
 
-        Duration showDelay = Duration.millis(160);
-        Duration hideDelay = Duration.millis(180);
+    private void flushPendingTooltips() {
+        if (hoverBubble == null) return;
+        hoverBubbleReady = true;
 
+        // Install queued tooltips (dedupe by using the latest text stored on the button)
+        for (var p : pendingTooltips) {
+            Button b = p.getKey();
+            if (b == null) continue;
+            String txt = (String) b.getProperties().get("gx-hover-text");
+            if (txt == null) txt = p.getValue();
+            try {
+                hoverBubble.install(b, txt);
+            } catch (Exception ignored) {
+            }
+        }
+        pendingTooltips.clear();
+    }
 
-        PauseTransition showTimer = new PauseTransition(showDelay);
-        PauseTransition hideTimer = new PauseTransition(hideDelay);
+    // ========= Custom in-scene tooltip bubble (no Popup/Tooltip jitter) =========
+    private void setupHoverBubbleLayer() {
+        if (root == null) return;
 
-        Runnable showUnderButton = () -> {
-            Bounds b = btn.localToScreen(btn.getBoundsInLocal());
-            if (b == null) return;
+        // Scene may be null during initialize, so listen once.
+        root.sceneProperty().addListener((obs, oldSc, newSc) -> {
+            // Scene can be null during transitions / rebuilds
+            if (newSc == null) return;
 
-            // show roughly under button (will adjust again after layout)
-            if (!tip.isShowing()) {
-                tip.show(btn, b.getMinX(), b.getMaxY() + 6);
+            // Ensure tooltip CSS is available (do this AFTER null-check)
+            try {
+                var cssUrl = getClass().getResource("/com/grabx/app/grabx/styles/buttons.css");
+                if (cssUrl != null) {
+                    String css = cssUrl.toExternalForm();
+                    if (!newSc.getStylesheets().contains(css)) {
+                        newSc.getStylesheets().add(css);
+                    }
+                }
+            } catch (Exception ignored) {
             }
 
-            // Keep inside screen bounds (prevents jitter/auto-hide near edges)
             Platform.runLater(() -> {
-                if (!tip.isShowing()) return;
                 try {
-                    Bounds bb = btn.localToScreen(btn.getBoundsInLocal());
-                    if (bb == null) return;
+                    // If we already created the overlay & bubble, do nothing
+                    if (hoverLayer != null && hoverBubble != null) {
+                        // Still make sure queued tooltips are flushed once scene becomes ready
+                        hoverBubbleReady = true;
+                        flushPendingTooltips();
+                        return;
+                    }
 
-                    var w = tip.getScene().getWindow();
-                    javafx.geometry.Rectangle2D screen = javafx.stage.Screen.getPrimary().getVisualBounds();
+                    javafx.scene.Parent currentRoot = newSc.getRoot();
 
-                    double x = w.getX();
-                    double y = w.getY();
+                    if (currentRoot instanceof javafx.scene.layout.StackPane sp) {
+                        hoverLayer = new Pane();
+                        // Do NOT participate in layout; we only use it as an overlay.
+                        hoverLayer.setManaged(false);
+                        // Make the layer always cover the whole scene (prevents being behind/under other nodes)
+                        hoverLayer.prefWidthProperty().bind(sp.widthProperty());
+                        hoverLayer.prefHeightProperty().bind(sp.heightProperty());
+                        hoverLayer.setMinSize(0, 0);
+                        hoverLayer.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
+                        javafx.scene.layout.StackPane.setAlignment(hoverLayer, javafx.geometry.Pos.TOP_LEFT);
+                        hoverLayer.setPickOnBounds(false);
+                        hoverLayer.setMouseTransparent(true);
+                        hoverLayer.getStyleClass().add("gx-hover-layer");
+                        // Ensure it is ALWAYS on top
+                        sp.getChildren().add(hoverLayer);
+                        hoverLayer.toFront();
+                        hoverLayer.setViewOrder(-10_000);
+                    } else {
+                        javafx.scene.layout.StackPane wrapper = new javafx.scene.layout.StackPane();
+                        wrapper.getChildren().add(currentRoot);
 
-                    if (x + w.getWidth() > screen.getMaxX()) x = screen.getMaxX() - w.getWidth() - 6;
-                    if (x < screen.getMinX()) x = screen.getMinX() + 6;
+                        hoverLayer = new Pane();
+                        // Do NOT participate in layout; we only use it as an overlay.
+                        hoverLayer.setManaged(false);
+                        // Make the layer always cover the whole scene (prevents being behind/under other nodes)
+                        hoverLayer.prefWidthProperty().bind(wrapper.widthProperty());
+                        hoverLayer.prefHeightProperty().bind(wrapper.heightProperty());
+                        hoverLayer.setMinSize(0, 0);
+                        hoverLayer.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
+                        javafx.scene.layout.StackPane.setAlignment(hoverLayer, javafx.geometry.Pos.TOP_LEFT);
+                        hoverLayer.setPickOnBounds(false);
+                        hoverLayer.setMouseTransparent(true);
+                        hoverLayer.getStyleClass().add("gx-hover-layer");
+                        // Ensure it is ALWAYS on top
+                        wrapper.getChildren().add(hoverLayer);
+                        hoverLayer.toFront();
+                        hoverLayer.setViewOrder(-10_000);
 
-                    // If bottom overflow, flip above the button
-                    if (y + w.getHeight() > screen.getMaxY()) y = bb.getMinY() - w.getHeight() - 10;
-                    if (y < screen.getMinY()) y = screen.getMinY() + 6;
+                        newSc.setRoot(wrapper);
+                    }
 
-                    w.setX(x);
-                    w.setY(y);
-                } catch (Exception ignored) {}
+                    hoverBubble = new HoverBubble(hoverLayer);
+                    hoverBubbleReady = true;
+                    flushPendingTooltips();
+
+                    // Ensure topbar tooltips are installed too (they can be queued during initialize)
+                    installTooltips();
+                } catch (Exception ignored) {
+                }
+            });
+        });
+    }
+
+    private static final class HoverBubble {
+        private final Pane layer;
+        private final StackPane bubble;
+        private final Label label;
+        private Node currentOwner;
+        private boolean sceneHooksInstalled = false;
+
+        // Match your old behavior (same delays you had)
+        private final PauseTransition showTimer = new PauseTransition(Duration.millis(160));
+        private final PauseTransition hideTimer = new PauseTransition(Duration.millis(180));
+
+        HoverBubble(Pane layer) {
+            this.layer = layer;
+
+            label = new Label();
+            label.setWrapText(false);
+            label.setMaxWidth(Double.MAX_VALUE);
+            label.getStyleClass().add("gx-hoverlabel");
+
+            bubble = new StackPane(label);
+            bubble.getStyleClass().add("gx-hoverbubble");
+
+            // Key to kill jitter: bubble must NOT capture mouse events
+            bubble.setMouseTransparent(true);
+            // Overlay node: do not affect layout
+            bubble.setManaged(false);
+            // Ensure it renders above everything
+            bubble.setViewOrder(-10_000);
+            bubble.setVisible(false);
+
+            layer.getChildren().add(bubble);
+        }
+
+        private void ensureSceneHooks(Scene sc) {
+            if (sc == null || sceneHooksInstalled) return;
+            sceneHooksInstalled = true;
+
+            // Global guards to avoid stuck tooltips when owner disappears/recycles (ListCell) or when mouse leaves.
+            sc.addEventFilter(MouseEvent.MOUSE_MOVED, e -> {
+                if (currentOwner == null) return;
+                if (currentOwner.getScene() == null || !currentOwner.isVisible() || !currentOwner.isHover()) {
+                    hide();
+                    return;
+                }
+                position(currentOwner);
             });
 
-        };
+            sc.addEventFilter(MouseEvent.MOUSE_PRESSED, e -> hide());
 
-        showTimer.setOnFinished(e -> {
-            if (!btn.isHover()) return;
-            hideTimer.stop();
-            showUnderButton.run();
-        });
+            // Hide when window loses focus (optional polish)
+            try {
+                if (sc.getWindow() != null) {
+                    sc.getWindow().focusedProperty().addListener((o, a, b) -> {
+                        if (b == null || !b) hide();
+                    });
+                }
+            } catch (Exception ignored) {
+            }
+        }
 
-        hideTimer.setOnFinished(e -> tip.hide());
+        void install(Button btn, String text) {
+            if (btn == null) return;
 
-        btn.hoverProperty().addListener((obs, wasHover, isHover) -> {
-            if (isHover) {
+            // Prevent attaching multiple listeners when cells are recycled / updateItem runs often
+            if (Boolean.TRUE.equals(btn.getProperties().get("gx-hover-installed"))) {
+                btn.getProperties().put("gx-hover-text", text);
+                return;
+            }
+            btn.getProperties().put("gx-hover-installed", Boolean.TRUE);
+            btn.getProperties().put("gx-hover-text", text);
+
+            // Ensure button hover is stable (icons do not steal events)
+            btn.setPickOnBounds(true);
+            Node g = btn.getGraphic();
+            if (g != null) g.setMouseTransparent(true);
+
+            btn.addEventHandler(javafx.scene.input.MouseEvent.MOUSE_ENTERED, e -> {
                 hideTimer.stop();
+                showTimer.stop();
+                showTimer.setOnFinished(ev -> {
+                    if (!btn.isHover()) return;
+                    String txt = (String) btn.getProperties().get("gx-hover-text");
+                    show(btn, txt);
+                });
                 showTimer.playFromStart();
-            } else {
-                showTimer.stop();
-                hideTimer.playFromStart();
-            }
-        });
+            });
 
-        // Clicking should hide immediately
-        btn.armedProperty().addListener((obs, wasArmed, isArmed) -> {
-            if (isArmed) {
+            btn.addEventHandler(javafx.scene.input.MouseEvent.MOUSE_EXITED, e -> {
                 showTimer.stop();
                 hideTimer.stop();
-                tip.hide();
+                hideTimer.setOnFinished(ev -> hide());
+                hideTimer.playFromStart();
+            });
+
+            // Clicking should hide immediately
+            btn.armedProperty().addListener((obs, wasArmed, isArmed) -> {
+                if (isArmed) {
+                    showTimer.stop();
+                    hideTimer.stop();
+                    hide();
+                }
+            });
+        }
+
+        private void show(Node owner, String text) {
+            if (owner == null || owner.getScene() == null) return;
+
+            label.setText(text == null ? "" : text);
+            currentOwner = owner;
+
+            bubble.setVisible(true);
+            // Important: node is unmanaged inside a Pane, so we must autosize manually
+            bubble.applyCss();
+            bubble.autosize();
+
+            ensureSceneHooks(owner.getScene());
+            position(owner);
+        }
+
+        private void hide() {
+            bubble.setVisible(false);
+            currentOwner = null;
+        }
+
+        private void position(Node owner) {
+            if (!bubble.isVisible() || owner == null || owner.getScene() == null) return;
+
+            Bounds b = owner.localToScene(owner.getBoundsInLocal());
+            if (b == null) return;
+
+            bubble.applyCss();
+            bubble.autosize();
+            double bubbleW = bubble.getLayoutBounds().getWidth();
+            double bubbleH = bubble.getLayoutBounds().getHeight();
+
+            double targetX = b.getMinX() + (b.getWidth() - bubbleW) / 2.0;
+            double targetY = b.getMaxY() + 6; // same feel you had
+
+            double sceneW = owner.getScene().getWidth();
+            double sceneH = owner.getScene().getHeight();
+            double pad = 6;
+
+            if (targetX + bubbleW > sceneW - pad) targetX = sceneW - pad - bubbleW;
+            if (targetX < pad) targetX = pad;
+
+            // Flip above if bottom overflow
+            if (targetY + bubbleH > sceneH - pad) {
+                targetY = b.getMinY() - bubbleH - 10;
             }
-        });
+            if (targetY < pad) targetY = pad;
+
+            bubble.relocate(targetX, targetY);
+        }
     }
 
     // ========= Analyze URL (backend logic - v1) =========
@@ -1286,11 +1487,11 @@ public class MainController {
                 setupSvgButton(folderBtn, ICON_FOLDER_OPEN);
                 setupSvgButton(retryBtn, ICON_RETRY);
 
-                installTooltip(pauseBtn, "Pause download");
-                installTooltip(resumeBtn, "Resume download");
-                installTooltip(cancelBtn, "Cancel download");
-                installTooltip(retryBtn, "Retry download");
-                installTooltip(folderBtn, "Open folder");
+                MainController.this.installTooltip(pauseBtn, "Pause download");
+                MainController.this.installTooltip(resumeBtn, "Resume download");
+                MainController.this.installTooltip(cancelBtn, "Cancel download");
+                MainController.this.installTooltip(retryBtn, "Retry download");
+                MainController.this.installTooltip(folderBtn, "Open folder");
 
 
                 actions.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
@@ -1473,13 +1674,12 @@ public class MainController {
         return null;
     }
 
-    private static void setupIconButton(Button b, String fallbackText, String tooltipText) {
+    private void setupIconButton(Button b, String fallbackText, String tooltipText) {
         b.getStyleClass().addAll("gx-btn", "gx-btn-ghost", "gx-task-action");
         b.setFocusTraversable(false);
         b.setText(fallbackText);
         if (tooltipText != null && !tooltipText.isBlank()) {
-
-            installTooltip(b,tooltipText);
+            this.installTooltip(b, tooltipText);
         }
     }
 
@@ -2791,6 +2991,7 @@ public class MainController {
                     openOrUpdateAddLinkDialog(clip);
                 });
             });
+
         });
 
         // One-time startup: if clipboard already has a URL when the window is first shown, open Add Link (slight delay)
