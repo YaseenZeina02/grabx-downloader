@@ -1573,7 +1573,7 @@ public class MainController {
         if (url == null || url.isBlank()) return null;
 
         try {
-            // Force UTF-8 output from yt-dlp on ALL platforms (fixes Windows garbled Arabic).
+            // Force single-video behavior even if the URL contains playlist parameters.
             ProcessBuilder pb = new ProcessBuilder(
                     "yt-dlp",
                     "--no-warnings",
@@ -1583,43 +1583,33 @@ public class MainController {
                     "--print", "title",
                     url.trim()
             );
-
-            // Extra hardening for Windows/Python stdout encoding
-            try {
-                pb.environment().put("PYTHONIOENCODING", "utf-8");
-                pb.environment().put("PYTHONUTF8", "1");
-            } catch (Exception ignored) {
-            }
-
             pb.redirectErrorStream(true);
             Process p = pb.start();
 
             String best = null;
-
-            try (java.io.BufferedReader br = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8)
-            )) {
+            try (var br = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()))) {
                 String line;
                 while ((line = br.readLine()) != null) {
                     String s = line.trim();
                     if (s.isEmpty()) continue;
 
+                    // Ignore noisy lines; keep the last plausible title.
                     String sl = s.toLowerCase();
                     if (sl.startsWith("warning:")) continue;
-
-                    // If yt-dlp prints an error line, treat as unsupported.
                     if (sl.startsWith("error:")) {
-                        best = null;
-                        break;
+                        // Keep it, but mark as error so we can return null later.
+                        best = s;
+                        continue;
                     }
 
-                    best = s; // keep last plausible title
+                    best = s;
                 }
             }
 
             int code = p.waitFor();
             if (code != 0) return null;
             if (best == null || best.isBlank()) return null;
+            if (best.toLowerCase().startsWith("error:")) return null;
 
             return best;
 
