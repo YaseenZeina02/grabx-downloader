@@ -1,5 +1,9 @@
 package com.grabx.app.grabx;
 
+import com.grabx.app.grabx.core.model.DownloadRow;
+import com.grabx.app.grabx.ui.components.HoverBubble;
+import com.grabx.app.grabx.ui.components.NoSelectionModel;
+import com.grabx.app.grabx.ui.probe.ProbeQualitiesResult;
 import javafx.scene.layout.HBox;
 
 import java.awt.Desktop;
@@ -400,15 +404,15 @@ public class MainController {
         return new ProbeQualitiesResult(heights, sizeByHeight);
     }
 
-    private static final class ProbeQualitiesResult {
-        final java.util.Set<Integer> heights;
-        final java.util.Map<Integer, String> sizeByHeight;
-
-        ProbeQualitiesResult(java.util.Set<Integer> heights, java.util.Map<Integer, String> sizeByHeight) {
-            this.heights = heights;
-            this.sizeByHeight = sizeByHeight;
-        }
-    }
+//    private static final class ProbeQualitiesResult {
+//        final java.util.Set<Integer> heights;
+//        final java.util.Map<Integer, String> sizeByHeight;
+//
+//        ProbeQualitiesResult(java.util.Set<Integer> heights, java.util.Map<Integer, String> sizeByHeight) {
+//            this.heights = heights;
+//            this.sizeByHeight = sizeByHeight;
+//        }
+//    }
 
 
     private static int safeParseInt(String s) {
@@ -684,160 +688,6 @@ public class MainController {
         });
     }
 
-    private static final class HoverBubble {
-        private final Pane layer;
-        private final StackPane bubble;
-        private final Label label;
-        private Node currentOwner;
-        private boolean sceneHooksInstalled = false;
-
-        // Match your old behavior (same delays you had)
-        private final PauseTransition showTimer = new PauseTransition(Duration.millis(160));
-        private final PauseTransition hideTimer = new PauseTransition(Duration.millis(180));
-
-        HoverBubble(Pane layer) {
-            this.layer = layer;
-
-            label = new Label();
-            label.setWrapText(false);
-            label.setMaxWidth(Double.MAX_VALUE);
-            label.getStyleClass().add("gx-hoverlabel");
-
-            bubble = new StackPane(label);
-            bubble.getStyleClass().add("gx-hoverbubble");
-
-            // Key to kill jitter: bubble must NOT capture mouse events
-            bubble.setMouseTransparent(true);
-            // Overlay node: do not affect layout
-            bubble.setManaged(false);
-            // Ensure it renders above everything
-            bubble.setViewOrder(-10_000);
-            bubble.setVisible(false);
-
-            layer.getChildren().add(bubble);
-        }
-
-        private void ensureSceneHooks(Scene sc) {
-            if (sc == null || sceneHooksInstalled) return;
-            sceneHooksInstalled = true;
-
-            // Global guards to avoid stuck tooltips when owner disappears/recycles (ListCell) or when mouse leaves.
-            sc.addEventFilter(MouseEvent.MOUSE_MOVED, e -> {
-                if (currentOwner == null) return;
-                if (currentOwner.getScene() == null || !currentOwner.isVisible() || !currentOwner.isHover()) {
-                    hide();
-                    return;
-                }
-                position(currentOwner);
-            });
-
-            sc.addEventFilter(MouseEvent.MOUSE_PRESSED, e -> hide());
-
-            // Hide when window loses focus (optional polish)
-            try {
-                if (sc.getWindow() != null) {
-                    sc.getWindow().focusedProperty().addListener((o, a, b) -> {
-                        if (b == null || !b) hide();
-                    });
-                }
-            } catch (Exception ignored) {
-            }
-        }
-
-        void install(Button btn, String text) {
-            if (btn == null) return;
-
-            // Prevent attaching multiple listeners when cells are recycled / updateItem runs often
-            if (Boolean.TRUE.equals(btn.getProperties().get("gx-hover-installed"))) {
-                btn.getProperties().put("gx-hover-text", text);
-                return;
-            }
-            btn.getProperties().put("gx-hover-installed", Boolean.TRUE);
-            btn.getProperties().put("gx-hover-text", text);
-
-            // Ensure button hover is stable (icons do not steal events)
-            btn.setPickOnBounds(true);
-            Node g = btn.getGraphic();
-            if (g != null) g.setMouseTransparent(true);
-
-            btn.addEventHandler(javafx.scene.input.MouseEvent.MOUSE_ENTERED, e -> {
-                hideTimer.stop();
-                showTimer.stop();
-                showTimer.setOnFinished(ev -> {
-                    if (!btn.isHover()) return;
-                    String txt = (String) btn.getProperties().get("gx-hover-text");
-                    show(btn, txt);
-                });
-                showTimer.playFromStart();
-            });
-
-            btn.addEventHandler(javafx.scene.input.MouseEvent.MOUSE_EXITED, e -> {
-                showTimer.stop();
-                hideTimer.stop();
-                hideTimer.setOnFinished(ev -> hide());
-                hideTimer.playFromStart();
-            });
-
-            // Clicking should hide immediately
-            btn.armedProperty().addListener((obs, wasArmed, isArmed) -> {
-                if (isArmed) {
-                    showTimer.stop();
-                    hideTimer.stop();
-                    hide();
-                }
-            });
-        }
-
-        private void show(Node owner, String text) {
-            if (owner == null || owner.getScene() == null) return;
-
-            label.setText(text == null ? "" : text);
-            currentOwner = owner;
-
-            bubble.setVisible(true);
-            // Important: node is unmanaged inside a Pane, so we must autosize manually
-            bubble.applyCss();
-            bubble.autosize();
-
-            ensureSceneHooks(owner.getScene());
-            position(owner);
-        }
-
-        private void hide() {
-            bubble.setVisible(false);
-            currentOwner = null;
-        }
-
-        private void position(Node owner) {
-            if (!bubble.isVisible() || owner == null || owner.getScene() == null) return;
-
-            Bounds b = owner.localToScene(owner.getBoundsInLocal());
-            if (b == null) return;
-
-            bubble.applyCss();
-            bubble.autosize();
-            double bubbleW = bubble.getLayoutBounds().getWidth();
-            double bubbleH = bubble.getLayoutBounds().getHeight();
-
-            double targetX = b.getMinX() + (b.getWidth() - bubbleW) / 2.0;
-            double targetY = b.getMaxY() + 6; // same feel you had
-
-            double sceneW = owner.getScene().getWidth();
-            double sceneH = owner.getScene().getHeight();
-            double pad = 6;
-
-            if (targetX + bubbleW > sceneW - pad) targetX = sceneW - pad - bubbleW;
-            if (targetX < pad) targetX = pad;
-
-            // Flip above if bottom overflow
-            if (targetY + bubbleH > sceneH - pad) {
-                targetY = b.getMinY() - bubbleH - 10;
-            }
-            if (targetY < pad) targetY = pad;
-
-            bubble.relocate(targetX, targetY);
-        }
-    }
 
     // ========= Analyze URL (backend logic - v1) =========
 
@@ -1244,7 +1094,39 @@ public class MainController {
                 info.setText("Paste a link then click Get.");
                 info.setTextFill(Color.web("#ff4d4d"));
                 okBtn.setDisable(true);
-                lastType[0] = ContentType.UNSUPPORTED;
+//                lastType[0] = ContentType.UNSUPPORTED;
+                // ===== Level 1 probe =====
+                // 1) Try yt-dlp title: if it works, it's a supported media URL.
+                String mediaTitle = fetchTitleWithYtDlp(url);
+
+                if (mediaTitle != null && !mediaTitle.isBlank()) {
+
+                    // Decide type (playlist/video) using your existing analyzer.
+                    lastType[0] = analyzeUrlType(url);
+                    if (lastType[0] == ContentType.UNSUPPORTED) {
+                        // If yt-dlp can print title, treat as VIDEO as a safe fallback.
+                        lastType[0] = ContentType.VIDEO;
+                    }
+
+                    info.setText("Detected media: " + mediaTitle);
+                    info.setTextFill(Color.web("#9AA4B2"));
+
+                } else {
+                    // 2) If yt-dlp doesn't support it, try direct file probe (HEAD)
+                    DirectFileProbe df = probeDirectFile(url);
+                    if (df != null && df.isFile) {
+                        lastType[0] = ContentType.DIRECT_FILE;
+
+                        String name = (df.fileName != null && !df.fileName.isBlank())
+                                ? df.fileName
+                                : "Direct file";
+
+                        info.setText("Detected direct file: " + name);
+                        info.setTextFill(Color.web("#9AA4B2"));
+                    } else {
+                        lastType[0] = ContentType.UNSUPPORTED;
+                    }
+                }
                 return;
             }
             lastType[0] = analyzeUrlType(url);
@@ -1483,7 +1365,7 @@ public class MainController {
                 setupSvgButton(resumeBtn, ICON_PLAY);
                 setupSvgButton(cancelBtn, ICON_CANCEL);
                 cancelBtn.getStyleClass().add("cancel");
-                cancelBtn.setGraphic(svgIcon(ICON_CANCEL, 30)); // بدل 34
+                cancelBtn.setGraphic(svgIcon(ICON_CANCEL, 28)); // بدل 34
                 setupSvgButton(folderBtn, ICON_FOLDER_OPEN);
                 setupSvgButton(retryBtn, ICON_RETRY);
 
@@ -1495,6 +1377,8 @@ public class MainController {
 
 
                 actions.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
+                actions.setFillHeight(true);
+                actions.setMinHeight(40);
                 actions.getChildren().addAll(pauseBtn, resumeBtn, cancelBtn, folderBtn, retryBtn);
 
                 textBox.getChildren().addAll(title, meta);
@@ -1630,18 +1514,49 @@ public class MainController {
                 speed.textProperty().bind(item.speed);
                 eta.textProperty().bind(item.eta);
 
-                // Toggle which buttons show based on status
+                // Toggle which buttons appear based on status (hide instead of disable)
                 String s = item.status.get();
-                boolean paused = s != null && s.toLowerCase().contains("pause");
-                boolean cancelled = s != null && s.toLowerCase().contains("cancel");
+                String sl = (s == null) ? "" : s.toLowerCase();
 
-                pauseBtn.setDisable(paused || cancelled);
-                resumeBtn.setDisable(!paused || cancelled);
-                cancelBtn.setDisable(cancelled);
+                boolean isQueued      = sl.contains("queue");
+                boolean isDownloading = sl.contains("down");
+                boolean isPaused      = sl.contains("pause");
+                boolean isCompleted   = sl.contains("complete");
+                boolean isFailed      = sl.contains("fail") || sl.contains("error") || sl.contains("cancel");
 
-                // Retry is useful mainly when cancelled/failed; keep enabled when not actively downloading
-                boolean downloading = s != null && s.toLowerCase().contains("down");
-                retryBtn.setDisable(downloading);
+                // Helper: hide removes the button AND its space
+                java.util.function.BiConsumer<Button, Boolean> showBtn = (btn, show) -> {
+                    btn.setVisible(show);
+                    btn.setManaged(show);
+                };
+
+                // Default: hide all, then enable what makes sense
+                showBtn.accept(pauseBtn, false);
+                showBtn.accept(resumeBtn, false);
+                showBtn.accept(cancelBtn, false);
+                showBtn.accept(folderBtn, true);   // folder is always useful
+                showBtn.accept(retryBtn, false);
+
+                if (isDownloading) {
+                    showBtn.accept(pauseBtn, true);
+                    showBtn.accept(cancelBtn, true);
+                } else if (isPaused) {
+                    showBtn.accept(resumeBtn, true);
+                    showBtn.accept(cancelBtn, true);
+                } else if (isQueued) {
+                    // queued: allow cancel (and folder)
+                    showBtn.accept(cancelBtn, true);
+                } else if (isFailed) {
+                    // failed/cancelled: retry is the main action
+                    showBtn.accept(retryBtn, true);
+                } else if (isCompleted) {
+                    // completed: only folder (already shown)
+                }
+
+                // Safety: never show retry while downloading
+                if (isDownloading) {
+                    showBtn.accept(retryBtn, false);
+                }
 
                 setGraphic(card);
             }
@@ -1655,24 +1570,158 @@ public class MainController {
 
 
     private String fetchTitleWithYtDlp(String url) {
+        if (url == null || url.isBlank()) return null;
+
         try {
+            // Force UTF-8 output from yt-dlp on ALL platforms (fixes Windows garbled Arabic).
             ProcessBuilder pb = new ProcessBuilder(
                     "yt-dlp",
                     "--no-warnings",
+                    "--no-playlist",
+                    "--skip-download",
+                    "--encoding", "utf-8",
                     "--print", "title",
-                    url
+                    url.trim()
             );
+
+            // Extra hardening for Windows/Python stdout encoding
+            try {
+                pb.environment().put("PYTHONIOENCODING", "utf-8");
+                pb.environment().put("PYTHONUTF8", "1");
+            } catch (Exception ignored) {
+            }
+
             pb.redirectErrorStream(true);
             Process p = pb.start();
 
-            try (var br = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()))) {
-                String line = br.readLine();
-                p.waitFor();
-                if (line != null && !line.isBlank()) return line.trim();
+            String best = null;
+
+            try (java.io.BufferedReader br = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8)
+            )) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    String s = line.trim();
+                    if (s.isEmpty()) continue;
+
+                    String sl = s.toLowerCase();
+                    if (sl.startsWith("warning:")) continue;
+
+                    // If yt-dlp prints an error line, treat as unsupported.
+                    if (sl.startsWith("error:")) {
+                        best = null;
+                        break;
+                    }
+
+                    best = s; // keep last plausible title
+                }
+            }
+
+            int code = p.waitFor();
+            if (code != 0) return null;
+            if (best == null || best.isBlank()) return null;
+
+            return best;
+
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    // ========== Level-1 URL support probing (Media -> Direct file -> Unsupported) ==========
+
+    private static final class DirectFileProbe {
+        final boolean isFile;
+        final String contentType;
+        final String fileName;
+
+        DirectFileProbe(boolean isFile, String contentType, String fileName) {
+            this.isFile = isFile;
+            this.contentType = contentType;
+            this.fileName = fileName;
+        }
+    }
+
+    /**
+     * Direct file probe:
+     * - HEAD first
+     * - Treat as file if Content-Disposition contains attachment/filename OR Content-Type is not text/html.
+     */
+    private DirectFileProbe probeDirectFile(String url) {
+        if (url == null || url.isBlank()) return new DirectFileProbe(false, null, null);
+
+        java.net.HttpURLConnection conn = null;
+        try {
+            java.net.URL u = new java.net.URL(url);
+            conn = (java.net.HttpURLConnection) u.openConnection();
+            conn.setInstanceFollowRedirects(true);
+            conn.setConnectTimeout(6500);
+            conn.setReadTimeout(6500);
+            conn.setRequestMethod("HEAD");
+            conn.connect();
+
+            String ct = conn.getContentType();
+            String cd = conn.getHeaderField("Content-Disposition");
+
+            boolean hasAttachment = false;
+            String fileName = null;
+
+            if (cd != null) {
+                String lcd = cd.toLowerCase();
+                hasAttachment = lcd.contains("attachment") || lcd.contains("filename=");
+                fileName = extractFilenameFromContentDisposition(cd);
+            }
+
+            boolean notHtml = (ct != null) && !ct.toLowerCase().startsWith("text/html");
+
+            if (fileName == null || fileName.isBlank()) {
+                fileName = extractFilenameFromUrlPath(url);
+            }
+
+            boolean isFile = hasAttachment || notHtml;
+            return new DirectFileProbe(isFile, ct, fileName);
+
+        } catch (Exception ignored) {
+            return new DirectFileProbe(false, null, null);
+        } finally {
+            try { if (conn != null) conn.disconnect(); } catch (Exception ignored) {}
+        }
+    }
+
+    private static String extractFilenameFromContentDisposition(String cd) {
+        if (cd == null) return null;
+        try {
+            String[] parts = cd.split(";");
+            for (String p : parts) {
+                String s = p.trim();
+                if (s.toLowerCase().startsWith("filename=")) {
+                    String v = s.substring("filename=".length()).trim();
+                    if (v.startsWith("\"") && v.endsWith("\"") && v.length() >= 2) {
+                        v = v.substring(1, v.length() - 1);
+                    }
+                    return v;
+                }
             }
         } catch (Exception ignored) {}
         return null;
     }
+
+    private static String extractFilenameFromUrlPath(String url) {
+        if (url == null) return null;
+        try {
+            java.net.URL u = new java.net.URL(url);
+            String path = u.getPath();
+            if (path == null || path.isBlank()) return null;
+            int slash = path.lastIndexOf('/');
+            String name = (slash >= 0) ? path.substring(slash + 1) : path;
+            if (name == null) return null;
+            name = name.trim();
+            if (name.isBlank()) return null;
+            return name;
+        } catch (Exception ignored) {}
+        return null;
+    }
+
 
     private void setupIconButton(Button b, String fallbackText, String tooltipText) {
         b.getStyleClass().addAll("gx-btn", "gx-btn-ghost", "gx-task-action");
@@ -1688,7 +1737,7 @@ public class MainController {
         ensureDownloadsListView();
 
         // 1) عنوان مبدئي
-        String initialTitle = "Fetching title…";
+        String initialTitle = "Loading ..."; // subtle loading placeholder
         if (url == null || url.isBlank()) {
             initialTitle = "(empty link)";
         }
@@ -1708,44 +1757,27 @@ public class MainController {
         if (url != null && !url.isBlank()) {
             new Thread(() -> {
                 String realTitle = fetchTitleWithYtDlp(url);
-                if (realTitle != null && !realTitle.isBlank()) {
-                    Platform.runLater(() -> {
+                Platform.runLater(() -> {
+                    if (realTitle != null && !realTitle.isBlank()) {
                         row.title.set(realTitle);
-
                         if (statusText != null) {
                             statusText.setText("Queued: " + realTitle);
                         }
-                    });
-                }
+                    } else {
+                        // Fallback: don't leave it as dots forever
+                        String fallback = shorten(url);
+                        if (fallback == null || fallback.isBlank()) fallback = "Unknown title";
+                        row.title.set(fallback);
+                        if (statusText != null) {
+                            statusText.setText("Queued: " + fallback);
+                        }
+                    }
+                });
             }, "yt-title-probe").start();
         }
     }
 
-    private static final class DownloadRow {
-        final String url;
-        final String folder;
-        final String mode;
-        final String quality;
 
-        final javafx.beans.property.StringProperty title = new javafx.beans.property.SimpleStringProperty("New item");
-        final javafx.beans.property.StringProperty thumbUrl = new javafx.beans.property.SimpleStringProperty(null);
-
-        final javafx.beans.property.StringProperty status = new javafx.beans.property.SimpleStringProperty("Queued");
-        final javafx.beans.property.DoubleProperty progress = new javafx.beans.property.SimpleDoubleProperty(0);
-        final javafx.beans.property.StringProperty speed = new javafx.beans.property.SimpleStringProperty("0 KB/s");
-        final javafx.beans.property.StringProperty eta = new javafx.beans.property.SimpleStringProperty("--");
-
-        DownloadRow(String url, String initialTitle, String folder, String mode, String quality) {
-            this.url = url;
-            this.folder = folder;
-            this.mode = mode;
-            this.quality = quality;
-            if (initialTitle != null && !initialTitle.isBlank()) {
-                this.title.set(initialTitle);
-            }
-            this.thumbUrl.set(thumbFromUrl(url));
-        }
-    }
     // --- Thumbnail helpers and cache ---
     private static final java.util.Map<String, javafx.scene.image.Image> MAIN_THUMB_CACHE =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -1782,7 +1814,7 @@ public class MainController {
         return null;
     }
 
-    private static String thumbFromUrl(String url) {
+    public static String thumbFromUrl(String url) {
         String id = extractYoutubeId(url);
         if (id == null || id.isBlank()) return null;
         return "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg";
@@ -2875,73 +2907,6 @@ public class MainController {
         return "https://i.ytimg.com/vi/" + videoId + "/hqdefault.jpg";
     }
 
-
-    // Disable ListView selection (we use checkboxes for selection instead)
-    private static final class NoSelectionModel<T> extends MultipleSelectionModel<T> {
-        @Override
-        public ObservableList<Integer> getSelectedIndices() {
-            return FXCollections.emptyObservableList();
-        }
-
-        @Override
-        public ObservableList<T> getSelectedItems() {
-            return FXCollections.emptyObservableList();
-        }
-
-        @Override
-        public void selectIndices(int index, int... indices) {
-        }
-
-        @Override
-        public void selectAll() {
-        }
-
-        @Override
-        public void clearAndSelect(int index) {
-        }
-
-        @Override
-        public void select(int index) {
-        }
-
-        @Override
-        public void select(T obj) {
-        }
-
-        @Override
-        public void clearSelection(int index) {
-        }
-
-        @Override
-        public void clearSelection() {
-        }
-
-        @Override
-        public boolean isSelected(int index) {
-            return false;
-        }
-
-        @Override
-        public boolean isEmpty() {
-            return true;
-        }
-
-        @Override
-        public void selectPrevious() {
-        }
-
-        @Override
-        public void selectNext() {
-        }
-
-        @Override
-        public void selectFirst() {
-        }
-
-        @Override
-        public void selectLast() {
-        }
-    }
 
     private static String shorten(String s) {
         if (s == null) return "";
