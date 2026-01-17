@@ -145,16 +145,16 @@ public final class YtDlpManager {
 
         // Your current tree: resources/tools.yt-dlp/...
         if (os == OS.MAC) {
-            c.add("tools.yt-dlp/mac.universal/yt-dlp");
+            c.add("tools/yt-dlp/mac.universal/yt-dlp");
         } else if (os == OS.LINUX) {
-            c.add("tools.yt-dlp/linux/" + (arch == ARCH.ARM64 ? "arm64" : "x64") + "/yt-dlp");
+            c.add("tools/yt-dlp/linux/" + (arch == ARCH.ARM64 ? "arm64" : "x64") + "/yt-dlp");
         } else if (os == OS.WINDOWS) {
             String a = (arch == ARCH.ARM64) ? "arm64" : (arch == ARCH.X86 ? "x86" : "x64");
-            c.add("tools.yt-dlp/windows/" + a + "/yt-dlp.exe");
+            c.add("tools/yt-dlp/windows/" + a + "/yt-dlp.exe");
         }
 
         // Optional flat layout later:
-        c.add("tools.yt-dlp/" + outputBinaryFileName());
+        c.add("tools/yt-dlp/" + outputBinaryFileName());
 
         ClassLoader cl = YtDlpManager.class.getClassLoader();
         for (String p : c) {
