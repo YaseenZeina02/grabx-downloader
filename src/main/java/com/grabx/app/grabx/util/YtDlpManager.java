@@ -33,6 +33,13 @@ public final class YtDlpManager {
 
     /** Returns yt-dlp path (PATH first, then bundled-extract). */
     public static Path ensureAvailable() {
+        System.out.println("YTDLP ensureAvailable() CALLED");
+
+        var cl = YtDlpManager.class.getClassLoader();
+        System.out.println("RES mac=" + cl.getResource("tools.yt-dlp/mac.universal/yt-dlp"));
+        System.out.println("RES win=" + cl.getResource("tools.yt-dlp/windows/x64/yt-dlp.exe"));
+        System.out.println("RES lin=" + cl.getResource("tools.yt-dlp/linux/x64/yt-dlp"));
+
         if (cached != null && Files.exists(cached)) return cached;
 
         // 1) PATH
