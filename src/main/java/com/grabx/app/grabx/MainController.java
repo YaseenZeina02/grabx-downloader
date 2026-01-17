@@ -1569,13 +1569,65 @@ public class MainController {
 
 
 
+//    private String fetchTitleWithYtDlp(String url) {
+//        if (url == null || url.isBlank()) return null;
+//
+//        try {
+//            // Force single-video behavior even if the URL contains playlist parameters.
+//            ProcessBuilder pb = new ProcessBuilder(
+//                    "yt-dlp",
+//                    "--no-warnings",
+//                    "--no-playlist",
+//                    "--skip-download",
+//                    "--encoding", "utf-8",
+//                    "--print", "title",
+//                    url.trim()
+//            );
+//            pb.redirectErrorStream(true);
+//            Process p = pb.start();
+//
+//            String best = null;
+//            try (var br = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()))) {
+//                String line;
+//                while ((line = br.readLine()) != null) {
+//                    String s = line.trim();
+//                    if (s.isEmpty()) continue;
+//
+//                    // Ignore noisy lines; keep the last plausible title.
+//                    String sl = s.toLowerCase();
+//                    if (sl.startsWith("warning:")) continue;
+//                    if (sl.startsWith("error:")) {
+//                        // Keep it, but mark as error so we can return null later.
+//                        best = s;
+//                        continue;
+//                    }
+//
+//                    best = s;
+//                }
+//            }
+//
+//            int code = p.waitFor();
+//            if (code != 0) return null;
+//            if (best == null || best.isBlank()) return null;
+//            if (best.toLowerCase().startsWith("error:")) return null;
+//
+//            return best;
+//
+//        } catch (Exception ignored) {
+//            return null;
+//        }
+//    }
+
     private String fetchTitleWithYtDlp(String url) {
         if (url == null || url.isBlank()) return null;
 
         try {
-            // Force single-video behavior even if the URL contains playlist parameters.
+            // Ensure bundled yt-dlp is extracted and runnable
+            java.nio.file.Path yt = com.grabx.app.grabx.util.YtDlpManager.ensureAvailable();
+            if (yt == null) return null;
+
             ProcessBuilder pb = new ProcessBuilder(
-                    "yt-dlp",
+                    yt.toAbsolutePath().toString(),
                     "--no-warnings",
                     "--no-playlist",
                     "--skip-download",
@@ -1583,24 +1635,22 @@ public class MainController {
                     "--print", "title",
                     url.trim()
             );
+
             pb.redirectErrorStream(true);
             Process p = pb.start();
 
             String best = null;
-            try (var br = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()))) {
+            try (var br = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8)
+            )) {
                 String line;
                 while ((line = br.readLine()) != null) {
                     String s = line.trim();
                     if (s.isEmpty()) continue;
 
-                    // Ignore noisy lines; keep the last plausible title.
                     String sl = s.toLowerCase();
                     if (sl.startsWith("warning:")) continue;
-                    if (sl.startsWith("error:")) {
-                        // Keep it, but mark as error so we can return null later.
-                        best = s;
-                        continue;
-                    }
+                    if (sl.startsWith("error:")) return null;
 
                     best = s;
                 }
@@ -1609,7 +1659,6 @@ public class MainController {
             int code = p.waitFor();
             if (code != 0) return null;
             if (best == null || best.isBlank()) return null;
-            if (best.toLowerCase().startsWith("error:")) return null;
 
             return best;
 
