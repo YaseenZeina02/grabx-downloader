@@ -6,6 +6,7 @@ module com.grabx.app.grabx {
     requires java.desktop;
     requires javafx.base;
     requires javafx.graphics;
+    requires java.prefs;
 
     // Current controller package
     opens com.grabx.app.grabx to javafx.fxml;

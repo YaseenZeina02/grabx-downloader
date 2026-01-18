@@ -1,4 +1,5 @@
 package com.grabx.app.grabx.core.model;
 
-public class DownloadStatus {
+public enum DownloadStatus {
+    QUEUED, DOWNLOADING, PAUSED, COMPLETED, CANCELLED, ERROR
 }

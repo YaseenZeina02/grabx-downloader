@@ -5,11 +5,15 @@ import com.grabx.app.grabx.ui.components.HoverBubble;
 import com.grabx.app.grabx.ui.components.NoSelectionModel;
 import com.grabx.app.grabx.ui.probe.ProbeQualitiesResult;
 import javafx.scene.layout.HBox;
+import javafx.collections.transformation.FilteredList;
 
 import java.awt.Desktop;
 import java.net.URI;
 import java.util.Map;
 import java.util.concurrent.*;
+
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
 import com.grabx.app.grabx.core.model.probe.AudioProbeService;
 import com.grabx.app.grabx.core.model.probe.VideoProbeService;
@@ -25,6 +29,7 @@ import javafx.collections.ObservableList;
 import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
 import javafx.geometry.Bounds;
+import java.util.prefs.Preferences;
 import javafx.geometry.Insets;
 import javafx.scene.Node;
 import javafx.scene.Scene;
@@ -78,6 +83,10 @@ public class MainController {
     // Avoid creating multiple Image downloads for the same thumbnail when cells are recycled
     private static final Set<String> PLAYLIST_THUMB_INFLIGHT = ConcurrentHashMap.newKeySet();
 
+    private final java.util.Map<DownloadRow, Process> activeProcesses = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<DownloadRow, String> stopReasons = new java.util.concurrent.ConcurrentHashMap<>();
+//    private static final String YTDLP_OUT_TMPL = "%(title).200B [%(id)s].%(ext)s";
+    private static final String YTDLP_OUT_TMPL = "%(title)s.%(ext)s";
 
     private static boolean probeVideoQualitiesAsync(
             String videoUrl,
@@ -142,6 +151,7 @@ public class MainController {
     private ListView<DownloadRow> downloadsList;
 
     private final ObservableList<DownloadRow> downloadItems = FXCollections.observableArrayList();
+    private FilteredList<DownloadRow> filteredDownloadItems;
 
     // ========= In-scene hover tooltip (no jitter) =========
     private Pane hoverLayer;
@@ -248,6 +258,44 @@ public class MainController {
         if (videoId == null || videoId.isBlank()) return null;
         return "https://www.youtube.com/watch?v=" + videoId;
     }
+
+    // ===== Thumbnail helpers (YouTube) =====
+    private static String extractYouTubeId(String url) {
+        if (url == null) return null;
+        String u = url.trim();
+        if (u.isEmpty()) return null;
+
+        // youtu.be/<id>
+        int yi = u.indexOf("youtu.be/");
+        if (yi >= 0) {
+            String tail = u.substring(yi + "youtu.be/".length());
+            int q = tail.indexOf('?');
+            if (q >= 0) tail = tail.substring(0, q);
+            int a = tail.indexOf('&');
+            if (a >= 0) tail = tail.substring(0, a);
+            if (!tail.isBlank()) return tail;
+        }
+
+        // youtube.com/watch?v=<id>
+        int vi = u.indexOf("v=");
+        if (vi >= 0) {
+            String tail = u.substring(vi + 2);
+            int a = tail.indexOf('&');
+            if (a >= 0) tail = tail.substring(0, a);
+            int h = tail.indexOf('#');
+            if (h >= 0) tail = tail.substring(0, h);
+            if (!tail.isBlank()) return tail;
+        }
+
+        return null;
+    }
+
+    private static String buildYouTubeThumbUrl(String videoId) {
+        if (videoId == null || videoId.isBlank()) return null;
+        // Stable CDN; hqdefault works well for list thumbnails
+        return "https://i.ytimg.com/vi/" + videoId + "/hqdefault.jpg";
+    }
+
 
     private static String approxSizeTextFromLine(String line) {
         if (line == null) return null;
@@ -450,6 +498,7 @@ public class MainController {
 
         // Main downloads list (center)
         ensureDownloadsListView();
+        applyFilter("ALL");
 
         setupClipboardAutoPaste();
 
@@ -490,7 +539,7 @@ public class MainController {
             if (contentTitle != null) contentTitle.setText(newV.getTitle());
             if (statusText != null) statusText.setText("Filter: " + newV.getTitle());
 
-            // TODO لاحقاً: applyFilter(newV.getKey());
+            applyFilter(newV.getKey());
         });
 
         Platform.runLater(() -> {
@@ -501,6 +550,31 @@ public class MainController {
 
             UI_DELAY_EXEC.schedule(() -> Platform.runLater(() -> openAddLinkDialogDeferred(clip)),
                     350, TimeUnit.MILLISECONDS);
+        });
+
+
+    }
+    private void applyFilter(String key) {
+        if (filteredDownloadItems == null) return;
+
+        String k = (key == null) ? "ALL" : key.trim().toUpperCase(java.util.Locale.ROOT);
+
+        filteredDownloadItems.setPredicate(row -> {
+            if (row == null) return false;
+
+            DownloadRow.State st = null;
+            try { st = row.state.get(); } catch (Exception ignored) {}
+
+            if ("ALL".equals(k)) return true;
+
+            if ("DOWNLOADING".equals(k)) return st == DownloadRow.State.DOWNLOADING;
+            if ("PAUSED".equals(k))      return st == DownloadRow.State.PAUSED;
+            if ("COMPLETED".equals(k))   return st == DownloadRow.State.COMPLETED;
+
+            // بدك دمج Cancelled + Failed مع بعض (زي ما اتفقنا)
+            if ("CANCELLED".equals(k))   return st == DownloadRow.State.CANCELLED || st == DownloadRow.State.FAILED;
+
+            return true;
         });
     }
 
@@ -874,6 +948,38 @@ public class MainController {
     // Keep a strong reference so the poll Timeline doesn't get GC'ed
     private javafx.animation.Timeline clipboardPollTimeline;
 
+    // Persist last selected download folder
+    private static final Preferences PREFS = Preferences.userNodeForPackage(MainController.class);
+    private static final String PREF_LAST_FOLDER = "last_download_folder";
+
+    private String getLastDownloadFolderOrDefault() {
+        try {
+            String v = PREFS.get(PREF_LAST_FOLDER, null);
+            if (v != null && !v.isBlank()) {
+                java.nio.file.Path p = java.nio.file.Paths.get(v);
+                if (java.nio.file.Files.exists(p) && java.nio.file.Files.isDirectory(p)) {
+                    return p.toAbsolutePath().toString();
+                }
+            }
+        } catch (Exception ignored) {}
+        return System.getProperty("user.home") + java.io.File.separator + "Downloads";
+    }
+
+    private void saveLastDownloadFolder(String folder) {
+        try {
+            if (folder == null) return;
+            String v = folder.trim();
+            if (v.isEmpty()) return;
+
+            java.nio.file.Path p = java.nio.file.Paths.get(v);
+
+            // لو موجود وملف (مش فولدر) لا تحفظه
+            if (java.nio.file.Files.exists(p) && !java.nio.file.Files.isDirectory(p)) return;
+
+            PREFS.put(PREF_LAST_FOLDER, p.toAbsolutePath().toString());
+        } catch (Exception ignored) {}
+    }
+
     private void showAddLinkDialog() {
         showAddLinkDialog(null);
     }
@@ -988,8 +1094,28 @@ public class MainController {
             }
         });
 
+        // Track last probed video heights so we can restore the quality list when switching modes.
+        final java.util.Set<Integer>[] lastProbedHeights = new java.util.Set[]{null};
+
+        // When mode changes, swap the Quality dropdown contents accordingly.
+        modeCombo.valueProperty().addListener((obsM, oldM, newM) -> {
+            if (newM == null) return;
+
+            if (MODE_AUDIO.equals(newM)) {
+                qualityCombo.getItems().setAll(buildAudioOptions());
+                // Default audio format in UI
+                qualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
+            } else {
+                // Restore video qualities (prefer the ones we probed; otherwise safe fallback)
+                fillQualityComboFromHeights(qualityCombo, lastProbedHeights[0]);
+                qualityCombo.getSelectionModel().select(QUALITY_BEST);
+            }
+        });
+
         // Folder
-        TextField folderField = new TextField(System.getProperty("user.home") + File.separator + "Downloads");
+//        TextField folderField = new TextField(System.getProperty("user.home") + File.separator + "Downloads");
+        TextField folderField = new TextField(getLastDownloadFolderOrDefault());
+
         folderField.setEditable(false);
         folderField.getStyleClass().add("gx-input");
 
@@ -999,7 +1125,10 @@ public class MainController {
             DirectoryChooser chooser = new DirectoryChooser();
             chooser.setTitle("Select Download Folder");
             File selected = chooser.showDialog(pane.getScene().getWindow());
-            if (selected != null) folderField.setText(selected.getAbsolutePath());
+            if (selected != null) {
+                folderField.setText(selected.getAbsolutePath());
+                saveLastDownloadFolder(selected.getAbsolutePath());
+            }
         });
 
         // Info / status line inside dialog
@@ -1058,6 +1187,15 @@ public class MainController {
             if (t == ContentType.VIDEO) {
                 modeCombo.setDisable(false);
                 qualityCombo.setDisable(false);
+                // Ensure Quality list matches current Mode
+                if (MODE_AUDIO.equals(modeCombo.getValue())) {
+                    qualityCombo.getItems().setAll(buildAudioOptions());
+                    if (qualityCombo.getValue() == null || qualityCombo.getValue().isBlank()
+                            || QUALITY_SEPARATOR.equals(qualityCombo.getValue())
+                            || QUALITY_BEST.equals(qualityCombo.getValue())) {
+                        qualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
+                    }
+                }
                 info.setText("Detected: Video. Choose mode/quality then Add & Start.");
                 info.setTextFill(Color.web("#9aa4b2"));
                 okBtn.setDisable(false);
@@ -1090,7 +1228,12 @@ public class MainController {
                 // Empty URL -> guide the user (not “unsupported”)
                 modeCombo.setDisable(true);
                 qualityCombo.setDisable(true);
-                fillQualityCombo(qualityCombo);
+                if (MODE_AUDIO.equals(modeCombo.getValue())) {
+                    qualityCombo.getItems().setAll(buildAudioOptions());
+                    qualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
+                } else {
+                    fillQualityCombo(qualityCombo);
+                }
                 info.setText("Paste a link then click Get.");
                 info.setTextFill(Color.web("#ff4d4d"));
                 okBtn.setDisable(true);
@@ -1140,8 +1283,22 @@ public class MainController {
                     Set<Integer> heights = probeHeightsWithYtDlp(url);
 
                     Platform.runLater(() -> {
-                        // show only the heights that actually exist; fallback if empty
-                        fillQualityComboFromHeights(qualityCombo, heights);
+                        // keep for later (when user switches back to Video)
+                        lastProbedHeights[0] = heights;
+
+                        // If user is currently in Audio mode, keep audio list.
+                        if (MODE_AUDIO.equals(modeCombo.getValue())) {
+                            qualityCombo.getItems().setAll(buildAudioOptions());
+                            if (qualityCombo.getValue() == null || qualityCombo.getValue().isBlank()
+                                    || QUALITY_SEPARATOR.equals(qualityCombo.getValue())
+                                    || QUALITY_BEST.equals(qualityCombo.getValue())) {
+                                qualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
+                            }
+                        } else {
+                            // show only the heights that actually exist; fallback if empty
+                            fillQualityComboFromHeights(qualityCombo, heights);
+                        }
+
                         applyTypeToUi.run();
                     });
                 }, "probe-qualities").start();
@@ -1152,6 +1309,7 @@ public class MainController {
             // ✅ Playlist: open playlist screen immediately
             if (lastType[0] == ContentType.PLAYLIST) {
                 applyTypeToUi.run();
+                saveLastDownloadFolder(folderField.getText());
                 openPlaylistWindow(url, folderField.getText());
                 return;
             }
@@ -1168,7 +1326,13 @@ public class MainController {
             okBtn.setDisable(true);
             modeCombo.setDisable(true);
             qualityCombo.setDisable(true);
-            fillQualityCombo(qualityCombo);
+            // Reset quality list according to the currently selected mode
+            if (MODE_AUDIO.equals(modeCombo.getValue())) {
+                qualityCombo.getItems().setAll(buildAudioOptions());
+                qualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
+            } else {
+                fillQualityCombo(qualityCombo);
+            }
             info.setText("Paste a link then click Get.");
             info.setTextFill(Color.web("#9aa4b2"));
         });
@@ -1211,6 +1375,7 @@ public class MainController {
 
             String url = urlField.getText() == null ? "" : urlField.getText().trim();
             ContentType t = lastType[0];
+            saveLastDownloadFolder(folderField.getText());
 
             // Temporary behavior until we wire the real downloader engine:
             if (t == ContentType.VIDEO) {
@@ -1302,7 +1467,12 @@ public class MainController {
             }
         }
 
-        downloadsList.setItems(downloadItems);
+//        downloadsList.setItems(downloadItems);
+        if (filteredDownloadItems == null) {
+            filteredDownloadItems = new FilteredList<>(downloadItems, r -> true);
+        }
+        downloadsList.setItems(filteredDownloadItems);
+
         downloadsList.setFocusTraversable(false);
 
         downloadsList.setCellFactory(lv -> new ListCell<>() {
@@ -1316,6 +1486,138 @@ public class MainController {
             private final StackPane thumbBox = new StackPane();
             private final ImageView thumb = new ImageView();
             private final Label thumbPlaceholder = new Label("NO PREVIEW");
+
+            // Keep a listener so thumbnail updates after the row is already in the list
+            private javafx.beans.value.ChangeListener<String> thumbUrlListener;
+            private String lastThumbUrl;
+
+            // Keep a listener so action buttons update when state changes (cell reuse safe)
+            private javafx.beans.value.ChangeListener<DownloadRow.State> stateListener;
+
+            private void applyButtonsForState(DownloadRow.State st) {
+                // reset status style each time (because cells are reused)
+                try { status.setStyle(""); } catch (Exception ignored) {}
+                if (st == null) st = DownloadRow.State.QUEUED;
+
+                boolean isQueued      = st == DownloadRow.State.QUEUED;
+                boolean isDownloading = st == DownloadRow.State.DOWNLOADING;
+                boolean isPaused      = st == DownloadRow.State.PAUSED;
+                boolean isCompleted   = st == DownloadRow.State.COMPLETED;
+                boolean isFailed      = st == DownloadRow.State.FAILED || st == DownloadRow.State.CANCELLED;
+
+                java.util.function.BiConsumer<Button, Boolean> showBtn = (btn, show) -> {
+                    btn.setVisible(show);
+                    btn.setManaged(show);
+                };
+
+                // Default
+                showBtn.accept(pauseBtn, false);
+                showBtn.accept(resumeBtn, false);
+                showBtn.accept(cancelBtn, false);
+                showBtn.accept(folderBtn, true);
+                showBtn.accept(retryBtn, false);
+
+                if (isDownloading) {
+                    showBtn.accept(pauseBtn, true);
+                    showBtn.accept(cancelBtn, true);
+                } else if (isPaused) {
+                    showBtn.accept(resumeBtn, true);
+                    showBtn.accept(cancelBtn, true);
+                } else if (isQueued) {
+                    showBtn.accept(cancelBtn, true);
+                } else if (isFailed) {
+                    showBtn.accept(retryBtn, true);
+                } else if (isCompleted) {
+                    // folder only
+                }
+
+                // Safety
+                if (isDownloading) {
+                    showBtn.accept(retryBtn, false);
+                }
+
+                if (st == DownloadRow.State.FAILED) {
+                    try { status.setStyle("-fx-text-fill: #ff5b5b;"); } catch (Exception ignored) {}
+                }
+            }
+
+            private void loadThumbUrl(String url) {
+                try {
+                    // No URL -> show placeholder
+                    if (url == null || url.isBlank()) {
+                        thumb.setImage(null);
+                        thumbPlaceholder.setVisible(true);
+                        return;
+                    }
+
+                    // Cache hit
+                    Image cached = MAIN_THUMB_CACHE.get(url);
+                    if (cached != null) {
+                        thumb.setImage(cached);
+                        thumbPlaceholder.setVisible(false);
+                        applyCoverViewport(thumb, cached, 108, 66);
+                        return;
+                    }
+
+                    // Cache miss -> show placeholder while fetching
+                    thumb.setImage(null);
+                    thumbPlaceholder.setVisible(true);
+
+                    // Fetch in background (avoid JavaFX URL loading issues)
+                    Thread t = new Thread(() -> {
+                        try {
+                            byte[] bytes = fetchUrlBytes(url);
+                            if (bytes == null || bytes.length == 0) return;
+
+                            Image img = new Image(new java.io.ByteArrayInputStream(bytes));
+                            if (img.isError() || img.getWidth() <= 0) return;
+
+                            MAIN_THUMB_CACHE.put(url, img);
+
+                            Platform.runLater(() -> {
+                                // Cell reuse safety: apply only if current item still wants this url
+                                DownloadRow it = getItem();
+                                String cur = null;
+                                try { if (it != null && it.thumbUrl != null) cur = it.thumbUrl.get(); } catch (Exception ignored) {}
+                                if (cur == null || !cur.equals(url)) return;
+
+                                thumb.setImage(img);
+                                thumbPlaceholder.setVisible(false);
+                                applyCoverViewport(thumb, img, 108, 66);
+                            });
+
+                        } catch (Exception ignored) {
+                        }
+                    }, "thumb-fetch");
+                    t.setDaemon(true);
+                    t.start();
+
+                } catch (Exception ignored) {
+                    thumb.setImage(null);
+                    thumbPlaceholder.setVisible(true);
+                }
+            }
+
+            private static byte[] fetchUrlBytes(String u) throws java.io.IOException {
+                java.net.HttpURLConnection conn = null;
+                try {
+                    java.net.URL uu = new java.net.URL(u);
+                    conn = (java.net.HttpURLConnection) uu.openConnection();
+                    conn.setInstanceFollowRedirects(true);
+                    conn.setConnectTimeout(7000);
+                    conn.setReadTimeout(12000);
+                    conn.setRequestProperty("User-Agent", "GrabX/1.0");
+
+                    int code = conn.getResponseCode();
+                    if (code < 200 || code >= 300) return null;
+
+                    try (java.io.InputStream in = conn.getInputStream()) {
+                        return in.readAllBytes();
+                    }
+                } finally {
+                    try { if (conn != null) conn.disconnect(); } catch (Exception ignored) {}
+                }
+            }
 
             private final ProgressBar bar = new ProgressBar(0);
 
@@ -1331,6 +1633,8 @@ public class MainController {
             private final HBox footerRow = new HBox(10);
             private final VBox card = new VBox(10);
 
+            private final Label sizeLabel = new Label();
+
             {
                 setStyle("-fx-background-color: transparent;");
 
@@ -1341,6 +1645,14 @@ public class MainController {
                 status.getStyleClass().add("gx-task-status");
                 speed.getStyleClass().add("gx-task-status");
                 eta.getStyleClass().add("gx-task-status");
+                sizeLabel.getStyleClass().add("gx-task-status");
+                // Fixed width to avoid jitter when numbers change
+                sizeLabel.setMinWidth(180);
+                sizeLabel.setPrefWidth(180);
+                sizeLabel.setMaxWidth(180);
+                sizeLabel.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
+                // Monospace-like rendering so digits look stable
+                sizeLabel.setStyle("-fx-font-family: 'Monospaced';");
 
                 bar.getStyleClass().add("gx-task-progress");
                 bar.setMaxWidth(Double.MAX_VALUE);
@@ -1387,12 +1699,53 @@ public class MainController {
                 headerRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
                 headerRow.getChildren().addAll(thumbBox, textBox, actions);
 
-                Region spacer = new Region();
-                HBox.setHgrow(spacer, Priority.ALWAYS);
-
                 footerRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
-                footerRow.getChildren().addAll(status, spacer, speed, eta);
+                footerRow.setSpacing(6);
 
+                // Use a spacer so metrics stay grouped on the far right without stretching the status text.
+                final Region footerSpacer = new Region();
+                HBox.setHgrow(footerSpacer, Priority.ALWAYS);
+
+                // Metrics styling (fixed width + monospace so numbers don't "jitter")
+                sizeLabel.getStyleClass().addAll("gx-task-status", "gx-task-metric");
+                speed.getStyleClass().addAll("gx-task-status", "gx-task-metric");
+                eta.getStyleClass().addAll("gx-task-status", "gx-task-metric");
+
+                // IMPORTANT: force LTR for numeric metrics to avoid RTL/bidi spacing artifacts
+                sizeLabel.setNodeOrientation(javafx.geometry.NodeOrientation.LEFT_TO_RIGHT);
+                speed.setNodeOrientation(javafx.geometry.NodeOrientation.LEFT_TO_RIGHT);
+                eta.setNodeOrientation(javafx.geometry.NodeOrientation.LEFT_TO_RIGHT);
+
+                // Use a monospace font for all numeric metrics (better on macOS)
+                String metricStyle = "-fx-font-family: 'Menlo', 'Consolas', 'Monospaced'; -fx-font-size: 14px; -fx-text-fill: rgba(255,255,255,0.78);";
+                sizeLabel.setStyle(metricStyle);
+                speed.setStyle(metricStyle);
+                eta.setStyle(metricStyle);
+
+                // Fixed widths so the layout stays stable while values change
+                sizeLabel.setMinWidth(170);
+                sizeLabel.setPrefWidth(170);
+                sizeLabel.setMaxWidth(170);
+
+                speed.setMinWidth(120);
+                speed.setPrefWidth(120);
+                speed.setMaxWidth(120);
+
+                eta.setMinWidth(70);
+                eta.setPrefWidth(70);
+                eta.setMaxWidth(70);
+
+                // Right-align metrics
+                sizeLabel.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
+                speed.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
+                eta.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
+
+                // Avoid showing "..." if the width is tight; just clip
+                sizeLabel.setTextOverrun(javafx.scene.control.OverrunStyle.CLIP);
+                speed.setTextOverrun(javafx.scene.control.OverrunStyle.CLIP);
+                eta.setTextOverrun(javafx.scene.control.OverrunStyle.CLIP);
+
+                footerRow.getChildren().setAll(status, footerSpacer, speed, sizeLabel, eta);
                 card.getStyleClass().add("gx-task-card");
                 card.getChildren().addAll(headerRow, bar, footerRow);
                 VBox.setVgrow(card, Priority.NEVER);
@@ -1401,47 +1754,60 @@ public class MainController {
                 pauseBtn.setOnAction(e -> {
                     DownloadRow it = getItem();
                     if (it == null) return;
-                    it.status.set("Paused");
+                    pauseDownloadRow(it);
                 });
 
                 resumeBtn.setOnAction(e -> {
                     DownloadRow it = getItem();
                     if (it == null) return;
-                    it.status.set("Downloading");
+                    resumeDownloadRow(it);
                 });
 
                 cancelBtn.setOnAction(e -> {
                     DownloadRow it = getItem();
                     if (it == null) return;
-                    it.status.set("Cancelled");
-                    it.progress.set(0);
+                    cancelDownloadRow(it);
                 });
 
                 folderBtn.setOnAction(e -> {
                     DownloadRow it = getItem();
                     if (it == null) return;
+
                     try {
-                        File f = new File(it.folder);
-                        if (Desktop.isDesktopSupported()) {
-                            Desktop.getDesktop().open(f);
+                        java.nio.file.Path outFile = null;
+                        if (it.outputFile != null) outFile = it.outputFile.get();
+
+                        // 1) لو عندي مسار الملف النهائي: اعمل Reveal/Select
+                        if (outFile != null && java.nio.file.Files.exists(outFile)) {
+                            revealInFileManager(outFile); // mac: open -R
+                            return;
                         }
-                    } catch (Exception ignored) {
-                    }
+
+                        // 2) fallback: افتح فولدر التحميل
+                        java.io.File dir = new java.io.File(it.folder);
+                        if (java.awt.Desktop.isDesktopSupported() && dir.exists()) {
+                            java.awt.Desktop.getDesktop().open(dir);
+                        }
+                    } catch (Exception ignored) {}
                 });
 
                 retryBtn.setOnAction(e -> {
                     DownloadRow it = getItem();
                     if (it == null) return;
 
-                    // UI retry (engine wiring later): reset to queued and restart from 0
-                    it.status.set("Queued");
+                    // أوقف أي Process شغال
+                    try { cancelDownloadRow(it); } catch (Exception ignored) {}
+
+                    // Reset
                     it.progress.set(0);
                     it.speed.set("0 KB/s");
                     it.eta.set("--");
+                    it.setState(DownloadRow.State.QUEUED);
 
-                    if (statusText != null) {
-                        statusText.setText("Retry: " + it.title.get());
-                    }
+                    if (statusText != null) statusText.setText("Retry: " + it.title.get());
+
+                    // ابدأ من جديد (وخليها --continue عشان لو في جزء نازل يكمل)
+                    startDownloadRow(it, true);
                 });
             }
 
@@ -1451,112 +1817,132 @@ public class MainController {
                 if (empty || item == null) {
                     setText(null);
                     setGraphic(null);
+                    // Unbind/reset metric visibility so reused cells don't keep old bindings
+                    try {
+                        sizeLabel.visibleProperty().unbind();
+                        sizeLabel.managedProperty().unbind();
+                        speed.visibleProperty().unbind();
+                        speed.managedProperty().unbind();
+                        eta.visibleProperty().unbind();
+                        eta.managedProperty().unbind();
+
+                        sizeLabel.setVisible(true);
+                        sizeLabel.setManaged(true);
+                        speed.setVisible(true);
+                        speed.setManaged(true);
+                        eta.setVisible(true);
+                        eta.setManaged(true);
+                    } catch (Exception ignored) {}
+                    // Unbind/reset footer text bindings too (cell reuse safety)
+                    try {
+                        status.textProperty().unbind();
+                        speed.textProperty().unbind();
+                        eta.textProperty().unbind();
+                        sizeLabel.textProperty().unbind();
+                    } catch (Exception ignored) {}
+                    // Unbind/reset progress bar (cell reuse safety)
+                    try {
+                        bar.progressProperty().unbind();
+                        bar.setProgress(0);
+                        bar.setVisible(true);
+                        bar.setManaged(true);
+                    } catch (Exception ignored) {}
                     return;
                 }
 
-                // Thumbnail reset
-                thumb.setImage(null);
-                thumbPlaceholder.setVisible(true);
+                // Detach previous listener (cell reuse)
+                try {
+                    DownloadRow prev = (DownloadRow) getUserData();
+                    if (prev != null && prev.thumbUrl != null && thumbUrlListener != null) {
+                        prev.thumbUrl.removeListener(thumbUrlListener);
+                    }
+                } catch (Exception ignored) {}
+                try {
+                    DownloadRow prev = (DownloadRow) getUserData();
+                    if (prev != null && prev.state != null && stateListener != null) {
+                        prev.state.removeListener(stateListener);
+                    }
+                } catch (Exception ignored) {}
+
+                // Attach listener to current item
+                setUserData(item);
+                if (thumbUrlListener == null) {
+                    thumbUrlListener = (obs, oldV, newV) -> Platform.runLater(() -> loadThumbUrl(newV));
+                }
+                if (item.thumbUrl != null) {
+                    item.thumbUrl.addListener(thumbUrlListener);
+                }
+                if (stateListener == null) {
+                    stateListener = (obs, oldV, newV) -> Platform.runLater(() -> applyButtonsForState(newV));
+                }
+                try {
+                    if (item.state != null) {
+                        item.state.addListener(stateListener);
+                    }
+                } catch (Exception ignored) {}
 
                 title.textProperty().unbind();
                 title.textProperty().bind(item.title);
                 meta.setText(item.mode + " • " + item.quality + " • " + item.folder);
 
-                final String turl = (item.thumbUrl == null) ? null : item.thumbUrl.get();
-                if (turl != null && !turl.isBlank()) {
-
-                    Image img = MAIN_THUMB_CACHE.get(turl);
-                    if (img == null) {
-                        img = new Image(turl, true);
-                        MAIN_THUMB_CACHE.put(turl, img);
-                    }
-
-                    final Image imgRef = img;
-                    thumb.setImage(imgRef);
-
-                    Runnable applyCover = () -> {
-                        DownloadRow now = getItem();
-                        if (now == null) return;
-
-                        String nowUrl = (now.thumbUrl == null) ? null : now.thumbUrl.get();
-                        if (nowUrl == null || !nowUrl.equals(turl)) return;
-                        if (imgRef.getException() != null) return;
-
-                        applyCoverViewport(thumb, imgRef, 108, 66);
-                        thumbPlaceholder.setVisible(false);
-                    };
-
-                    if (imgRef.getProgress() >= 1.0 && imgRef.getException() == null) {
-                        applyCover.run();
-                    } else {
-                        thumbPlaceholder.setVisible(true);
-                        imgRef.progressProperty().addListener((o, a, b) -> {
-                            if (b != null && b.doubleValue() >= 1.0) {
-                                Platform.runLater(applyCover);
-                            }
-                        });
-                    }
-
-                } else {
-                    thumb.setViewport(null);
-                    thumb.setImage(null);
-                    thumbPlaceholder.setVisible(true);
-                }
-
-
-                bar.progressProperty().unbind();
+                // Bind footer texts (cell reuse safe)
                 status.textProperty().unbind();
                 speed.textProperty().unbind();
                 eta.textProperty().unbind();
+                sizeLabel.textProperty().unbind();
 
-                bar.progressProperty().bind(item.progress);
                 status.textProperty().bind(item.status);
                 speed.textProperty().bind(item.speed);
                 eta.textProperty().bind(item.eta);
+                sizeLabel.textProperty().bind(item.size);
 
-                // Toggle which buttons appear based on status (hide instead of disable)
-                String s = item.status.get();
-                String sl = (s == null) ? "" : s.toLowerCase();
+                // Thumbnail
+                final String turl = (item.thumbUrl == null) ? null : item.thumbUrl.get();
+                loadThumbUrl(turl);
 
-                boolean isQueued      = sl.contains("queue");
-                boolean isDownloading = sl.contains("down");
-                boolean isPaused      = sl.contains("pause");
-                boolean isCompleted   = sl.contains("complete");
-                boolean isFailed      = sl.contains("fail") || sl.contains("error") || sl.contains("cancel");
+                javafx.beans.binding.BooleanBinding isDownloading =
+                        item.state.isEqualTo(DownloadRow.State.DOWNLOADING);
 
-                // Helper: hide removes the button AND its space
-                java.util.function.BiConsumer<Button, Boolean> showBtn = (btn, show) -> {
-                    btn.setVisible(show);
-                    btn.setManaged(show);
-                };
+                // size: show only when we actually have size text
+                javafx.beans.binding.BooleanBinding showSize =
+                        item.size.isNotNull()
+                                .and(item.size.isNotEmpty())
+                                .and(item.progress.greaterThanOrEqualTo(0));
 
-                // Default: hide all, then enable what makes sense
-                showBtn.accept(pauseBtn, false);
-                showBtn.accept(resumeBtn, false);
-                showBtn.accept(cancelBtn, false);
-                showBtn.accept(folderBtn, true);   // folder is always useful
-                showBtn.accept(retryBtn, false);
+                // reset old bindings (cell reuse safety)
+                sizeLabel.visibleProperty().unbind();
+                sizeLabel.managedProperty().unbind();
+                speed.visibleProperty().unbind();
+                speed.managedProperty().unbind();
+                eta.visibleProperty().unbind();
+                eta.managedProperty().unbind();
 
-                if (isDownloading) {
-                    showBtn.accept(pauseBtn, true);
-                    showBtn.accept(cancelBtn, true);
-                } else if (isPaused) {
-                    showBtn.accept(resumeBtn, true);
-                    showBtn.accept(cancelBtn, true);
-                } else if (isQueued) {
-                    // queued: allow cancel (and folder)
-                    showBtn.accept(cancelBtn, true);
-                } else if (isFailed) {
-                    // failed/cancelled: retry is the main action
-                    showBtn.accept(retryBtn, true);
-                } else if (isCompleted) {
-                    // completed: only folder (already shown)
-                }
+                // apply rules
+                sizeLabel.visibleProperty().bind(showSize);
+                sizeLabel.managedProperty().bind(showSize);
 
-                // Safety: never show retry while downloading
-                if (isDownloading) {
-                    showBtn.accept(retryBtn, false);
-                }
+                speed.visibleProperty().bind(isDownloading);
+                speed.managedProperty().bind(isDownloading);
+
+                eta.visibleProperty().bind(isDownloading);
+                eta.managedProperty().bind(isDownloading);
+
+                // Always show status (visible and managed)
+                status.setVisible(true);
+                status.setManaged(true);
+
+                // Progress bar (supports indeterminate when progress < 0)
+                try {
+                    bar.progressProperty().unbind();
+                } catch (Exception ignored) {}
+                bar.progressProperty().bind(item.progress);
+                bar.setVisible(true);
+                bar.setManaged(true);
+
+                // Toggle which buttons appear based on state (reactive)
+                DownloadRow.State st = DownloadRow.State.QUEUED;
+                try { st = item.state.get(); } catch (Exception ignored) {}
+                applyButtonsForState(st);
 
                 setGraphic(card);
             }
@@ -1565,58 +1951,6 @@ public class MainController {
         // Make it look nicer without selection highlight
         downloadsList.setSelectionModel(new NoSelectionModel<>());
     }
-
-
-
-
-//    private String fetchTitleWithYtDlp(String url) {
-//        if (url == null || url.isBlank()) return null;
-//
-//        try {
-//            // Force single-video behavior even if the URL contains playlist parameters.
-//            ProcessBuilder pb = new ProcessBuilder(
-//                    "yt-dlp",
-//                    "--no-warnings",
-//                    "--no-playlist",
-//                    "--skip-download",
-//                    "--encoding", "utf-8",
-//                    "--print", "title",
-//                    url.trim()
-//            );
-//            pb.redirectErrorStream(true);
-//            Process p = pb.start();
-//
-//            String best = null;
-//            try (var br = new java.io.BufferedReader(new java.io.InputStreamReader(p.getInputStream()))) {
-//                String line;
-//                while ((line = br.readLine()) != null) {
-//                    String s = line.trim();
-//                    if (s.isEmpty()) continue;
-//
-//                    // Ignore noisy lines; keep the last plausible title.
-//                    String sl = s.toLowerCase();
-//                    if (sl.startsWith("warning:")) continue;
-//                    if (sl.startsWith("error:")) {
-//                        // Keep it, but mark as error so we can return null later.
-//                        best = s;
-//                        continue;
-//                    }
-//
-//                    best = s;
-//                }
-//            }
-//
-//            int code = p.waitFor();
-//            if (code != 0) return null;
-//            if (best == null || best.isBlank()) return null;
-//            if (best.toLowerCase().startsWith("error:")) return null;
-//
-//            return best;
-//
-//        } catch (Exception ignored) {
-//            return null;
-//        }
-//    }
 
     private String fetchTitleWithYtDlp(String url) {
         if (url == null || url.isBlank()) return null;
@@ -1666,6 +2000,65 @@ public class MainController {
             return null;
         }
     }
+
+
+    // Lightweight title fetch without running yt-dlp (reduces "Preparing" delay)
+    // Works for YouTube oEmbed.
+    private String fetchTitleWithOEmbed(String url) {
+        if (url == null || url.isBlank()) return null;
+        try {
+            String u = url.trim();
+
+            String oembed = "https://www.youtube.com/oembed?format=json&url=" +
+                    java.net.URLEncoder.encode(u, java.nio.charset.StandardCharsets.UTF_8);
+
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(oembed).openConnection();
+            conn.setInstanceFollowRedirects(true);
+            conn.setConnectTimeout(6000);
+            conn.setReadTimeout(6000);
+            conn.setRequestProperty("User-Agent", "GrabX/1.0");
+
+            int code = conn.getResponseCode();
+            if (code < 200 || code >= 300) return null;
+
+            String json;
+            try (var in = conn.getInputStream()) {
+                json = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            }
+
+            if (json == null || json.isBlank()) return null;
+
+            // Extract: "title":"..."
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("\\\"title\\\"\\s*:\\s*\\\"(.*?)\\\"", java.util.regex.Pattern.DOTALL)
+                    .matcher(json);
+
+            if (!m.find()) return null;
+
+            String title = m.group(1);
+            if (title == null) return null;
+
+            // Minimal JSON unescape
+            title = title.replace("\\\\\"", "\"")
+                    .replace("\\\\n", " ")
+                    .replace("\\\\r", " ")
+                    .replace("\\\\t", " ")
+                    .replace("\\\\/", "/")
+                    .replace("\\\\\\\\", "\\");
+
+            title = unescapeUnicode(title);
+            title = title.trim();
+            return title.isBlank() ? null : title;
+
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+
+    // ========= Add download item to list (single) =========
+    // This method is called from Add Link dialog with:
+    // addDownloadItemToList(url, folderField.getText(), modeCombo.getValue(), qualityCombo.getValue());
 
     // ========== Level-1 URL support probing (Media -> Direct file -> Unsupported) ==========
 
@@ -1784,8 +2177,20 @@ public class MainController {
         // 2) أنشئ صف التحميل
         DownloadRow row = new DownloadRow(url, initialTitle, folder, mode, quality);
 
+        // Thumbnail (YouTube only for now)
+        try {
+            String thumb = thumbFromUrl(url);
+            if (thumb != null && !thumb.isBlank() && row.thumbUrl != null) {
+                row.thumbUrl.set(thumb);
+            }
+        } catch (Exception ignored) {
+        }
+
         // 3) أضِف في أعلى القائمة
-        downloadItems.add(0, row);
+        Platform.runLater(() -> {
+            downloadItems.add(0, row);
+            startDownloadRow(row, false);
+        });
 
         // 4) حدّث شريط الحالة
         if (statusText != null) {
@@ -1793,28 +2198,491 @@ public class MainController {
         }
 
         // 5) جلب العنوان الحقيقي بالخلفية (بدون تجميد الواجهة)
+//        if (url != null && !url.isBlank()) {
+//            new Thread(() -> {
+//                String realTitle = fetchTitleWithYtDlp(url);
+//                Platform.runLater(() -> {
+//                    if (realTitle != null && !realTitle.isBlank()) {
+//                        row.title.set(realTitle);
+//                        if (statusText != null) {
+//                            statusText.setText("Queued: " + realTitle);
+//                        }
+//                    } else {
+//                        // Fallback: don't leave it as dots forever
+//                        String fallback = shorten(url);
+//                        if (fallback == null || fallback.isBlank()) fallback = "Unknown title";
+//                        row.title.set(fallback);
+//                        if (statusText != null) {
+//                            statusText.setText("Queued: " + fallback);
+//                        }
+//                    }
+//                });
+//            }, "yt-title-probe").start();
+//        }
+
+        // 5) جلب العنوان الحقيقي بالخلفية (بدون yt-dlp لتقليل التأخير)
+// استخدام YouTube oEmbed (سريع وخفيف) بدل تشغيل yt-dlp مرة ثانية.
         if (url != null && !url.isBlank()) {
             new Thread(() -> {
-                String realTitle = fetchTitleWithYtDlp(url);
+                String realTitle = fetchTitleWithOEmbed(url);
                 Platform.runLater(() -> {
                     if (realTitle != null && !realTitle.isBlank()) {
                         row.title.set(realTitle);
-                        if (statusText != null) {
-                            statusText.setText("Queued: " + realTitle);
-                        }
+                        if (statusText != null) statusText.setText("Queued: " + realTitle);
                     } else {
-                        // Fallback: don't leave it as dots forever
                         String fallback = shorten(url);
                         if (fallback == null || fallback.isBlank()) fallback = "Unknown title";
                         row.title.set(fallback);
-                        if (statusText != null) {
-                            statusText.setText("Queued: " + fallback);
-                        }
+                        if (statusText != null) statusText.setText("Queued: " + fallback);
                     }
                 });
-            }, "yt-title-probe").start();
+            }, "title-oembed").start();
+        }
+
+
+    }
+
+    private void startDownloadRow(DownloadRow row, boolean resume) {
+        if (row == null) return;
+
+        // prevent duplicate runs for same row
+        Process existing = activeProcesses.get(row);
+        if (existing != null && existing.isAlive()) return;
+
+        stopReasons.remove(row);
+
+        // UI immediately: preparing (indeterminate)
+        Platform.runLater(() -> {
+            row.setState(DownloadRow.State.DOWNLOADING);
+            row.status.set("Preparing...");
+            row.size.set("");
+            row.speed.set("");
+            row.eta.set("");
+            row.progress.set(-1); // indeterminate while yt-dlp is preparing
+        });
+
+        final String url = row.url;
+        final String folder = row.folder;
+        final String mode = row.mode;
+        final String quality = row.quality;
+
+        new Thread(() -> {
+            Process p = null;
+            final String[] lastError = new String[]{null};
+
+            // detect output file path
+            final java.util.regex.Pattern DEST1 =
+                    java.util.regex.Pattern.compile("\\[download\\]\\s+Destination:\\s+(.+)$");
+            final java.util.regex.Pattern DEST2 =
+                    java.util.regex.Pattern.compile("\\[ExtractAudio\\]\\s+Destination:\\s+(.+)$");
+            final java.util.regex.Pattern MERGE =
+                    java.util.regex.Pattern.compile("\\[Merger\\]\\s+Merging formats into\\s+\"(.+)\"");
+
+            // our progress template (percent may have padding)
+            // gx:  12.3%| 1.2MiB/s| 00:12
+            final java.util.regex.Pattern PROG =
+                    java.util.regex.Pattern.compile(
+                            "^gx:\\s*([0-9.]+)%\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)$"
+
+//                            "^gx:\\s*([0-9.]+)%\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*(.+)$"
+                    );
+
+            // fallback native progress line
+            final java.util.regex.Pattern PROG_FALLBACK =
+                    java.util.regex.Pattern.compile("^\\[download\\]\\s+([0-9.]+)%\\s+at\\s+([^\\s]+)\\s+ETA\\s+([^\\s]+).*$");
+
+            final java.util.concurrent.atomic.AtomicBoolean startedDownloading =
+                    new java.util.concurrent.atomic.AtomicBoolean(false);
+
+            try {
+                java.nio.file.Path outDir = java.nio.file.Paths.get(folder);
+                java.nio.file.Files.createDirectories(outDir);
+
+                boolean audioOnly =
+                        MODE_AUDIO.equals(mode) ||
+                                "Audio".equalsIgnoreCase(mode) ||
+                                "Audio only".equalsIgnoreCase(mode);
+
+                java.nio.file.Path yt = com.grabx.app.grabx.util.YtDlpManager.ensureAvailable();
+                if (yt == null) throw new IllegalStateException("yt-dlp not available");
+
+                java.util.List<String> cmd = new java.util.ArrayList<>();
+                cmd.add(yt.toAbsolutePath().toString());
+
+                cmd.add("--newline");
+                cmd.add("--no-warnings");
+                cmd.add("--no-playlist");
+
+                // allow resume / pause-resume
+                cmd.add("--continue");
+                cmd.add("--no-overwrites");
+
+                cmd.add("--encoding"); cmd.add("utf-8");
+                cmd.add("-P"); cmd.add(outDir.toAbsolutePath().toString());
+                cmd.add("-o"); cmd.add(YTDLP_OUT_TMPL);
+
+                // progress template
+                cmd.add("--progress-template");
+                cmd.add(
+                        "download:gx:%(progress._percent_str)s"
+                                + "|%(progress._speed_str)s"
+                                + "|%(progress._eta_str)s"
+                                + "|%(progress.downloaded_bytes)s"
+                                + "|%(progress.total_bytes)s"
+                                + "|%(progress.total_bytes_estimate)s"
+                );
+
+//                cmd.add("--progress-template");
+//                cmd.add(
+//                        "download:gx:%(progress._percent_str)s"
+//                                + "|%(progress._speed_str)s"
+//                                + "|%(progress._eta_str)s"
+//                                + "|%(progress._downloaded_bytes_str)s"
+//                                + "/%(progress._total_bytes_str)s"
+//                );
+
+                if (audioOnly) {
+                    cmd.add("-x");
+                    cmd.add("--audio-quality"); cmd.add("0");
+
+                    String fmt = quality;
+                    if (fmt == null || fmt.isBlank() || AUDIO_BEST.equals(fmt) || QUALITY_SEPARATOR.equals(fmt)) {
+                        fmt = AUDIO_DEFAULT_FORMAT; // mp3
+                    }
+                    cmd.add("--audio-format"); cmd.add(fmt);
+                    cmd.add("-f"); cmd.add("bestaudio/best");
+                } else {
+                    String q = (quality == null) ? QUALITY_BEST : quality;
+                    String selector;
+
+                    if (QUALITY_BEST.equals(q) || QUALITY_SEPARATOR.equals(q)) {
+                        selector = "bv*+ba/best";
+                    } else {
+                        int h = parseHeightFromLabel(q);
+                        if (h > 0) selector = "bv*[height<=" + h + "]+ba/b[height<=" + h + "]/best";
+                        else selector = "bv*+ba/best";
+                    }
+
+                    cmd.add("-f"); cmd.add(selector);
+                }
+
+                cmd.add(url);
+
+                ProcessBuilder pb = new ProcessBuilder(cmd);
+                pb.redirectErrorStream(true);
+                pb.environment().putIfAbsent("PYTHONIOENCODING", "utf-8");
+
+                p = pb.start();
+                activeProcesses.put(row, p);
+
+                try (java.io.BufferedReader br = new java.io.BufferedReader(
+                        new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        String s = line.trim();
+                        if (s.isEmpty()) continue;
+
+                        if (s.startsWith("ERROR:")) lastError[0] = s;
+
+                        // capture output path
+                        try {
+                            var d1 = DEST1.matcher(s);
+                            var d2 = DEST2.matcher(s);
+                            var mg = MERGE.matcher(s);
+
+                            String pathStr = null;
+                            if (d1.find()) pathStr = d1.group(1);
+                            else if (d2.find()) pathStr = d2.group(1);
+                            else if (mg.find()) pathStr = mg.group(1);
+
+                            if (pathStr != null && !pathStr.isBlank()) {
+                                String ps = pathStr.trim();
+                                if ((ps.startsWith("\"") && ps.endsWith("\"")) || (ps.startsWith("'") && ps.endsWith("'"))) {
+                                    ps = ps.substring(1, ps.length() - 1);
+                                }
+                                java.nio.file.Path finalOut = java.nio.file.Paths.get(ps);
+                                Platform.runLater(() -> {
+                                    try { row.outputFile.set(finalOut); } catch (Exception ignored) {}
+                                });
+                            }
+                        } catch (Exception ignored) {}
+
+
+                        // progress (preferred)
+                        var m = PROG.matcher(s);
+                        if (m.find()) {
+                            if (startedDownloading.compareAndSet(false, true)) {
+                                Platform.runLater(() -> {
+                                    row.status.set("Downloading");
+                                    row.size.set("");
+                                    if (row.progress.get() < 0) row.progress.set(0);
+                                });
+                            }
+
+                            double pct;
+                            try {
+                                pct = Double.parseDouble(m.group(1)) / 100.0;
+                            } catch (Exception ex) {
+                                pct = -1;
+                            }
+
+                            String spd = m.group(2);
+                            String et  = m.group(3);
+
+                            long downloaded = parseLongSafe(m.group(4));
+                            long total = parseLongSafe(m.group(5));
+                            if (total <= 0) total = parseLongSafe(m.group(6));
+
+                            final String sizeText = (total > 0)
+                                    ? (formatBytesDecimal(downloaded) + " / " + formatBytesDecimal(total))
+                                    : (downloaded > 0 ? formatBytesDecimal(downloaded) : "");
+
+                            double fpct = pct;
+
+                            Platform.runLater(() -> {
+                                row.status.set("Downloading");
+                                row.size.set(sizeText == null ? "" : sizeText);
+
+                                if (row.progress.get() < 0 && fpct >= 0) row.progress.set(fpct);
+                                if (fpct >= 0) row.progress.set(fpct);
+
+                                if (spd != null && !spd.isBlank() && !"NA".equalsIgnoreCase(spd))
+                                    row.speed.set(normalizeSpeedUnit(spd));
+
+                                if (et != null && !et.isBlank() && !"NA".equalsIgnoreCase(et))
+                                    row.eta.set(et);
+                            });
+                            continue;
+                        }
+
+                        // progress fallback
+                        var mf = PROG_FALLBACK.matcher(s);
+                        if (mf.find()) {
+                            if (startedDownloading.compareAndSet(false, true)) {
+                                Platform.runLater(() -> {
+                                    row.status.set("Downloading");
+                                    if (row.progress.get() < 0) row.progress.set(0);
+                                });
+                            }
+
+                            double pct;
+                            try { pct = Double.parseDouble(mf.group(1)) / 100.0; } catch (Exception ex) { pct = -1; }
+                            String spd = mf.group(2);
+                            String et = mf.group(3);
+
+                            double fpct = pct;
+                            Platform.runLater(() -> {
+                                row.status.set("Downloading");
+                                if (row.progress.get() < 0 && fpct >= 0) row.progress.set(fpct);
+                                if (fpct >= 0) row.progress.set(fpct);
+                                if (spd != null && !spd.isBlank()) row.speed.set(normalizeSpeedUnit(spd));
+                                if (et != null && !et.isBlank()) row.eta.set(et);
+                            });
+                            continue;
+                        }
+
+                        // phase updates during preparing
+//                        if (!startedDownloading.get()) {
+//                            if (s.startsWith("[info]")) {
+//                                String phase = s.length() > 70 ? s.substring(0, 70) + "..." : s;
+//                                Platform.runLater(() -> row.status.set(phase));
+//                            } else if (s.startsWith("[download]")) {
+//                                if (startedDownloading.compareAndSet(false, true)) {
+//                                    Platform.runLater(() -> {
+//                                        row.status.set("Downloading");
+//                                        if (row.progress.get() < 0) row.progress.set(0);
+//                                    });
+//                                }
+//                            }
+//                        }
+
+                        // phase updates during preparing
+                        if (!startedDownloading.get()) {
+
+                            // Convert noisy yt-dlp phases to a short friendly text
+                            String phase = null;
+                            String sl = s.toLowerCase(java.util.Locale.ROOT);
+
+                            if (sl.contains("downloading m3u8") || sl.contains("m3u8 information")) {
+                                phase = "Preparing stream...";
+                            } else if (sl.contains("downloading webpage")) {
+                                phase = "Preparing...";
+                            } else if (sl.contains("extracting")) {
+                                phase = "Extracting info...";
+                            } else if (s.startsWith("[info]") || s.startsWith("[youtube]") || s.startsWith("[generic]")) {
+                                phase = "Preparing...";
+                            }
+
+                            if (phase != null) {
+                                final String ph = phase;
+                                Platform.runLater(() -> row.status.set(ph));
+                            }
+
+                            // Switch to Downloading as soon as we see download lines
+                            if (s.startsWith("[download]")) {
+                                if (startedDownloading.compareAndSet(false, true)) {
+                                    Platform.runLater(() -> {
+                                        row.status.set("Downloading");
+                                        if (row.progress.get() < 0) row.progress.set(0);
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                int code = p.waitFor();
+                String reason = stopReasons.get(row);
+
+                Platform.runLater(() -> {
+                    activeProcesses.remove(row);
+
+                    if ("CANCEL".equals(reason)) {
+                        row.setState(DownloadRow.State.CANCELLED);
+                        row.status.set("Cancelled");
+                        row.size.set("");
+                        row.speed.set("");
+                        row.eta.set("");
+                        return;
+                    }
+                    if ("PAUSE".equals(reason)) {
+                        row.setState(DownloadRow.State.PAUSED);
+                        row.status.set("Paused");
+                        row.size.set("");
+                        row.speed.set("");
+                        row.eta.set("");
+                        return;
+                    }
+
+                    if (code == 0) {
+                        row.setState(DownloadRow.State.COMPLETED);
+                        row.status.set("Completed");
+                        row.size.set("");
+                        row.progress.set(1.0);
+                        row.speed.set("");
+                        row.eta.set("");
+                    } else {
+                        row.setState(DownloadRow.State.FAILED);
+                        row.status.set("Failed");
+                        row.size.set("");
+                        row.speed.set("");
+                        row.eta.set("");
+                    }
+                });
+
+            } catch (Exception ex) {
+                final Process fp = p;
+                Platform.runLater(() -> {
+                    try { if (fp != null) fp.destroyForcibly(); } catch (Exception ignored) {}
+                    activeProcesses.remove(row);
+                    row.setState(DownloadRow.State.FAILED);
+                    row.status.set("Failed");
+                    row.size.set("");
+                    row.speed.set("");
+                    row.eta.set("");
+                });
+            }
+        }, "yt-dlp-download").start();
+    }
+
+    // Decode Unicode escape sequences like \u0645\u0627 -> ما
+    private static String unescapeUnicode(String s) {
+        if (s == null || !s.contains("\\u")) return s;
+
+        StringBuilder out = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '\\' && i + 5 < s.length() && s.charAt(i + 1) == 'u') {
+                try {
+                    String hex = s.substring(i + 2, i + 6);
+                    int code = Integer.parseInt(hex, 16);
+                    out.append((char) code);
+                    i += 5;
+                } catch (Exception e) {
+                    out.append(c);
+                }
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
+    }
+
+    private static long parseLongSafe(String s) {
+        try {
+            if (s == null) return 0L;
+            s = s.trim();
+            if (s.isEmpty() || "NA".equalsIgnoreCase(s) || "None".equalsIgnoreCase(s)) return 0L;
+            return Long.parseLong(s);
+        } catch (Exception e) {
+            return 0L;
         }
     }
+
+    // Decimal units (KB/MB/GB) to avoid MiB/GiB and reduce visual clutter
+    private static String formatBytesDecimal(long bytes) {
+        if (bytes <= 0) return "0 B";
+        double b = (double) bytes;
+        String[] u = {"B", "KB", "MB", "GB", "TB"};
+        int i = 0;
+        while (b >= 1000.0 && i < u.length - 1) {
+            b /= 1000.0;
+            i++;
+        }
+        return String.format(java.util.Locale.US, "%.2f %s", b, u[i]);
+    }
+
+    private static String normalizeSpeedUnit(String spd) {
+        if (spd == null) return null;
+        String s = spd.trim();
+        if (s.isEmpty()) return s;
+
+        // Convert binary units to decimal-looking units for consistency with size (KB/MB/GB)
+        s = s.replace("KiB/s", "KB/s")
+             .replace("MiB/s", "MB/s")
+             .replace("GiB/s", "GB/s")
+             .replace("TiB/s", "TB/s");
+
+        // Ensure spacing is consistent (e.g., "256.50KB/s" -> "256.50 KB/s")
+        s = s.replaceAll("(?i)(\\d)(KB/s|MB/s|GB/s|TB/s)$", "$1 $2");
+        return s;
+    }
+
+    private void pauseDownloadRow(DownloadRow row) {
+        if (row == null) return;
+        Process p = activeProcesses.get(row);
+        if (p == null || !p.isAlive()) {
+            row.setState(DownloadRow.State.PAUSED);
+            return;
+        }
+        stopReasons.put(row, "PAUSE");
+        try { p.destroy(); } catch (Exception ignored) {}
+        try { p.destroyForcibly(); } catch (Exception ignored) {}
+        row.setState(DownloadRow.State.PAUSED);
+    }
+
+    private void cancelDownloadRow(DownloadRow row) {
+        if (row == null) return;
+        Process p = activeProcesses.get(row);
+        stopReasons.put(row, "CANCEL");
+        if (p != null) {
+            try { p.destroy(); } catch (Exception ignored) {}
+            try { p.destroyForcibly(); } catch (Exception ignored) {}
+        }
+        row.setState(DownloadRow.State.CANCELLED);
+    }
+
+    private void resumeDownloadRow(DownloadRow row) {
+        if (row == null) return;
+        DownloadRow.State st;
+        try { st = row.state.get(); } catch (Exception e) { st = DownloadRow.State.QUEUED; }
+        if (st == DownloadRow.State.DOWNLOADING) return;
+
+        stopReasons.remove(row);
+        startDownloadRow(row, true); // --continue
+    }
+
 
 
     // --- Thumbnail helpers and cache ---
@@ -1826,29 +2694,60 @@ public class MainController {
         String u = url.trim();
         if (u.isEmpty()) return null;
 
-        // youtu.be/<id>
-        int yb = u.indexOf("youtu.be/");
-        if (yb >= 0) {
-            String s = u.substring(yb + "youtu.be/".length());
-            int q = s.indexOf('?');
-            if (q >= 0) s = s.substring(0, q);
-            int a = s.indexOf('&');
-            if (a >= 0) s = s.substring(0, a);
-            s = s.trim();
-            return s.isEmpty() ? null : s;
-        }
+        // Try common patterns:
+        // - youtu.be/<id>
+        // - watch?v=<id>
+        // - /shorts/<id>
+        // - /embed/<id>
+        try {
+            // youtu.be/<id>
+            int yb = u.indexOf("youtu.be/");
+            if (yb >= 0) {
+                String s = u.substring(yb + "youtu.be/".length());
+                int q = s.indexOf('?');
+                if (q >= 0) s = s.substring(0, q);
+                int a = s.indexOf('&');
+                if (a >= 0) s = s.substring(0, a);
+                s = s.trim();
+                return s.isEmpty() ? null : s;
+            }
 
-        // watch?v=<id>
-        int v = u.indexOf("v=");
-        if (v >= 0) {
-            String s = u.substring(v + 2);
-            int a = s.indexOf('&');
-            if (a >= 0) s = s.substring(0, a);
-            int h = s.indexOf('#');
-            if (h >= 0) s = s.substring(0, h);
-            s = s.trim();
-            return s.isEmpty() ? null : s;
-        }
+            // shorts/<id>
+            int sh = u.indexOf("/shorts/");
+            if (sh >= 0) {
+                String s = u.substring(sh + "/shorts/".length());
+                int q = s.indexOf('?');
+                if (q >= 0) s = s.substring(0, q);
+                int a = s.indexOf('&');
+                if (a >= 0) s = s.substring(0, a);
+                s = s.trim();
+                return s.isEmpty() ? null : s;
+            }
+
+            // embed/<id>
+            int em = u.indexOf("/embed/");
+            if (em >= 0) {
+                String s = u.substring(em + "/embed/".length());
+                int q = s.indexOf('?');
+                if (q >= 0) s = s.substring(0, q);
+                int a = s.indexOf('&');
+                if (a >= 0) s = s.substring(0, a);
+                s = s.trim();
+                return s.isEmpty() ? null : s;
+            }
+
+            // watch?v=<id>
+            int v = u.indexOf("v=");
+            if (v >= 0) {
+                String s = u.substring(v + 2);
+                int a = s.indexOf('&');
+                if (a >= 0) s = s.substring(0, a);
+                int h = s.indexOf('#');
+                if (h >= 0) s = s.substring(0, h);
+                s = s.trim();
+                return s.isEmpty() ? null : s;
+            }
+        } catch (Exception ignored) {}
 
         return null;
     }
@@ -1856,9 +2755,27 @@ public class MainController {
     public static String thumbFromUrl(String url) {
         String id = extractYoutubeId(url);
         if (id == null || id.isBlank()) return null;
-        return "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg";
+        return "https://img.youtube.com/vi/" + id + "/hqdefault.jpg";
     }
 
+    // To git the selected file in folder
+    private void revealInFileManager(Path file) {
+        try {
+            if (file == null) return;
+
+            String os = System.getProperty("os.name", "").toLowerCase();
+
+            if (os.contains("mac")) {
+                new ProcessBuilder("open", "-R", file.toAbsolutePath().toString()).start();
+            } else if (os.contains("win")) {
+                new ProcessBuilder("explorer.exe", "/select,", file.toAbsolutePath().toString()).start();
+            } else {
+                // Linux: best effort
+                Path parent = file.getParent();
+                if (parent != null) new ProcessBuilder("xdg-open", parent.toAbsolutePath().toString()).start();
+            }
+        } catch (Exception ignored) {}
+    }
 
     // === Thumbnail rendering helpers (cover crop + rounded clip) ===
     private static void applyCoverViewport(ImageView iv, Image img, double targetW, double targetH) {
