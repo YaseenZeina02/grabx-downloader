@@ -1948,6 +1948,7 @@ public class MainController {
             }
         });
 
+
         // Make it look nicer without selection highlight
         downloadsList.setSelectionModel(new NoSelectionModel<>());
     }
