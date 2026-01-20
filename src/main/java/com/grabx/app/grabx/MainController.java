@@ -57,8 +57,37 @@ import java.io.File;
 import java.util.Optional;
 
 public class MainController {
+    @FXML
+    private Label statusText;
+    @FXML
+    private BorderPane root;
+
+    @FXML
+    private Button pauseAllButton;
+    @FXML
+    private Button resumeAllButton;
+    @FXML
+    private Button clearAllButton;
+
+    @FXML
+    private Button addLinkButton;
+    @FXML
+    private Button settingsButton;
+
+    @FXML
+    private Label contentTitle;
+    @FXML
+    private ListView<SidebarItem> sidebarList;
+
+    private Dialog<ButtonType> activeAddLinkDialog = null;
+
+    @FXML
+    private ListView<DownloadRow> downloadsList;
+
+
     // ========= Playlist probing (IMPORTANT: limit concurrency to avoid freezing on large playlists) =========
     private static final int PLAYLIST_PROBE_THREADS = Math.max(1, Math.min(2, Runtime.getRuntime().availableProcessors() / 2));
+    private final java.util.Map<String, Long> sizeCache = new java.util.concurrent.ConcurrentHashMap<>();
 
     private static final ExecutorService PLAYLIST_PROBE_EXEC = new ThreadPoolExecutor(
             PLAYLIST_PROBE_THREADS,
@@ -73,7 +102,8 @@ public class MainController {
                 return t;
             },
             // if queue is full, run in caller thread would block UI; so we discard and try later
-            new ThreadPoolExecutor.DiscardPolicy()
+//            new ThreadPoolExecutor.DiscardPolicy()
+            new ThreadPoolExecutor.AbortPolicy()
     );
 
     private static final Map<String, ProbeQualitiesResult> PLAYLIST_PROBE_CACHE = new ConcurrentHashMap<>();
@@ -123,32 +153,7 @@ public class MainController {
         }
     }
 
-    @FXML
-    private Label statusText;
-    @FXML
-    private BorderPane root;
 
-    @FXML
-    private Button pauseAllButton;
-    @FXML
-    private Button resumeAllButton;
-    @FXML
-    private Button clearAllButton;
-
-    @FXML
-    private Button addLinkButton;
-    @FXML
-    private Button settingsButton;
-
-    @FXML
-    private Label contentTitle;
-    @FXML
-    private ListView<SidebarItem> sidebarList;
-
-    private Dialog<ButtonType> activeAddLinkDialog = null;
-
-    @FXML
-    private ListView<DownloadRow> downloadsList;
 
     private final ObservableList<DownloadRow> downloadItems = FXCollections.observableArrayList();
     private FilteredList<DownloadRow> filteredDownloadItems;
@@ -194,12 +199,6 @@ public class MainController {
     public void onClearAll(ActionEvent actionEvent) {
         if (statusText != null) statusText.setText("Clear all");
     }
-
-    // ======== yt-dlp probing (available qualities) ========
-
-//    private static final Pattern YTDLP_HEIGHT_P = Pattern.compile("\\b(\\d{3,4})p\\b");
-//    private static final Pattern YTDLP_HEIGHT_X = Pattern.compile("\\b\\d{3,4}x(\\d{3,4})\\b");
-
 
     // Matches: 1080p, 1080p60, 2160p, 2160p60 ... (yt-dlp often prints p60 without WxH)
     private static final Pattern YTDLP_HEIGHT_P = Pattern.compile("\\b(\\d{3,4})p(?:\\d{1,3})?\\b");
@@ -391,76 +390,128 @@ public class MainController {
         return labelByH.get(max);
     }
 
-
-    /**
-     * Probes ONLY available heights + approx sizes from yt-dlp -F for a SINGLE VIDEO url.
-     * Returns:
-     * - qualities list (Best + separator + available)
-     * - size map: qualityLabel -> "~120 MB"
-     */
     private static ProbeQualitiesResult probeQualitiesWithSizes(String url) {
+        long now = System.currentTimeMillis();
+
+        // Cache hit (per URL)
+        try {
+            ProbeQualitiesResult cached = VIDEO_INFO_CACHE.get(url);
+            if (cached != null && cached.isFresh()) return cached;
+        } catch (Exception ignored) {}
+
         java.util.Set<Integer> heights = new java.util.HashSet<>();
         java.util.Map<Integer, String> sizeByHeight = new java.util.HashMap<>();
+        java.util.Map<Integer, Long> bytesByHeight = new java.util.HashMap<>();
 
-        if (url == null || url.isBlank()) return new ProbeQualitiesResult(heights, sizeByHeight);
+        if (url == null || url.isBlank()) {
+            return new ProbeQualitiesResult(heights, bytesByHeight, sizeByHeight, -1L, now);
+        }
 
-        try {
-            ProcessBuilder pb = new ProcessBuilder(
-                    "yt-dlp",
-                    "-F",
-                    "--no-warnings",
-                    "--no-playlist",
-                    url
-            );
-            pb.redirectErrorStream(true);
-            Process p = pb.start();
+        // 1) detect heights once (FAST)
+        heights = probeHeightsWithYtDlp(url);
 
-            try (BufferedReader br = new BufferedReader(
-                    new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8)
-            )) {
-                String line;
-                while ((line = br.readLine()) != null) {
+        // 2) compute exact bytes ONLY for the highest detected height (FAST enough for Get)
+        Integer bestH = null;
+        for (Integer h : heights) {
+            if (h == null || h <= 0) continue;
+            if (bestH == null || h > bestH) bestH = h;
+        }
 
-                    // height from "1920x1080"
-                    Matcher mx = YTDLP_HEIGHT_X.matcher(line);
-                    while (mx.find()) {
-                        int h = normalizeHeight(safeParseInt(mx.group(1)));
-                        if (h > 0) {
-                            heights.add(h);
-                            sizeByHeight.putIfAbsent(h, approxSizeTextFromLine(line));
-                        }
-                    }
+        long bestBytes = -1L;
+        if (bestH != null) {
+            try {
+                String selector = buildFormatSelectorForHeight(bestH);
+                Long b = fetchCombinedSizeBytesWithYtDlpPrint(url, selector);
+                if (b != null && b > 0) {
+                    bestBytes = b;
+                    bytesByHeight.put(bestH, b);
+                    sizeByHeight.put(bestH, formatBytesDecimal(b));
 
-                    // height from "1080p" / "2160p60" ...
-                    Matcher mp = YTDLP_HEIGHT_P.matcher(line);
-                    while (mp.find()) {
-                        int h = normalizeHeight(safeParseInt(mp.group(1)));
-                        if (h > 0) {
-                            heights.add(h);
-                            sizeByHeight.putIfAbsent(h, approxSizeTextFromLine(line));
-                        }
-                    }
+                    // seed SIZE_CACHE for Best and for best height label
+                    SIZE_CACHE.put(url + "|" + MODE_VIDEO + "|" + QUALITY_BEST, b);
+                    SIZE_CACHE.put(url + "|" + MODE_VIDEO + "|" + formatHeightLabel(bestH), b);
                 }
-            }
+            } catch (Exception ignored) {}
+        }
 
-            p.waitFor();
-        } catch (Exception ignored) {
+        // 3) schedule background exact-size probes for remaining heights (NON-BLOCKING)
+        for (Integer h : heights) {
+            if (h == null || h <= 0) continue;
+            if (bestH != null && h.intValue() == bestH.intValue()) continue;
+
+            String label = formatHeightLabel(h);
+            String cacheKey = url + "|" + MODE_VIDEO + "|" + label;
+            if (SIZE_CACHE.containsKey(cacheKey)) continue;
+
+            String inflightKey = url + "||" + label;
+            if (!VIDEO_SIZE_INFLIGHT.add(inflightKey)) continue;
+
+            final int fh = h;
+            VIDEO_SIZE_EXEC.execute(() -> {
+                try {
+                    String selector = buildFormatSelectorForHeight(fh);
+                    Long b = fetchCombinedSizeBytesWithYtDlpPrint(url, selector);
+                    if (b != null && b > 0) {
+                        SIZE_CACHE.put(cacheKey, b);
+                    }
+                } catch (Exception ignored) {
+                } finally {
+                    VIDEO_SIZE_INFLIGHT.remove(inflightKey);
+                }
+            });
         }
 
         heights = normalizeHeights(heights);
         sizeByHeight.keySet().retainAll(heights);
-        return new ProbeQualitiesResult(heights, sizeByHeight);
+        bytesByHeight.keySet().retainAll(heights);
+
+        ProbeQualitiesResult pr = new ProbeQualitiesResult(heights, bytesByHeight, sizeByHeight, bestBytes, now);
+        try { VIDEO_INFO_CACHE.put(url, pr); } catch (Exception ignored) {}
+        return pr;
     }
 
-//    private static final class ProbeQualitiesResult {
-//        final java.util.Set<Integer> heights;
-//        final java.util.Map<Integer, String> sizeByHeight;
-//
-//        ProbeQualitiesResult(java.util.Set<Integer> heights, java.util.Map<Integer, String> sizeByHeight) {
-//            this.heights = heights;
-//            this.sizeByHeight = sizeByHeight;
-//        }
-//    }
+    /** selector like: bv*[height<=720]+ba/b[height<=720]/bv*+ba/b */
+    private static String buildFormatSelectorForHeight(int height) {
+        int h = Math.max(1, height);
+        return "bv*[height<=" + h + "]+ba/b[height<=" + h + "]/bv*+ba/b";
+    }
+
+    /**
+     * Prints bytes as integer using yt-dlp template:
+     * %(filesize,filesize_approx)s
+     */
+    private static Long fetchCombinedSizeBytesWithYtDlpPrint(String url, String selector) {
+        if (url == null || url.isBlank()) return null;
+
+        try {
+            java.util.List<String> args = new java.util.ArrayList<>();
+            args.add("--no-warnings");
+            args.add("--no-playlist");
+            args.add("--skip-download");
+            args.add("-f"); args.add(selector);
+            args.add("--print"); args.add("%(filesize,filesize_approx)s");
+            args.add(url.trim());
+
+            // IMPORTANT: use your bundled yt-dlp manager (works on mac/win/linux)
+            String out = com.grabx.app.grabx.util.YtDlpManager.run(args);
+            if (out == null) return null;
+
+            for (String line : out.split("\\R")) {
+                if (line == null) continue;
+                String t = line.trim();
+                if (t.isEmpty()) continue;
+
+                boolean allDigits = t.chars().allMatch(Character::isDigit);
+                if (!allDigits) continue;
+
+                long v = Long.parseLong(t);
+                if (v > 0) return v;
+            }
+            return null;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
 
 
     private static int safeParseInt(String s) {
@@ -984,6 +1035,33 @@ public class MainController {
         showAddLinkDialog(null);
     }
 
+    // Cache for computed sizes to avoid re-running yt-dlp repeatedly (key: url|mode|quality)
+    private static final java.util.concurrent.ConcurrentHashMap<String, Long> SIZE_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    // Limit expensive yt-dlp probes (avoid spawning many processes at once)
+    private static final int VIDEO_SIZE_THREADS = Math.max(1, Math.min(2, Runtime.getRuntime().availableProcessors() / 2));
+    private static final ExecutorService VIDEO_SIZE_EXEC = new ThreadPoolExecutor(
+            VIDEO_SIZE_THREADS,
+            VIDEO_SIZE_THREADS,
+            30L,
+            TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(32),
+            r -> {
+                Thread t = new Thread(r, "video-size-probe");
+                t.setDaemon(true);
+                return t;
+            },
+            // If queue is full, don't block UI threads
+//            new ThreadPoolExecutor.DiscardPolicy()
+            new ThreadPoolExecutor.AbortPolicy()
+    );
+
+    // Avoid duplicate probes for the same (url|quality) while one is already running
+    private static final java.util.Set<String> VIDEO_SIZE_INFLIGHT =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+
     private void showAddLinkDialog(String prefillUrl) {
         if (addLinkDialogOpen) {
             // If already open, just update the field if we can.
@@ -1096,21 +1174,9 @@ public class MainController {
 
         // Track last probed video heights so we can restore the quality list when switching modes.
         final java.util.Set<Integer>[] lastProbedHeights = new java.util.Set[]{null};
-
-        // When mode changes, swap the Quality dropdown contents accordingly.
-        modeCombo.valueProperty().addListener((obsM, oldM, newM) -> {
-            if (newM == null) return;
-
-            if (MODE_AUDIO.equals(newM)) {
-                qualityCombo.getItems().setAll(buildAudioOptions());
-                // Default audio format in UI
-                qualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
-            } else {
-                // Restore video qualities (prefer the ones we probed; otherwise safe fallback)
-                fillQualityComboFromHeights(qualityCombo, lastProbedHeights[0]);
-                qualityCombo.getSelectionModel().select(QUALITY_BEST);
-            }
-        });
+        // Store probed size TEXT per quality label (video) so switching is instant (no yt-dlp calls on selection change)
+        final java.util.Map<String, String>[] lastProbedSizeTextByQualityLabel =
+                new java.util.Map[]{new java.util.HashMap<>()};
 
         // Folder
 //        TextField folderField = new TextField(System.getProperty("user.home") + File.separator + "Downloads");
@@ -1137,6 +1203,44 @@ public class MainController {
         info.setWrapText(true);
         // Keep a consistent default color; errors will override temporarily
         info.setTextFill(Color.web("#9aa4b2"));
+
+        Label sizeInfo = new Label("Estimated size: —");
+        sizeInfo.getStyleClass().add("gx-text-muted");
+        sizeInfo.setWrapText(true);
+        sizeInfo.setTextFill(Color.web("#9aa4b2"));
+
+        // Size loading animation (dots) + request token to ignore late results
+        final long[] sizeReqId = {0};
+        final int[] sizeDots = {0};
+
+        javafx.animation.Timeline sizeLoadingTl = new javafx.animation.Timeline(
+                new javafx.animation.KeyFrame(javafx.util.Duration.millis(280), ev2 -> {
+                    sizeDots[0] = (sizeDots[0] % 3) + 1; // 1..3
+                    String dots = switch (sizeDots[0]) {
+                        case 1 -> ".";
+                        case 2 -> ". .";
+                        default -> ". . .";
+                    };
+                    sizeInfo.setText("Estimating: " + dots);
+                })
+        );
+        sizeLoadingTl.setCycleCount(javafx.animation.Animation.INDEFINITE);
+
+        Runnable stopSizeLoading = () -> {
+            try { sizeLoadingTl.stop(); } catch (Exception ignored) {}
+            sizeDots[0] = 0;
+        };
+
+        java.util.function.Consumer<String> setSizeText = (txt) -> {
+            stopSizeLoading.run();
+            sizeInfo.setText(txt);
+        };
+
+        Runnable startSizeLoading = () -> {
+            stopSizeLoading.run();
+            sizeInfo.setText("Estimating: .");
+            try { sizeLoadingTl.playFromStart(); } catch (Exception ignored) {}
+        };
 
         // Rows
         int r = 0;
@@ -1166,6 +1270,9 @@ public class MainController {
         r++;
         grid.add(info, 1, r, 2, 1);
 
+        r++;
+        grid.add(sizeInfo, 1, r, 2, 1);
+
         // Default: hide/disable mode+quality until analysis says VIDEO
         modeCombo.setDisable(true);
         qualityCombo.setDisable(true);
@@ -1180,6 +1287,149 @@ public class MainController {
 
         // keep last analysis
         final ContentType[] lastType = {ContentType.UNSUPPORTED};
+
+        // Outer updateSizeAsync runnable (for use in listeners)
+        Runnable updateSizeAsync = () -> {
+            String u = urlField.getText() == null ? "" : urlField.getText().trim();
+            if (u.isBlank()) {
+                setSizeText.accept("Estimated size: —");
+                return;
+            }
+
+            // Build a stable cache key (include mode + quality)
+            String modeV = modeCombo.getValue() == null ? "" : modeCombo.getValue();
+            String qV = qualityCombo.getValue() == null ? "" : qualityCombo.getValue();
+            String key = u + "|" + modeV + "|" + qV;
+
+            // If cached -> show immediately and stop (no probing)
+            Long cached = SIZE_CACHE.get(key);
+            if (cached != null && cached > 0) {
+                setSizeText.accept("Estimated size: " + formatBytesDecimal(cached));
+                return;
+            }
+
+            setSizeText.accept("Estimated size: — ");
+
+            // New request id so late background results won't override newer selections
+            final long rid = ++sizeReqId[0];
+
+            if (lastType[0] == ContentType.DIRECT_FILE) {
+                startSizeLoading.run();
+                new Thread(() -> {
+                    Long bytes = probeContentLength(u);
+                    if (bytes != null && bytes > 0) SIZE_CACHE.put(key, bytes);
+                    Platform.runLater(() -> {
+                        if (rid != sizeReqId[0]) return;
+                        if (bytes != null && bytes > 0) setSizeText.accept("Estimated size: " + formatBytesDecimal(bytes));
+                        else setSizeText.accept("Estimated size: — ");
+                    });
+                }, "probe-size-head").start();
+                return;
+            }
+
+            if (lastType[0] == ContentType.VIDEO) {
+                // Ignore separator selection
+                if (QUALITY_SEPARATOR.equals(qV)) {
+                    setSizeText.accept("Estimated size: — ");
+                    return;
+                }
+
+                // ✅ Instant: if we probed size text on Get, show immediately (no yt-dlp call here)
+                if (MODE_VIDEO.equals(modeV)) {
+                    String qLabel = (qV == null || qV.isBlank()) ? QUALITY_BEST : qV;
+                    String txt = lastProbedSizeTextByQualityLabel[0].get(qLabel);
+                    if (txt != null && !txt.isBlank()) {
+                        String t = txt.trim();
+                        setSizeText.accept("Estimated size: " + txt.trim());
+                        return;
+                    }
+                }
+
+                startSizeLoading.run();
+
+                // Compute EXACT size for the currently selected quality (single yt-dlp call),
+                // and cache it so future switches are instant.
+                final String qLabel = (qV == null || qV.isBlank()) ? QUALITY_BEST : qV;
+                final String inflightKey = u + "||" + modeV + "||" + qLabel;
+
+                if (!VIDEO_SIZE_INFLIGHT.add(inflightKey)) return; // already running
+
+                try {
+                    VIDEO_SIZE_EXEC.execute(() -> {
+                        Long bytes = null;
+                        try {
+                            if (MODE_VIDEO.equals(modeV)) {
+                                if (QUALITY_BEST.equals(qLabel)) {
+                                    bytes = fetchCombinedSizeBytesWithYtDlpPrint(u, "bv*+ba/b");
+                                } else {
+                                    int h = parseHeightFromLabel(qLabel);
+                                    String selector = (h > 0) ? buildFormatSelectorForHeight(h) : "bv*+ba/b";
+                                    bytes = fetchCombinedSizeBytesWithYtDlpPrint(u, selector);
+                                }
+                            } else {
+                                // Audio mode keeps existing behavior
+                                bytes = fetchSizeWithYtDlp(u, modeV, qV);
+                            }
+
+                            if (bytes != null && bytes > 0) {
+                                SIZE_CACHE.put(key, bytes);
+                            }
+                        } catch (Exception ignored) {
+                        } finally {
+                            VIDEO_SIZE_INFLIGHT.remove(inflightKey);
+                        }
+
+                        final Long fbytes = bytes;
+                        Platform.runLater(() -> {
+                            if (rid != sizeReqId[0]) return;
+                            if (fbytes != null && fbytes > 0) setSizeText.accept("Estimated size: " + formatBytesDecimal(fbytes));
+                            else setSizeText.accept("Estimated size: —");
+                        });
+                    });
+                } catch (RejectedExecutionException rex) {
+                    // Pool is full; cannot probe now
+                    VIDEO_SIZE_INFLIGHT.remove(inflightKey);
+                    Platform.runLater(() -> {
+                        if (rid != sizeReqId[0]) return;
+                        setSizeText.accept("Estimated size: —");
+                    });
+                }
+                return;
+
+            }
+
+            // PLAYLIST / UNSUPPORTED
+            setSizeText.accept("Estimated size: —");
+        };
+
+        // When mode changes, swap the Quality dropdown contents accordingly.
+        modeCombo.valueProperty().addListener((obsM, oldM, newM) -> {
+
+            if (newM == null) return;
+
+            if (MODE_AUDIO.equals(newM)) {
+                qualityCombo.getItems().setAll(buildAudioOptions());
+                // Default audio format in UI
+                qualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
+            } else {
+                // Restore video qualities (prefer the ones we probed; otherwise safe fallback)
+                fillQualityComboFromHeights(qualityCombo, lastProbedHeights[0]);
+                qualityCombo.getSelectionModel().select(QUALITY_BEST);
+            }
+
+            // If Get already succeeded for a video, refresh the estimated size
+            if (!okBtn.isDisabled() && lastType[0] == ContentType.VIDEO) {
+                updateSizeAsync.run();
+            }
+        });
+
+        qualityCombo.valueProperty().addListener((obsQ, oldQ, newQ) -> {
+            if (okBtn.isDisabled()) return;            // فقط بعد ما Get ينجح
+            if (lastType[0] != ContentType.VIDEO) return;
+            if (newQ == null) return;
+            if (QUALITY_SEPARATOR.equals(newQ)) return;
+            updateSizeAsync.run();
+        });
 
         Runnable applyTypeToUi = () -> {
             ContentType t = lastType[0];
@@ -1225,53 +1475,27 @@ public class MainController {
         getBtn.setOnAction(e -> {
             String url = urlField.getText() == null ? "" : urlField.getText().trim();
             if (url.isBlank()) {
-                // Empty URL -> guide the user (not “unsupported”)
+                // Empty URL -> guide the user and STOP (do not probe)
+                lastType[0] = ContentType.UNSUPPORTED;
+
                 modeCombo.setDisable(true);
                 qualityCombo.setDisable(true);
+
+                // Reset quality list based on current mode
                 if (MODE_AUDIO.equals(modeCombo.getValue())) {
                     qualityCombo.getItems().setAll(buildAudioOptions());
                     qualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
                 } else {
                     fillQualityCombo(qualityCombo);
                 }
+
                 info.setText("Paste a link then click Get.");
                 info.setTextFill(Color.web("#ff4d4d"));
                 okBtn.setDisable(true);
-//                lastType[0] = ContentType.UNSUPPORTED;
-                // ===== Level 1 probe =====
-                // 1) Try yt-dlp title: if it works, it's a supported media URL.
-                String mediaTitle = fetchTitleWithYtDlp(url);
-
-                if (mediaTitle != null && !mediaTitle.isBlank()) {
-
-                    // Decide type (playlist/video) using your existing analyzer.
-                    lastType[0] = analyzeUrlType(url);
-                    if (lastType[0] == ContentType.UNSUPPORTED) {
-                        // If yt-dlp can print title, treat as VIDEO as a safe fallback.
-                        lastType[0] = ContentType.VIDEO;
-                    }
-
-                    info.setText("Detected media: " + mediaTitle);
-                    info.setTextFill(Color.web("#9AA4B2"));
-
-                } else {
-                    // 2) If yt-dlp doesn't support it, try direct file probe (HEAD)
-                    DirectFileProbe df = probeDirectFile(url);
-                    if (df != null && df.isFile) {
-                        lastType[0] = ContentType.DIRECT_FILE;
-
-                        String name = (df.fileName != null && !df.fileName.isBlank())
-                                ? df.fileName
-                                : "Direct file";
-
-                        info.setText("Detected direct file: " + name);
-                        info.setTextFill(Color.web("#9AA4B2"));
-                    } else {
-                        lastType[0] = ContentType.UNSUPPORTED;
-                    }
-                }
+                setSizeText.accept("Estimated size: —");
                 return;
             }
+
             lastType[0] = analyzeUrlType(url);
 
             // If it's a single video, probe available heights and rebuild the quality list accordingly
@@ -1280,11 +1504,45 @@ public class MainController {
                 info.setTextFill(Color.web("#9aa4b2"));
 
                 new Thread(() -> {
-                    Set<Integer> heights = probeHeightsWithYtDlp(url);
+                    ProbeQualitiesResult pr = probeQualitiesWithSizes(url);
+
+                    final java.util.Set<Integer> heights = (pr == null || pr.heights == null) ? java.util.Set.of() : pr.heights;
+                    final java.util.Map<Integer, Long> bytesByHeight = (pr == null || pr.bytesByHeight == null) ? java.util.Map.of() : pr.bytesByHeight;
 
                     Platform.runLater(() -> {
                         // keep for later (when user switches back to Video)
                         lastProbedHeights[0] = heights;
+                        lastProbedSizeTextByQualityLabel[0].clear();
+
+                        // Seed SIZE_CACHE so switching qualities is instant (no more yt-dlp calls)
+                        if (bytesByHeight != null && !bytesByHeight.isEmpty()) {
+
+                            // best = highest detected height
+                            Integer bestH = null;
+                            for (Integer h : heights) {
+                                if (h == null || h <= 0) continue;
+                                if (bestH == null || h > bestH) bestH = h;
+                            }
+
+                            if (bestH != null) {
+                                Long b = bytesByHeight.get(bestH);
+                                if (b != null && b > 0) {
+                                    SIZE_CACHE.put(url + "|" + MODE_VIDEO + "|" + QUALITY_BEST, b);
+                                    lastProbedSizeTextByQualityLabel[0].put(QUALITY_BEST, formatBytesDecimal(b));
+                                }
+                            }
+
+                            // per-height entries (1080p/720p/...) using the same label generator used in the UI
+                            for (var en : bytesByHeight.entrySet()) {
+                                Integer h = en.getKey();
+                                Long b = en.getValue();
+                                if (h == null || h <= 0 || b == null || b <= 0) continue;
+
+                                String label = formatHeightLabel(h);
+                                SIZE_CACHE.put(url + "|" + MODE_VIDEO + "|" + label, b);
+                                lastProbedSizeTextByQualityLabel[0].put(label, formatBytesDecimal(b));
+                            }
+                        }
 
                         // If user is currently in Audio mode, keep audio list.
                         if (MODE_AUDIO.equals(modeCombo.getValue())) {
@@ -1300,6 +1558,7 @@ public class MainController {
                         }
 
                         applyTypeToUi.run();
+                        updateSizeAsync.run();
                     });
                 }, "probe-qualities").start();
 
@@ -1309,12 +1568,14 @@ public class MainController {
             // ✅ Playlist: open playlist screen immediately
             if (lastType[0] == ContentType.PLAYLIST) {
                 applyTypeToUi.run();
+                updateSizeAsync.run();
                 saveLastDownloadFolder(folderField.getText());
                 openPlaylistWindow(url, folderField.getText());
                 return;
             }
 
             applyTypeToUi.run();
+            updateSizeAsync.run();
         });
 
         // UX: pressing Enter in URL triggers Get
@@ -1323,6 +1584,7 @@ public class MainController {
         // If user edits URL after Get, require Get again
         urlField.textProperty().addListener((obs, oldV, newV) -> {
             lastType[0] = ContentType.UNSUPPORTED;
+            lastProbedSizeTextByQualityLabel[0].clear();
             okBtn.setDisable(true);
             modeCombo.setDisable(true);
             qualityCombo.setDisable(true);
@@ -1335,6 +1597,7 @@ public class MainController {
             }
             info.setText("Paste a link then click Get.");
             info.setTextFill(Color.web("#9aa4b2"));
+            setSizeText.accept("Estimated size: —");
         });
 
         pane.setContent(grid);
@@ -1394,6 +1657,294 @@ public class MainController {
     }
 
     // ========= Main downloads list (center) =========
+
+    // Helper: parse yt-dlp human-readable size token (e.g. 77.59MiB) to bytes
+    private static long parseHumanSizeToBytes(String tok) {
+        if (tok == null) return -1;
+        String s = tok.trim();
+        if (s.isEmpty()) return -1;
+
+        // yt-dlp tokens are typically like: 77.59MiB, 1.06GiB, 563.11MiB, 12.3KiB
+        double num;
+        String unit;
+        int cut = -1;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (!(Character.isDigit(c) || c == '.')) { cut = i; break; }
+        }
+        if (cut <= 0) return -1;
+        try { num = Double.parseDouble(s.substring(0, cut)); } catch (Exception e) { return -1; }
+        unit = s.substring(cut).trim();
+
+        long mul;
+        String u = unit.toLowerCase(java.util.Locale.ROOT);
+        if (u.startsWith("kib")) mul = 1024L;
+        else if (u.startsWith("mib")) mul = 1024L * 1024L;
+        else if (u.startsWith("gib")) mul = 1024L * 1024L * 1024L;
+        else if (u.startsWith("tib")) mul = 1024L * 1024L * 1024L * 1024L;
+        else if (u.startsWith("kb")) mul = 1000L;
+        else if (u.startsWith("mb")) mul = 1000L * 1000L;
+        else if (u.startsWith("gb")) mul = 1000L * 1000L * 1000L;
+        else if (u.startsWith("b")) mul = 1L;
+        else return -1;
+
+        return (long) Math.max(0, num * mul);
+    }
+
+    // --- Size probing helpers ---
+    // ========= Start Download Row (single video/file) =========
+
+    // Starts a download for a single DownloadRow (not playlist).
+
+    private Long probeContentLength(String url) {
+        if (url == null || url.isBlank()) return null;
+        java.net.HttpURLConnection conn = null;
+        try {
+            conn = (java.net.HttpURLConnection) new java.net.URL(url.trim()).openConnection();
+            conn.setInstanceFollowRedirects(true);
+            conn.setConnectTimeout(6500);
+            conn.setReadTimeout(6500);
+            conn.setRequestMethod("HEAD");
+            conn.setRequestProperty("User-Agent", "GrabX/1.0");
+            conn.connect();
+            long len = conn.getContentLengthLong();
+            return len > 0 ? len : null;
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            try { if (conn != null) conn.disconnect(); } catch (Exception ignored) {}
+        }
+    }
+
+//    private Long fetchSizeWithYtDlp(String url, String mode, String quality) {
+//        if (url == null || url.isBlank()) return null;
+//        try {
+//            java.nio.file.Path yt = com.grabx.app.grabx.util.YtDlpManager.ensureAvailable();
+//            if (yt == null) return null;
+//
+//            boolean audioOnly = MODE_AUDIO.equals(mode) || "Audio".equalsIgnoreCase(mode) || "Audio only".equalsIgnoreCase(mode);
+//
+//            String selector;
+//            if (audioOnly) {
+//                selector = "bestaudio/best";
+//            } else {
+//                String q = (quality == null) ? QUALITY_BEST : quality;
+//                if (q == null || q.isBlank() || QUALITY_SEPARATOR.equals(q) || QUALITY_BEST.equals(q)) {
+//                    selector = "bv*+ba/best";
+//                } else {
+//                    int h = parseHeightFromLabel(q);
+//                    selector = (h > 0)
+//                            ? ("bv*[height<=" + h + "]+ba/b[height<=" + h + "]/best")
+//                            : "bv*+ba/best";
+//                }
+//            }
+//
+//            ProcessBuilder pb = new ProcessBuilder(
+//                    yt.toAbsolutePath().toString(),
+//                    "--no-warnings",
+//                    "--no-playlist",
+//                    "--skip-download",
+//                    "--encoding", "utf-8",
+//                    "-f", selector,
+//                    "--print", "%(filesize)s|%(filesize_approx)s",
+//                    url.trim()
+//            );
+//            pb.redirectErrorStream(true);
+//            Process p = pb.start();
+//
+//            String last = null;
+//            try (var br = new java.io.BufferedReader(
+//                    new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+//                String line;
+//                while ((line = br.readLine()) != null) {
+//                    String s = line.trim();
+//                    if (s.isEmpty()) continue;
+//                    String sl = s.toLowerCase(java.util.Locale.ROOT);
+//                    if (sl.startsWith("warning:")) continue;
+//                    if (sl.startsWith("error:")) return null;
+//                    last = s;
+//                }
+//            }
+//
+//            int code = p.waitFor();
+//            if (code != 0 || last == null) return null;
+//
+//            String[] parts = last.split("\\|", -1);
+//            if (parts.length == 0) return null;
+//
+//            Long exact = parseLongSafeObj(parts[0]);
+//            if (exact != null && exact > 0) return exact;
+//
+//            if (parts.length > 1) {
+//                Long approx = parseLongSafeObj(parts[1]);
+//                if (approx != null && approx > 0) return approx;
+//            }
+//
+//            return null;
+//
+//        } catch (Exception ignored) {
+//            return null;
+//        }
+//    }
+
+    private Long fetchSizeWithYtDlp(String url, String mode, String quality) {
+        if (url == null || url.isBlank()) return null;
+
+        final String u = url.trim();
+
+        try {
+            java.nio.file.Path yt = com.grabx.app.grabx.util.YtDlpManager.ensureAvailable();
+            if (yt == null) return null;
+
+            boolean audioOnly = MODE_AUDIO.equals(mode)
+                    || "Audio".equalsIgnoreCase(mode)
+                    || "Audio only".equalsIgnoreCase(mode);
+
+            // Build EXACT selector (same as download)
+            String selector;
+            if (audioOnly) {
+                selector = "bestaudio/best";
+            } else {
+                String q = (quality == null) ? QUALITY_BEST : quality;
+                if (q == null || q.isBlank() || QUALITY_SEPARATOR.equals(q) || QUALITY_BEST.equals(q)) {
+                    selector = "bv*+ba/best";
+                } else {
+                    int h = parseHeightFromLabel(q);
+                    if (h > 0) selector = "bv*[height<=" + h + "]+ba/b[height<=" + h + "]/best";
+                    else selector = "bv*+ba/best";
+                }
+            }
+
+            // ✅ CACHE HERE (THIS is where your snippet belongs)
+            String key = u + "||" + selector;
+            Long cached = SIZE_CACHE.get(key);
+            if (cached != null && cached > 0) return cached;
+
+            java.util.List<String> cmd = new java.util.ArrayList<>();
+            cmd.add(yt.toAbsolutePath().toString());
+            cmd.add("-J");
+            cmd.add("--no-playlist");
+            cmd.add("--skip-download");
+            cmd.add("--no-warnings");
+            cmd.add("-f");
+            cmd.add(selector);
+            cmd.add(u);
+
+            ProcessBuilder pb = new ProcessBuilder(cmd);
+            pb.redirectErrorStream(true);
+            pb.environment().putIfAbsent("PYTHONIOENCODING", "utf-8");
+
+            Process p = pb.start();
+
+            StringBuilder sb = new StringBuilder(256 * 1024);
+            try (java.io.BufferedReader br = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = br.readLine()) != null) sb.append(line).append('\n');
+            }
+            p.waitFor();
+
+            String json = sb.toString();
+            if (json.isBlank()) return null;
+
+            long duration = extractLongFieldFast(json, "duration");
+
+            long total = 0L;
+
+            int rf = json.indexOf("\"requested_formats\"");
+            if (rf >= 0) {
+                int arrStart = json.indexOf('[', rf);
+                if (arrStart > 0) {
+                    int arrEnd = findMatchingBracket(json, arrStart, '[', ']');
+                    if (arrEnd > arrStart) {
+                        String arr = json.substring(arrStart, arrEnd + 1);
+
+                        java.util.regex.Matcher objM = java.util.regex.Pattern
+                                .compile("\\{[^\\{\\}]*\\}")
+                                .matcher(arr);
+
+                        while (objM.find()) {
+                            String obj = objM.group();
+
+                            long part = extractLongFieldFast(obj, "filesize");
+                            if (part <= 0) part = extractLongFieldFast(obj, "filesize_approx");
+
+                            if (part <= 0 && duration > 0) {
+                                long tbr = extractLongFieldFast(obj, "tbr"); // Kbps
+                                if (tbr > 0) part = (long) ((tbr * 1000.0 / 8.0) * duration);
+                            }
+
+                            if (part > 0) total += part;
+                        }
+                    }
+                }
+            }
+
+            // fallback: single format
+            if (total <= 0) {
+                long fs = extractLongFieldFast(json, "filesize");
+                if (fs <= 0) fs = extractLongFieldFast(json, "filesize_approx");
+                if (fs > 0) total = fs;
+            }
+
+            if (total > 0) {
+                SIZE_CACHE.put(key, total);
+                return total;
+            }
+
+            return null;
+
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static long extractLongFieldFast(String jsonChunk, String field) {
+        if (jsonChunk == null || jsonChunk.isBlank() || field == null || field.isBlank()) return 0L;
+        try {
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("\\\"" + java.util.regex.Pattern.quote(field) + "\\\"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)")
+                    .matcher(jsonChunk);
+            if (!m.find()) return 0L;
+            String v = m.group(1);
+            if (v == null || v.isBlank()) return 0L;
+            if (v.contains(".")) return (long) Double.parseDouble(v);
+            return Long.parseLong(v);
+        } catch (Exception ignored) {
+            return 0L;
+        }
+    }
+
+    private static int findMatchingBracket(String s, int start, char open, char close) {
+        if (s == null || start < 0 || start >= s.length()) return -1;
+        int depth = 0;
+        boolean inStr = false;
+        char prev = 0;
+        for (int i = start; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '"' && prev != '\\') inStr = !inStr;
+            if (!inStr) {
+                if (c == open) depth++;
+                else if (c == close) {
+                    depth--;
+                    if (depth == 0) return i;
+                }
+            }
+            prev = c;
+        }
+        return -1;
+    }
+
+    private static Long parseLongSafeObj(String s) {
+        try {
+            if (s == null) return null;
+            s = s.trim();
+            if (s.isEmpty() || "NA".equalsIgnoreCase(s) || "None".equalsIgnoreCase(s)) return null;
+            return Long.parseLong(s);
+        } catch (Exception e) {
+            return null;
+        }
+    }
     private static final String ICON_FOLDER_OUTLINE =
             "M20 6h-8.17L10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 14H4V6h5.17l2 2H20v12z";
 
@@ -1444,11 +1995,6 @@ public class MainController {
         b.setText(null);
         b.setGraphic(svgIcon(svgPath, 34));
 
-//        if (tooltipText != null && !tooltipText.isBlank()) {
-//            Tooltip t = new Tooltip(tooltipText);
-//            t.getStyleClass().add("gx-tooltip");
-//            b.setTooltip(t);
-//        }
     }
 
 
@@ -1939,7 +2485,11 @@ public class MainController {
                 bar.setVisible(true);
                 bar.setManaged(true);
 
-                // Toggle which buttons appear based on state (reactive)
+        // Toggle which buttons appear based on state (reactive)
+        // ----------- In your download progress parsing logic, you must update the size label as described -----------
+        // The below is a template for where you parse progress lines and update item.size:
+        // When parsing [download] lines, set "Downloaded: <downloadedPart>" instead of "<downloaded> / <total>"
+        // On completion, set "Final size: <size>" if possible.
                 DownloadRow.State st = DownloadRow.State.QUEUED;
                 try { st = item.state.get(); } catch (Exception ignored) {}
                 applyButtonsForState(st);
@@ -2198,29 +2748,6 @@ public class MainController {
             statusText.setText("Queued: " + row.title.get());
         }
 
-        // 5) جلب العنوان الحقيقي بالخلفية (بدون تجميد الواجهة)
-//        if (url != null && !url.isBlank()) {
-//            new Thread(() -> {
-//                String realTitle = fetchTitleWithYtDlp(url);
-//                Platform.runLater(() -> {
-//                    if (realTitle != null && !realTitle.isBlank()) {
-//                        row.title.set(realTitle);
-//                        if (statusText != null) {
-//                            statusText.setText("Queued: " + realTitle);
-//                        }
-//                    } else {
-//                        // Fallback: don't leave it as dots forever
-//                        String fallback = shorten(url);
-//                        if (fallback == null || fallback.isBlank()) fallback = "Unknown title";
-//                        row.title.set(fallback);
-//                        if (statusText != null) {
-//                            statusText.setText("Queued: " + fallback);
-//                        }
-//                    }
-//                });
-//            }, "yt-title-probe").start();
-//        }
-
         // 5) جلب العنوان الحقيقي بالخلفية (بدون yt-dlp لتقليل التأخير)
 // استخدام YouTube oEmbed (سريع وخفيف) بدل تشغيل yt-dlp مرة ثانية.
         if (url != null && !url.isBlank()) {
@@ -2242,6 +2769,9 @@ public class MainController {
 
 
     }
+
+
+    // Only keep the version with yt-dlp --progress-template and regex patterns DEST1, DEST2, MERGE, PROG, etc.
 
     private void startDownloadRow(DownloadRow row, boolean resume) {
         if (row == null) return;
@@ -2277,15 +2807,13 @@ public class MainController {
             final java.util.regex.Pattern DEST2 =
                     java.util.regex.Pattern.compile("\\[ExtractAudio\\]\\s+Destination:\\s+(.+)$");
             final java.util.regex.Pattern MERGE =
-                    java.util.regex.Pattern.compile("\\[Merger\\]\\s+Merging formats into\\s+\"(.+)\"");
+                    java.util.regex.Pattern.compile("\\[Merger\\]\\s+Merging formats into\\s+\\\"(.+)\\\"");
 
             // our progress template (percent may have padding)
             // gx:  12.3%| 1.2MiB/s| 00:12
             final java.util.regex.Pattern PROG =
                     java.util.regex.Pattern.compile(
                             "^gx:\\s*([0-9.]+)%\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)$"
-
-//                            "^gx:\\s*([0-9.]+)%\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*(.+)$"
                     );
 
             // fallback native progress line
@@ -2332,15 +2860,6 @@ public class MainController {
                                 + "|%(progress.total_bytes)s"
                                 + "|%(progress.total_bytes_estimate)s"
                 );
-
-//                cmd.add("--progress-template");
-//                cmd.add(
-//                        "download:gx:%(progress._percent_str)s"
-//                                + "|%(progress._speed_str)s"
-//                                + "|%(progress._eta_str)s"
-//                                + "|%(progress._downloaded_bytes_str)s"
-//                                + "/%(progress._total_bytes_str)s"
-//                );
 
                 if (audioOnly) {
                     cmd.add("-x");
@@ -2409,7 +2928,6 @@ public class MainController {
                             }
                         } catch (Exception ignored) {}
 
-
                         // progress (preferred)
                         var m = PROG.matcher(s);
                         if (m.find()) {
@@ -2435,9 +2953,19 @@ public class MainController {
                             long total = parseLongSafe(m.group(5));
                             if (total <= 0) total = parseLongSafe(m.group(6));
 
-                            final String sizeText = (total > 0)
-                                    ? (formatBytesDecimal(downloaded) + " / " + formatBytesDecimal(total))
-                                    : (downloaded > 0 ? formatBytesDecimal(downloaded) : "");
+                            // Store raw byte counters (optional, but useful)
+                            row.downloadedBytes.set(Math.max(0, downloaded));
+                            row.totalBytes.set(total > 0 ? total : -1);
+
+                            // UI size text: downloaded / total (if total known)
+                            final String sizeText;
+                            if (downloaded > 0 && total > 0) {
+                                sizeText = formatBytesDecimal(downloaded) + " / " + formatBytesDecimal(total);
+                            } else if (downloaded > 0) {
+                                sizeText = formatBytesDecimal(downloaded);
+                            } else {
+                                sizeText = "";
+                            }
 
                             double fpct = pct;
 
@@ -2484,23 +3012,7 @@ public class MainController {
                         }
 
                         // phase updates during preparing
-//                        if (!startedDownloading.get()) {
-//                            if (s.startsWith("[info]")) {
-//                                String phase = s.length() > 70 ? s.substring(0, 70) + "..." : s;
-//                                Platform.runLater(() -> row.status.set(phase));
-//                            } else if (s.startsWith("[download]")) {
-//                                if (startedDownloading.compareAndSet(false, true)) {
-//                                    Platform.runLater(() -> {
-//                                        row.status.set("Downloading");
-//                                        if (row.progress.get() < 0) row.progress.set(0);
-//                                    });
-//                                }
-//                            }
-//                        }
-
-                        // phase updates during preparing
                         if (!startedDownloading.get()) {
-
                             // Convert noisy yt-dlp phases to a short friendly text
                             String phase = null;
                             String sl = s.toLowerCase(java.util.Locale.ROOT);
@@ -2559,7 +3071,20 @@ public class MainController {
                     if (code == 0) {
                         row.setState(DownloadRow.State.COMPLETED);
                         row.status.set("Completed");
-                        row.size.set("");
+                        // CHANGED: set final size from disk if possible
+                        try {
+                            java.nio.file.Path out = null;
+                            if (row.outputFile != null) out = row.outputFile.get();
+                            if (out != null && java.nio.file.Files.exists(out)) {
+                                long sz = java.nio.file.Files.size(out);
+                                row.size.set(formatBytesDecimal(sz));
+//                                row.size.set("Final size: " + formatBytesDecimal(sz));
+                            } else {
+                                row.size.set("");
+                            }
+                        } catch (Exception ignored) {
+                            row.size.set("");
+                        }
                         row.progress.set(1.0);
                         row.speed.set("");
                         row.eta.set("");
@@ -2713,7 +3238,7 @@ public class MainController {
                 return s.isEmpty() ? null : s;
             }
 
-            // shorts/<id>
+
             int sh = u.indexOf("/shorts/");
             if (sh >= 0) {
                 String s = u.substring(sh + "/shorts/".length());
@@ -4056,6 +4581,101 @@ public class MainController {
         if (s == null) return false;
         String ss = s.trim().toLowerCase();
         return ss.startsWith("http://") || ss.startsWith("https://");
+    }
+
+
+    // Cache probe results (per URL) so Add Link can switch qualities instantly
+    private static final long VIDEO_INFO_TTL_MS = 10 * 60 * 1000L; // 10 minutes
+    private static final java.util.concurrent.ConcurrentHashMap<String, ProbeQualitiesResult> VIDEO_INFO_CACHE =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static final class ProbeQualitiesResult {
+        final java.util.Set<Integer> heights;              // normalized heights
+        final java.util.Map<Integer, Long> bytesByHeight;  // normalized height -> total bytes (video+audio)
+        final java.util.Map<Integer, String> sizeByHeight; // normalized height -> "~xx MB" text
+        final long bestBytes;                               // best (highest height) bytes
+        final long createdAtMs;
+
+        ProbeQualitiesResult(java.util.Set<Integer> heights,
+                             java.util.Map<Integer, Long> bytesByHeight,
+                             java.util.Map<Integer, String> sizeByHeight,
+                             long bestBytes,
+                             long createdAtMs) {
+            this.heights = (heights == null) ? java.util.Set.of() : heights;
+            this.bytesByHeight = (bytesByHeight == null) ? java.util.Map.of() : bytesByHeight;
+            this.sizeByHeight = (sizeByHeight == null) ? java.util.Map.of() : sizeByHeight;
+            this.bestBytes = bestBytes;
+            this.createdAtMs = createdAtMs;
+        }
+
+        boolean isFresh() {
+            return (System.currentTimeMillis() - createdAtMs) <= VIDEO_INFO_TTL_MS;
+        }
+    }
+    // Split a JSON array like [ {...}, {...}, ... ] into top-level object strings (no external JSON lib)
+    private static java.util.List<String> splitTopLevelJsonObjects(String jsonArray) {
+        java.util.ArrayList<String> out = new java.util.ArrayList<>();
+        if (jsonArray == null || jsonArray.isBlank()) return out;
+
+        int i = 0;
+        // find first '{'
+        while (i < jsonArray.length() && jsonArray.charAt(i) != '{') i++;
+        if (i >= jsonArray.length()) return out;
+
+        boolean inStr = false;
+        char prev = 0;
+        int depth = 0;
+        int start = -1;
+
+        for (; i < jsonArray.length(); i++) {
+            char c = jsonArray.charAt(i);
+
+            if (c == '"' && prev != '\\') inStr = !inStr;
+
+            if (!inStr) {
+                if (c == '{') {
+                    if (depth == 0) start = i;
+                    depth++;
+                } else if (c == '}') {
+                    depth--;
+                    if (depth == 0 && start >= 0) {
+                        out.add(jsonArray.substring(start, i + 1));
+                        start = -1;
+                    }
+                }
+            }
+
+            prev = c;
+        }
+
+        return out;
+    }
+
+    private static String extractStringFieldFast(String jsonChunk, String field) {
+        if (jsonChunk == null || jsonChunk.isBlank() || field == null || field.isBlank()) return null;
+        try {
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("\\\"" + java.util.regex.Pattern.quote(field) + "\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"")
+                    .matcher(jsonChunk);
+            if (!m.find()) return null;
+            String v = m.group(1);
+            return (v == null) ? null : v.trim();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static double extractDoubleFieldFast(String jsonChunk, String field) {
+        if (jsonChunk == null || jsonChunk.isBlank() || field == null || field.isBlank()) return 0.0;
+        try {
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("\\\"" + java.util.regex.Pattern.quote(field) + "\\\"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)")
+                    .matcher(jsonChunk);
+            if (!m.find()) return 0.0;
+            return Double.parseDouble(m.group(1));
+        } catch (Exception ignored) {
+            return 0.0;
+        }
     }
 
 }

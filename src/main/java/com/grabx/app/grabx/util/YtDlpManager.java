@@ -300,20 +300,6 @@ public final class YtDlpManager {
         return Paths.get(System.getProperty("user.home"), ".grabx", "tools");
     }
 
-//    private static String outputBinaryFileName() {
-//        OS os = detectOS();
-//        ARCH arch = detectArch();
-//
-//        if (os == OS.WINDOWS) {
-//            if (arch == ARCH.X86) return "yt-dlp_x86.exe";
-//            if (arch == ARCH.ARM64) return "yt-dlp_arm64.exe";
-//            return "yt-dlp.exe";
-//        }
-//        if (os == OS.MAC) return "yt-dlp_macos";                 // universal
-//        if (os == OS.LINUX) return (arch == ARCH.ARM64) ? "yt-dlp_linux_aarch64" : "yt-dlp_linux";
-//        return (os == OS.WINDOWS) ? "yt-dlp.exe" : "yt-dlp";
-//    }
-
     private static String outputBinaryFileName() {
         OS os = detectOS();
         if (os == OS.WINDOWS) return "yt-dlp.exe";

@@ -30,9 +30,12 @@ public class DownloadRow {
     public final DoubleProperty progress = new SimpleDoubleProperty(0);
     public final StringProperty speed = new SimpleStringProperty("");
     public final StringProperty eta = new SimpleStringProperty("");
-    public final StringProperty size = new SimpleStringProperty(""); // e.g. "6.52 MB / 1.12 GB"
+    public final StringProperty size = new SimpleStringProperty(""); // e.g. "Downloaded: 6.52 MB" or "Final size: 674.3 MB"
 
     public final ObjectProperty<State> state = new SimpleObjectProperty<>(State.QUEUED);
+
+    public final LongProperty totalBytes = new SimpleLongProperty(-1);
+    public final LongProperty downloadedBytes = new SimpleLongProperty(0);
 
     public DownloadRow(String url, String initialTitle, String folder, String mode, String quality) {
         this.url = url;
