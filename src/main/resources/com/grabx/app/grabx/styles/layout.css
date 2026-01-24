@@ -548,3 +548,210 @@
 }
 
 
+
+
+/* Safety: some JavaFX skins match by type name rather than the style-class selector */
+
+DialogPane.gx-dialog {
+    -fx-background-color:#121826;
+    -fx-background-radius: 15;
+    -fx-border-radius: 15;
+    -fx-padding: 1;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.60), 26, 0.22, 0, 12);
+    -fx-background-insets: 0;
+    -fx-border-insets: 0;
+}
+
+/* Dialog content wrapper used by Remove-download confirm */
+.gx-dialog-content {
+    -fx-background-color: transparent;
+    -fx-padding: 18 18 10 18;
+}
+
+.gx-dialog-msg {
+    -fx-text-fill: rgba(255,255,255,0.86);
+    -fx-font-size: 13px;
+    -fx-font-weight: 700;
+}
+
+/* ===============================
+   Remove download confirm (mac-like)
+   =============================== */
+
+.gx-remove-overlay {
+    -fx-background-color: rgba(0,0,0,0.55);
+}
+
+.gx-remove-card {
+    -fx-background-color: #232326;
+    -fx-background-radius: 22;
+    -fx-border-radius: 22;
+    -fx-border-color: rgba(255,255,255,0.10);
+    -fx-border-width: 1;
+    -fx-padding: 20 22 18 22;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.60), 28, 0.22, 0, 14);
+}
+
+.gx-remove-icon {
+    -fx-min-width: 72;
+    -fx-min-height: 72;
+    -fx-max-width: 72;
+    -fx-max-height: 72;
+    -fx-background-radius: 18;
+    -fx-background-color: rgba(255,255,255,0.06);
+    -fx-alignment: center;
+}
+
+.gx-remove-icon-text {
+    -fx-font-size: 38px;
+    -fx-font-weight: 900;
+    -fx-text-fill: #F7D154;
+}
+
+.gx-remove-title {
+    -fx-font-size: 18px;
+    -fx-font-weight: 900;
+    -fx-text-fill: rgba(255,255,255,0.92);
+}
+
+.gx-remove-filename {
+    -fx-font-size: 18px;
+    -fx-font-weight: 900;
+    -fx-text-fill: rgba(255,255,255,0.92);
+}
+
+.gx-remove-check {
+    -fx-text-fill: rgba(255,255,255,0.82);
+    -fx-font-weight: 800;
+}
+
+.gx-remove-check .box {
+    -fx-background-color: rgba(255,255,255,0.08);
+    -fx-border-color: rgba(255,255,255,0.18);
+    -fx-border-radius: 8;
+    -fx-background-radius: 8;
+}
+
+.gx-remove-check:selected .mark {
+    -fx-background-color: white;
+}
+
+.gx-remove-no {
+    -fx-background-color: transparent;
+    -fx-border-color: rgba(116,168,255,0.65);
+    -fx-border-width: 2;
+    -fx-text-fill: rgba(255,255,255,0.90);
+    -fx-font-weight: 900;
+    -fx-background-radius: 18;
+    -fx-border-radius: 18;
+    -fx-padding: 12 34;
+    -fx-min-width: 170;
+}
+
+.gx-remove-no:hover {
+    -fx-background-color: rgba(116,168,255,0.12);
+}
+
+.gx-remove-yes {
+    -fx-background-color: #2E5BFF;
+    -fx-text-fill: white;
+    -fx-font-weight: 900;
+    -fx-background-radius: 18;
+    -fx-padding: 12 34;
+    -fx-min-width: 170;
+}
+
+.gx-remove-yes:hover {
+    -fx-background-color: #2A51E6;
+}
+
+
+.gx-remove-overlay {
+    -fx-background-color: rgba(0,0,0,0.35);
+}
+
+.gx-remove-card {
+    -fx-background-color: #2A2A2C;
+    -fx-background-radius: 26;
+    -fx-border-radius: 26;
+    -fx-border-color: rgba(255,255,255,0.10);
+    -fx-border-width: 1;
+    -fx-padding: 22 22 18 22;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.65), 34, 0.22, 0, 16);
+}
+
+.gx-remove-icon {
+    -fx-min-width: 86;
+    -fx-min-height: 86;
+    -fx-max-width: 86;
+    -fx-max-height: 86;
+    -fx-background-radius: 22;
+    -fx-background-color: rgba(255,255,255,0.06);
+    -fx-alignment: center;
+}
+
+.gx-remove-icon-text {
+    -fx-font-size: 44px;
+    -fx-font-weight: 900;
+    -fx-text-fill: #F7D154;
+}
+
+.gx-remove-title {
+    -fx-font-size: 20px;
+    -fx-font-weight: 900;
+    -fx-text-fill: rgba(255,255,255,0.94);
+}
+
+.gx-remove-filename {
+    -fx-font-size: 18px;
+    -fx-font-weight: 800;
+    -fx-text-fill: rgba(255,255,255,0.92);
+}
+
+.gx-remove-check {
+    -fx-text-fill: rgba(255,255,255,0.82);
+    -fx-font-weight: 800;
+    -fx-font-size: 14px;
+}
+
+.gx-remove-check .box {
+    -fx-background-color: rgba(255,255,255,0.08);
+    -fx-border-color: rgba(255,255,255,0.18);
+    -fx-border-radius: 9;
+    -fx-background-radius: 9;
+}
+
+.gx-remove-check:selected .mark {
+    -fx-background-color: white;
+}
+
+.gx-remove-no {
+    -fx-background-color: transparent;
+    -fx-border-color: rgba(116,168,255,0.70);
+    -fx-border-width: 2;
+    -fx-text-fill: rgba(255,255,255,0.92);
+    -fx-font-weight: 900;
+    -fx-font-size: 15px;
+    -fx-background-radius: 22;
+    -fx-border-radius: 22;
+    -fx-padding: 12 30;
+    -fx-min-width: 180;
+}
+
+.gx-remove-no:hover {
+    -fx-background-color: rgba(116,168,255,0.12);
+}
+
+.gx-remove-yes {
+    -fx-background-color: #2E5BFF;
+    -fx-text-fill: white;
+    -fx-font-weight: 900;
+    -fx-font-size: 15px;
+    -fx-background-radius: 22;
+    -fx-padding: 12 30;
+    -fx-min-width: 180;
+}
+
+.gx-remove-yes:hover {
+    -fx-background-color: #2A51E6;
+}

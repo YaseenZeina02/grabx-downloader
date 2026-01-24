@@ -1,6 +1,5 @@
 package com.grabx.app.grabx.core.model;
 
-import static com.grabx.app.grabx.MainController.thumbFromUrl;
 
 import javafx.beans.property.*;
 
@@ -8,6 +7,15 @@ public class DownloadRow {
 
     public final javafx.beans.property.ObjectProperty<java.nio.file.Path> outputFile =
             new javafx.beans.property.SimpleObjectProperty<>(null);
+
+    public final BooleanProperty titleLocked = new SimpleBooleanProperty(false);
+
+    public void setTitleOnce(String t) {
+        if (titleLocked.get()) return;
+        if (t == null || t.isBlank()) return;
+        title.set(t);
+        titleLocked.set(true);
+    }
 
     public enum State {
         QUEUED,
@@ -48,17 +56,29 @@ public class DownloadRow {
         }
 
         setState(State.QUEUED);
-        this.thumbUrl.set(thumbFromUrl(url));
     }
 
     public void setState(State s) {
         if (s == null) s = State.QUEUED;
         this.state.set(s);
 
+        // If we pause/cancel while still in "Preparing" (indeterminate progress = -1),
+        // freeze the progress bar instead of keeping the indeterminate animation.
+        try {
+            if (s == State.PAUSED || s == State.CANCELLED || s == State.FAILED) {
+                if (progress.get() < 0) progress.set(0);
+            }
+        } catch (Exception ignored) {}
+
         switch (s) {
             case QUEUED -> status.set("Queued");
             case DOWNLOADING -> status.set("Downloading");
-            case PAUSED -> status.set("Paused");
+            case PAUSED -> {
+                status.set("Paused");
+                // Stop showing speed/ETA during pause
+                speed.set("");
+                eta.set("");
+            }
             case COMPLETED -> status.set("Completed");
             case CANCELLED -> status.set("Cancelled");
             case FAILED -> status.set("Failed");

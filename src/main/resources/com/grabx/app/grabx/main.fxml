@@ -11,7 +11,6 @@
 <?import javafx.scene.layout.Region?>
 <?import javafx.scene.layout.VBox?>
 <?import javafx.scene.text.Text?>
-<?import org.kordamp.ikonli.javafx.FontIcon?>
 
 <BorderPane fx:id="root"
             prefHeight="820" prefWidth="1280"
@@ -35,9 +34,7 @@
 
                 <!-- Add Link -->
                 <Button fx:id="addLinkButton" onAction="#onAddLink" prefHeight="40" prefWidth="40">
-                    <graphic>
-                        <FontIcon iconLiteral="fas-plus" styleClass="font-icon" />
-                    </graphic>
+
                     <styleClass>
                         <String fx:value="gx-icon-btn" />
                         <String fx:value="gx-icon-primary" />
@@ -46,23 +43,22 @@
 
                 <!-- Pause All -->
                 <Button fx:id="pauseAllButton" onAction="#onPauseAll" prefHeight="40" prefWidth="40" styleClass="gx-icon-btn">
-                    <graphic>
-                        <FontIcon iconLiteral="fas-pause" styleClass="font-icon" />
-                    </graphic>
+
                 </Button>
 
                 <!-- Resume All -->
                 <Button fx:id="resumeAllButton" onAction="#onResumeAll" prefHeight="40" prefWidth="40" styleClass="gx-icon-btn">
-                    <graphic>
-                        <FontIcon iconLiteral="fas-play" styleClass="font-icon" />
-                    </graphic>
+
                 </Button>
 
                 <!-- Clear All -->
                 <Button fx:id="clearAllButton" onAction="#onClearAll" prefHeight="40" prefWidth="40">
-                    <graphic>
-                        <FontIcon iconLiteral="fas-trash-alt" styleClass="font-icon" />
-                    </graphic>
+                    <styleClass>
+                        <String fx:value="gx-icon-btn" />
+                        <String fx:value="gx-icon-danger" />
+                    </styleClass>
+
+                </Button><Button fx:id="cancelAllBtn" onAction="#onCanseleAll" prefHeight="40" prefWidth="40">
                     <styleClass>
                         <String fx:value="gx-icon-btn" />
                         <String fx:value="gx-icon-danger" />
@@ -71,9 +67,7 @@
 
                 <!-- Settings -->
                 <Button fx:id="settingsButton" onAction="#onSettings" prefHeight="40" prefWidth="40" styleClass="gx-icon-btn">
-                    <graphic>
-                        <FontIcon iconLiteral="fas-cog" styleClass="font-icon" />
-                    </graphic>
+
                 </Button>
 
             </HBox>

@@ -128,14 +128,6 @@
             dropshadow(gaussian, rgba(200,210,255,0.35), 10, 0.35, 0, 0);
 }
 
-/* ======================================================
-   Subtle animation (hover polish)
-   ====================================================== */
-
-/*.gx-btn {*/
-/*    -fx-background-color: inherit;*/
-/*}*/
-
 
 
 /* ======================================================
@@ -222,56 +214,6 @@
 
 
 
-/*!* ===============================*/
-/*   Tooltips (Hover Labels)*/
-/*   =============================== *!*/
-
-/*.tooltip.gx-tooltip {*/
-/*    -fx-font-size: 12px;*/
-/*    -fx-font-weight: 600;*/
-/*    -fx-text-fill: rgba(255,255,255,0.92);*/
-
-/*    -fx-background-color: rgba(12, 16, 24, 0.95);*/
-/*    -fx-background-radius: 10;*/
-
-/*    -fx-padding: 8 10;*/
-
-/*    -fx-border-color: rgba(255,255,255,0.10);*/
-/*    -fx-border-radius: 10;*/
-
-/*    !* subtle glow like your UI *!*/
-/*    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.55), 18, 0.2, 0, 6);*/
-/*}*/
-
-/*!* ===============================*/
-/*   Hover Label (custom popup)*/
-/*   =============================== *!*/
-
-/*.gx-hoverbubble {*/
-/*    -fx-background-color: rgba(18, 24, 38, 0.98);*/
-/*    -fx-background-radius: 12;*/
-
-/*    -fx-border-color: rgba(255,255,255,0.12);*/
-/*    -fx-border-radius: 12;*/
-/*    -fx-border-width: 1;*/
-
-/*    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.60), 22, 0.25, 0, 8);*/
-/*}*/
-
-/*.gx-hoverlabel {*/
-
-/*    -fx-font-size: 12px;*/
-/*    -fx-font-weight: 800;*/
-/*    -fx-text-fill: rgba(255,255,255,0.95);*/
-/*    -fx-padding: 8 12;*/
-/*}*/
-
-/*.gx-hoverarrow {*/
-/*    -fx-fill: rgba(18, 24, 38, 0.98);*/
-/*    -fx-stroke: rgba(255,255,255,0.12);*/
-/*    -fx-stroke-width: 1;*/
-/*}*/
-
 /* ===============================
    Tooltips (Hover Labels)
    =============================== */
@@ -297,34 +239,6 @@
 /* ===============================
    Hover Bubble (Custom in-scene tooltip)
    =============================== */
-
-
-/*.gx-hoverlabel {*/
-/*    -fx-font-size: 12px;*/
-/*    -fx-font-weight: 600;*/
-/*    -fx-text-fill: rgba(255,255,255,0.92);*/
-/*    -fx-padding: 8 10;*/
-/*}*/
-
-/*.gx-hoverbubble {*/
-/*    -fx-background-color: rgba(12, 16, 24, 0.92);*/
-/*    -fx-background-radius: 10;*/
-/*    -fx-background-insets: 0;*/
-
-/*    -fx-border-color: rgba(255,255,255,0.10);*/
-/*    -fx-border-radius: 10;*/
-/*    -fx-border-width: 1;*/
-
-/*    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.55), 14, 0.18, 0, 4);*/
-/*}*/
-
-/*.gx-hoverlabel {*/
-/*    !*-fx-background-color: rgba(12, 16, 24, 0.92);*!*/
-/*    -fx-font-size: 12px;*/
-/*    -fx-font-weight: 700;*/
-/*    -fx-text-fill: rgba(255,255,255,0.92);*/
-/*    -fx-padding: 8 12;*/
-/*}*/
 
 .gx-hoverbubble {
     /* خليه Container شفاف، والـ label هو اللي يرسم الفقاعة */
@@ -373,6 +287,8 @@
     -fx-text-fill: #E8ECF3;
     -fx-font-size: 14;
     -fx-font-weight: 800;
+    -fx-font-family: "Cairo";
+    /*-fx-font-weight: bold;*/
 }
 
 .gx-task-meta {

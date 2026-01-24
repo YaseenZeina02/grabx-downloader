@@ -3,12 +3,17 @@ package com.grabx.app.grabx;
 import com.grabx.app.grabx.core.model.DownloadRow;
 import com.grabx.app.grabx.ui.components.HoverBubble;
 import com.grabx.app.grabx.ui.components.NoSelectionModel;
+import com.grabx.app.grabx.ui.dialogs.NativeDialogs;
 import com.grabx.app.grabx.ui.probe.ProbeQualitiesResult;
+import javafx.animation.*;
+import javafx.geometry.NodeOrientation;
+import javafx.geometry.Pos;
 import javafx.scene.layout.HBox;
 import javafx.collections.transformation.FilteredList;
 
 import java.awt.Desktop;
 import java.net.URI;
+import java.nio.file.Files;
 import java.util.Map;
 import java.util.concurrent.*;
 
@@ -22,13 +27,14 @@ import com.grabx.app.grabx.ui.probe.AudioFormatInfo;
 import com.grabx.app.grabx.ui.probe.ProbeAudioResult;
 import com.grabx.app.grabx.ui.sidebar.SidebarItem;
 import com.grabx.app.grabx.ui.playlist.PlaylistEntry;
-import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
 import javafx.geometry.Bounds;
+
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.prefs.Preferences;
 import javafx.geometry.Insets;
 import javafx.scene.Node;
@@ -68,6 +74,9 @@ public class MainController {
     private Button resumeAllButton;
     @FXML
     private Button clearAllButton;
+
+    @FXML
+    private Button cancelAllBtn;
 
     @FXML
     private Button addLinkButton;
@@ -115,8 +124,30 @@ public class MainController {
 
     private final java.util.Map<DownloadRow, Process> activeProcesses = new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.Map<DownloadRow, String> stopReasons = new java.util.concurrent.ConcurrentHashMap<>();
-//    private static final String YTDLP_OUT_TMPL = "%(title).200B [%(id)s].%(ext)s";
+    //    private static final String YTDLP_OUT_TMPL = "%(title).200B [%(id)s].%(ext)s";
     private static final String YTDLP_OUT_TMPL = "%(title)s.%(ext)s";
+
+
+    // =====================
+    // Download history (JSON) – lightweight persistence
+    // =====================
+    private static final Path HISTORY_DIR  = Paths.get(System.getProperty("user.home"), ".grabx");
+    private static final Path HISTORY_FILE = HISTORY_DIR.resolve("download_history.json");
+    private static final int HISTORY_MAX_ITEMS = 500; // لاحقاً: user setting
+
+    private final AtomicBoolean historySaveScheduled = new AtomicBoolean(false);
+    private void scheduleHistorySave() {
+        // debounce: لو صار 50 تحديث بسرعة ما نحفظ 50 مرة
+        if (!historySaveScheduled.compareAndSet(false, true)) return;
+
+        UI_DELAY_EXEC.schedule(() -> {
+            try {
+                saveDownloadHistoryAsync();
+            } finally {
+                historySaveScheduled.set(false);
+            }
+        }, 600, TimeUnit.MILLISECONDS);
+    }
 
     private static boolean probeVideoQualitiesAsync(
             String videoUrl,
@@ -153,8 +184,6 @@ public class MainController {
         }
     }
 
-
-
     private final ObservableList<DownloadRow> downloadItems = FXCollections.observableArrayList();
     private FilteredList<DownloadRow> filteredDownloadItems;
 
@@ -167,11 +196,13 @@ public class MainController {
 
 
 
+
     // ========= Actions =========
 
     @FXML
     public void onAddLink(ActionEvent event) {
         String clip = readClipboardTextSafe();
+        clip = (clip == null) ? null : clip.trim();
         showAddLinkDialog(isHttpUrl(clip) ? clip : null);
     }
 
@@ -186,18 +217,95 @@ public class MainController {
     }
 
     @FXML
+    public void onCanseleAll(ActionEvent actionEvent) {
+        cancelAllActiveDownloads();
+        scheduleHistorySave();
+    }
+
+    @FXML
     public void onPauseAll(ActionEvent actionEvent) {
-        if (statusText != null) statusText.setText("Pause all");
+        int affected = 0;
+
+        for (DownloadRow row : downloadItems) {
+            if (row == null) continue;
+
+            DownloadRow.State st;
+            try { st = row.state.get(); } catch (Exception ignored) { continue; }
+
+            // Pause only active ones
+            if (st == DownloadRow.State.DOWNLOADING || st == DownloadRow.State.QUEUED) {
+                Process p = activeProcesses.get(row);
+                try {
+                    if (p != null && p.isAlive()) {
+                        stopReasons.put(row, "PAUSE");
+                        p.destroy(); // stop process (simple pause behavior)
+                    }
+                } catch (Exception ignored) {}
+
+                row.setState(DownloadRow.State.PAUSED);
+                affected++;
+            }
+        }
+
+        if (statusText != null) {
+            statusText.setText(affected > 0 ? ("Paused " + affected + " item(s)") : "Nothing to pause");
+        }
+
+        scheduleHistorySave();
     }
 
     @FXML
     public void onResumeAll(ActionEvent actionEvent) {
-        if (statusText != null) statusText.setText("Resume all");
+        int affected = 0;
+
+        for (DownloadRow row : downloadItems) {
+            if (row == null) continue;
+
+            DownloadRow.State st;
+            try { st = row.state.get(); } catch (Exception ignored) { continue; }
+
+            if (st == DownloadRow.State.PAUSED || st == DownloadRow.State.QUEUED) {
+                try {
+                    startDownloadRow(row, true);
+                    affected++;
+                } catch (Exception ignored) {
+                    row.setState(DownloadRow.State.PAUSED);
+                }
+            }
+        }
+
+        if (statusText != null) {
+            statusText.setText(affected > 0 ? ("Resumed " + affected + " item(s)") : "Nothing to resume");
+        }
+
+        scheduleHistorySave();
     }
 
     @FXML
     public void onClearAll(ActionEvent actionEvent) {
-        if (statusText != null) statusText.setText("Clear all");
+        // Clear from the UI only (do NOT delete files). Keep active downloads.
+        java.util.List<DownloadRow> toRemove = new java.util.ArrayList<>();
+
+        for (DownloadRow row : downloadItems) {
+            if (row == null) continue;
+
+            DownloadRow.State st;
+            try { st = row.state.get(); } catch (Exception ignored) { continue; }
+
+            // Remove anything that is not actively downloading/queued
+            if (st != DownloadRow.State.DOWNLOADING && st != DownloadRow.State.QUEUED) {
+                toRemove.add(row);
+            }
+        }
+
+        if (!toRemove.isEmpty()) {
+            downloadItems.removeAll(toRemove);
+            scheduleHistorySave();
+        }
+
+        if (statusText != null) {
+            statusText.setText(toRemove.isEmpty() ? "Nothing to clear" : ("Cleared " + toRemove.size() + " item(s)"));
+        }
     }
 
     // Matches: 1080p, 1080p60, 2160p, 2160p60 ... (yt-dlp often prints p60 without WxH)
@@ -540,7 +648,16 @@ public class MainController {
         installTooltips();
         setupHoverBubbleLayer();
 
+
+        setupSvgButton(addLinkButton, ICON_PLUS);
+        setupSvgButton(pauseAllButton, ICON_PAUSE);
+        setupSvgButton(resumeAllButton, ICON_PLAY);
+        setupSvgButton(cancelAllBtn, ICON_CANCEL);
+        setupSvgButton(clearAllButton, ICON_CLEAR);
+        setupSvgButton(settingsButton, ICON_SETTINGS);
+
         // ✅ Make hover/press work on the whole Button (not only the icon node)
+
         normalizeIconButton(pauseAllButton);
         normalizeIconButton(resumeAllButton);
         normalizeIconButton(clearAllButton);
@@ -550,6 +667,7 @@ public class MainController {
         // Main downloads list (center)
         ensureDownloadsListView();
         applyFilter("ALL");
+        loadDownloadHistoryOnce();
 
         setupClipboardAutoPaste();
 
@@ -557,6 +675,8 @@ public class MainController {
         if (addLinkButton != null) {
             addLinkButton.setOnAction(ev -> openAddLinkFromClipboardOrEmpty());
         }
+
+
 
         // Sidebar
         sidebarList.getItems().setAll(
@@ -566,6 +686,7 @@ public class MainController {
                 new SidebarItem("COMPLETED", "Completed"),
                 new SidebarItem("CANCELLED", "Cancelled")
         );
+
 
         sidebarList.setFixedCellSize(44);
         sidebarList.setPrefHeight(javafx.scene.layout.Region.USE_COMPUTED_SIZE);
@@ -684,6 +805,22 @@ public class MainController {
         }
     }
 
+    private void cancelAllActiveDownloads() {
+        for (DownloadRow row : downloadItems) {
+            DownloadRow.State st = row.state.get();
+            if (st == DownloadRow.State.DOWNLOADING
+                    || st == DownloadRow.State.PAUSED
+                    || st == DownloadRow.State.QUEUED) {
+
+                cancelDownloadRow(row);
+            }
+        }
+
+        if (statusText != null) {
+            statusText.setText("All active downloads cancelled");
+        }
+    }
+
     // ========= Tooltips (stable + no flicker) =========
 
     private void installTooltips() {
@@ -692,6 +829,8 @@ public class MainController {
         installTooltip(clearAllButton, "Clear all");
         installTooltip(addLinkButton, "Add link");
         installTooltip(settingsButton, "Settings");
+        installTooltip(cancelAllBtn, "Cancel All");
+
     }
 
     private void installTooltip(Button btn, String text) {
@@ -812,6 +951,9 @@ public class MainController {
             });
         });
     }
+
+
+
 
 
     // ========= Analyze URL (backend logic - v1) =========
@@ -990,19 +1132,27 @@ public class MainController {
         return filtered;
     }
 
-    // ========= Add Link dialog =========
-
     // ========== Add Link dialog state tracking for clipboard auto-paste ==========
     private boolean addLinkDialogOpen = false;
     private TextField activeAddLinkUrlField = null;
     private String pendingAddLinkPrefillUrl = null;
+
     // Keep a strong reference so the poll Timeline doesn't get GC'ed
     private javafx.animation.Timeline clipboardPollTimeline;
 
     // Persist last selected download folder
     private static final Preferences PREFS = Preferences.userNodeForPackage(MainController.class);
+    // ===== Persist downloads list (history) =====
+    private static final String PREF_HISTORY_DAYS = "grabx.history.days"; // later from settings
+    private static final int DEFAULT_HISTORY_DAYS = 30;
+
+    private static final java.nio.file.Path DOWNLOAD_HISTORY_FILE =
+            java.nio.file.Paths.get(System.getProperty("user.home"), ".grabx", "download-history.tsv");
+
+    private volatile boolean downloadHistoryLoaded = false;
     private static final String PREF_LAST_FOLDER = "last_download_folder";
 
+    // هذه الدوال عشان يعرض المجلد الأخير أو مجلد التنزيلات الافتراضي
     private String getLastDownloadFolderOrDefault() {
         try {
             String v = PREFS.get(PREF_LAST_FOLDER, null);
@@ -1031,8 +1181,247 @@ public class MainController {
         } catch (Exception ignored) {}
     }
 
-    private void showAddLinkDialog() {
-        showAddLinkDialog(null);
+    private static boolean canOpenDownloadedFile(DownloadRow row) {
+        if (row == null) return false;
+
+        try {
+            if (row.state.get() != DownloadRow.State.COMPLETED) return false;
+        } catch (Exception ignored) {
+            return false;
+        }
+
+        try {
+            java.nio.file.Path p = (row.outputFile == null) ? null : row.outputFile.get();
+            return p != null && java.nio.file.Files.exists(p);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static String esc(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\")
+                .replace("\t", " ")
+                .replace("\n", " ")
+                .replace("\r", " ");
+    }
+    private static String unesc(String s) {
+        if (s == null) return "";
+        return s.replace("\\\\", "\\");
+    }
+
+    private int getHistoryDays() {
+        try {
+            int v = PREFS.getInt(PREF_HISTORY_DAYS, DEFAULT_HISTORY_DAYS);
+            if (v < 1) v = 1;
+            if (v > 365) v = 365;
+            return v;
+        } catch (Exception ignored) {
+            return DEFAULT_HISTORY_DAYS;
+        }
+    }
+
+    private void ensureHistoryDir() {
+        try {
+            java.nio.file.Path dir = DOWNLOAD_HISTORY_FILE.getParent();
+            if (dir != null) java.nio.file.Files.createDirectories(dir);
+        } catch (Exception ignored) {}
+    }
+
+//    private static String safeGet(javafx.beans.property.StringProperty p) {
+//        try {
+//            String v = (p == null) ? null : p.get();
+//            return (v == null) ? "" : v;
+//        } catch (Exception e) {
+//            return "";
+//        }
+//    }
+
+    private void saveDownloadHistoryAsync() {
+        new Thread(() -> {
+            try {
+                ensureHistoryDir();
+
+                int keepDays = getHistoryDays();
+                long cutoff = System.currentTimeMillis() - (long) keepDays * 24L * 60L * 60L * 1000L;
+
+                // snapshot
+                java.util.List<DownloadRow> snap = new java.util.ArrayList<>();
+                try {
+                    javafx.application.Platform.runLater(() -> {
+                        try { snap.addAll(downloadItems); } catch (Exception ignored) {}
+                    });
+                    try { Thread.sleep(30); } catch (Exception ignored) {}
+                } catch (Exception ignored) {}
+
+                java.util.List<String> lines = new java.util.ArrayList<>();
+
+                for (DownloadRow r : snap) {
+                    if (r == null) continue;
+                    if (r.url == null || r.url.isBlank()) continue;
+
+                    String title = safeGet(r.title);
+                    String state = "QUEUED";
+                    try { state = String.valueOf(r.state.get()); } catch (Exception ignored) {}
+
+                    String outPath = "";
+                    try {
+                        java.nio.file.Path p = (r.outputFile == null) ? null : r.outputFile.get();
+                        if (p != null) outPath = p.toAbsolutePath().normalize().toString();
+                    } catch (Exception ignored) {}
+
+                    long lastUpdated = System.currentTimeMillis();
+                    if ("COMPLETED".equals(state) && outPath != null && !outPath.isBlank()) {
+                        try {
+                            java.nio.file.Path p = java.nio.file.Paths.get(outPath);
+                            if (java.nio.file.Files.exists(p)) {
+                                lastUpdated = java.nio.file.Files.getLastModifiedTime(p).toMillis();
+                            }
+                        } catch (Exception ignored) {}
+                    }
+
+                    if (lastUpdated < cutoff) continue;
+
+                    lines.add(
+                            esc(r.url) + "\t" +
+                                    esc(title) + "\t" +
+                                    esc(r.folder) + "\t" +
+                                    esc(r.mode) + "\t" +
+                                    esc(r.quality) + "\t" +
+                                    esc(state) + "\t" +
+                                    esc(outPath) + "\t" +
+                                    lastUpdated
+                    );
+                }
+
+                java.nio.file.Files.write(
+                        DOWNLOAD_HISTORY_FILE,
+                        lines,
+                        java.nio.charset.StandardCharsets.UTF_8,
+                        java.nio.file.StandardOpenOption.CREATE,
+                        java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
+                        java.nio.file.StandardOpenOption.WRITE
+                );
+
+            } catch (Exception ignored) {}
+        }, "grabx-save-history").start();
+    }
+
+    private void loadDownloadHistoryOnce() {
+        if (downloadHistoryLoaded) return;
+        downloadHistoryLoaded = true;
+
+        try {
+            if (!java.nio.file.Files.exists(DOWNLOAD_HISTORY_FILE)) return;
+
+            int keepDays = getHistoryDays();
+            long cutoff = System.currentTimeMillis() - (long) keepDays * 24L * 60L * 60L * 1000L;
+
+            java.util.List<String> lines = java.nio.file.Files.readAllLines(
+                    DOWNLOAD_HISTORY_FILE,
+                    java.nio.charset.StandardCharsets.UTF_8
+            );
+
+            java.util.List<DownloadRow> restored = new java.util.ArrayList<>();
+
+            for (String line : lines) {
+                if (line == null || line.isBlank()) continue;
+                String[] c = line.split("\t", -1);
+                if (c.length < 8) continue;
+
+                String url = unesc(c[0]);
+                String title = unesc(c[1]);
+                String folder = unesc(c[2]);
+                String mode = unesc(c[3]);
+                String quality = unesc(c[4]);
+                String state = unesc(c[5]);
+                String outPath = unesc(c[6]);
+                long lastUpdated = 0L;
+                try { lastUpdated = Long.parseLong(c[7].trim()); } catch (Exception ignored) {}
+
+                if (lastUpdated > 0 && lastUpdated < cutoff) continue;
+                if (url == null || url.isBlank()) continue;
+
+                DownloadRow r = new DownloadRow(
+                        url,
+                        (title == null || title.isBlank()) ? shorten(url) : title,
+                        folder == null ? "" : folder,
+                        (mode == null || mode.isBlank()) ? MODE_VIDEO : mode,
+                        (quality == null || quality.isBlank()) ? QUALITY_BEST : quality
+                );
+
+                // لو العنوان فاضي لكن عندنا ملف فعلي، اشتقه من اسم الملف
+                try {
+                    if ((title == null || title.isBlank()) && outPath != null && !outPath.isBlank()) {
+                        java.nio.file.Path p = java.nio.file.Paths.get(outPath);
+                        String fn = (p.getFileName() == null) ? "" : p.getFileName().toString();
+                        if (!fn.isBlank()) {
+                            int dot = fn.lastIndexOf('.');
+                            String base = (dot > 0) ? fn.substring(0, dot) : fn;
+                            if (!base.isBlank()) r.setTitleOnce(base);
+                        }
+                    }
+                } catch (Exception ignored) {}
+
+                if (outPath != null && !outPath.isBlank()) {
+                    try { r.outputFile.set(java.nio.file.Paths.get(outPath)); } catch (Exception ignored) {}
+                }
+
+                // إذا الملف موجود فعليًا على الجهاز اعتبره Completed
+                try {
+                    if (outPath != null && !outPath.isBlank()) {
+                        Path p = Paths.get(outPath);
+                        if (Files.exists(p) && Files.size(p) > 0) {
+                            state = "COMPLETED";
+                        }
+                    }
+                } catch (Exception ignored) {}
+
+                try {
+                    DownloadRow.State st = DownloadRow.State.valueOf(state);
+                    // لا نرجّعها DOWNLOADING بعد إعادة تشغيل البرنامج
+//                    if (st == DownloadRow.State.DOWNLOADING) st = DownloadRow.State.PAUSED;
+                    // إذا اكتشفنا الملف فعلاً موجود => لازم تكون COMPLETED
+                    if ("COMPLETED".equals(state)) {
+                        st = DownloadRow.State.COMPLETED;
+                    } else if (st == DownloadRow.State.DOWNLOADING) {
+                        st = DownloadRow.State.PAUSED;
+                    }
+
+                    r.setState(st);
+                } catch (Exception ignored) {
+                    r.setState(DownloadRow.State.QUEUED);
+                }
+
+                try {
+                    if (r.state.get() == DownloadRow.State.COMPLETED) {
+                        java.nio.file.Path p = r.outputFile.get();
+                        if (p != null && java.nio.file.Files.exists(p)) {
+                            long sz = java.nio.file.Files.size(p);
+                            r.size.set(formatBytesDecimal(sz));
+                        }
+                        r.progress.set(1.0);
+                    } else {
+                        r.progress.set(0.0);
+                    }
+                } catch (Exception ignored) {}
+
+                restored.add(r);
+            }
+
+            if (!restored.isEmpty()) {
+                javafx.application.Platform.runLater(() -> {
+                    try {
+                        // نخلي العناصر الجديدة تضل فوق (add 0) … والقديمة تحت
+                        downloadItems.addAll(restored);
+                        if (filteredDownloadItems != null) {
+                            filteredDownloadItems.setPredicate(filteredDownloadItems.getPredicate());
+                        }
+                    } catch (Exception ignored) {}
+                });
+            }
+
+        } catch (Exception ignored) {}
     }
 
     // Cache for computed sizes to avoid re-running yt-dlp repeatedly (key: url|mode|quality)
@@ -1053,7 +1442,6 @@ public class MainController {
                 return t;
             },
             // If queue is full, don't block UI threads
-//            new ThreadPoolExecutor.DiscardPolicy()
             new ThreadPoolExecutor.AbortPolicy()
     );
 
@@ -1643,8 +2031,11 @@ public class MainController {
             // Temporary behavior until we wire the real downloader engine:
             if (t == ContentType.VIDEO) {
                 addDownloadItemToList(url, folderField.getText(), modeCombo.getValue(), qualityCombo.getValue());
+                saveDownloadHistoryAsync();
+
             } else if (t == ContentType.DIRECT_FILE) {
                 addDownloadItemToList(url, folderField.getText(), "Direct", "Auto");
+                saveDownloadHistoryAsync();
             } else if (t == ContentType.PLAYLIST) {
                 if (statusText != null) statusText.setText("Playlist detected (UI next): " + shorten(url));
             } else {
@@ -1716,76 +2107,6 @@ public class MainController {
         }
     }
 
-//    private Long fetchSizeWithYtDlp(String url, String mode, String quality) {
-//        if (url == null || url.isBlank()) return null;
-//        try {
-//            java.nio.file.Path yt = com.grabx.app.grabx.util.YtDlpManager.ensureAvailable();
-//            if (yt == null) return null;
-//
-//            boolean audioOnly = MODE_AUDIO.equals(mode) || "Audio".equalsIgnoreCase(mode) || "Audio only".equalsIgnoreCase(mode);
-//
-//            String selector;
-//            if (audioOnly) {
-//                selector = "bestaudio/best";
-//            } else {
-//                String q = (quality == null) ? QUALITY_BEST : quality;
-//                if (q == null || q.isBlank() || QUALITY_SEPARATOR.equals(q) || QUALITY_BEST.equals(q)) {
-//                    selector = "bv*+ba/best";
-//                } else {
-//                    int h = parseHeightFromLabel(q);
-//                    selector = (h > 0)
-//                            ? ("bv*[height<=" + h + "]+ba/b[height<=" + h + "]/best")
-//                            : "bv*+ba/best";
-//                }
-//            }
-//
-//            ProcessBuilder pb = new ProcessBuilder(
-//                    yt.toAbsolutePath().toString(),
-//                    "--no-warnings",
-//                    "--no-playlist",
-//                    "--skip-download",
-//                    "--encoding", "utf-8",
-//                    "-f", selector,
-//                    "--print", "%(filesize)s|%(filesize_approx)s",
-//                    url.trim()
-//            );
-//            pb.redirectErrorStream(true);
-//            Process p = pb.start();
-//
-//            String last = null;
-//            try (var br = new java.io.BufferedReader(
-//                    new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
-//                String line;
-//                while ((line = br.readLine()) != null) {
-//                    String s = line.trim();
-//                    if (s.isEmpty()) continue;
-//                    String sl = s.toLowerCase(java.util.Locale.ROOT);
-//                    if (sl.startsWith("warning:")) continue;
-//                    if (sl.startsWith("error:")) return null;
-//                    last = s;
-//                }
-//            }
-//
-//            int code = p.waitFor();
-//            if (code != 0 || last == null) return null;
-//
-//            String[] parts = last.split("\\|", -1);
-//            if (parts.length == 0) return null;
-//
-//            Long exact = parseLongSafeObj(parts[0]);
-//            if (exact != null && exact > 0) return exact;
-//
-//            if (parts.length > 1) {
-//                Long approx = parseLongSafeObj(parts[1]);
-//                if (approx != null && approx > 0) return approx;
-//            }
-//
-//            return null;
-//
-//        } catch (Exception ignored) {
-//            return null;
-//        }
-//    }
 
     private Long fetchSizeWithYtDlp(String url, String mode, String quality) {
         if (url == null || url.isBlank()) return null;
@@ -1945,9 +2266,9 @@ public class MainController {
             return null;
         }
     }
-    private static final String ICON_FOLDER_OUTLINE =
-            "M20 6h-8.17L10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 14H4V6h5.17l2 2H20v12z";
 
+    private static final String ICON_PLUS =
+            "M19 11H13V5h-2v6H5v2h6v6h2v-6h6v-2z";
 
     private static final String ICON_FOLDER_OPEN =
             "M3 6.5C3 5.12 4.12 4 5.5 4H10L12 6H18.5C19.88 6 21 7.12 21 8.5V17.5C21 18.88 19.88 20 18.5 20H5.5C4.12 20 3 18.88 3 17.5V6.5Z";
@@ -1963,6 +2284,23 @@ public class MainController {
 
     private static final String ICON_RETRY =
             "M12 5a7 7 0 1 1-6.32 4H3l3.5-3.5L10 9H7.76A5.5 5.5 0 1 0 12 6.5V5z";
+
+    private static final String ICON_CLEAR =
+            "M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z";
+
+    private static final String ICON_SETTINGS =
+            "M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58" +
+                    "c.18-.14.23-.41.12-.61l-1.92-3.32c-.11-.2-.36-.28-.57-.2l-2.39.96" +
+                    "c-.5-.38-1.04-.69-1.64-.92l-.36-2.54c-.03-.22-.22-.38-.45-.38h-3.84" +
+                    "c-.23 0-.42.16-.45.38l-.36 2.54c-.6.23-1.14.54-1.64.92l-2.39-.96" +
+                    "c-.21-.08-.46 0-.57.2L2.71 8.89c-.11.2-.06.47.12.61l2.03 1.58" +
+                    "c-.04.31-.06.63-.06.94s.02.63.06.94L2.83 14.54c-.18.14-.23.41-.12.61" +
+                    "l1.92 3.32c.11.2.36.28.57.2l2.39-.96c.5.38 1.04.69 1.64.92l.36 2.54" +
+                    "c.03.22.22.38.45.38h3.84c.23 0 .42-.16.45-.38l.36-2.54" +
+                    "c.6-.23 1.14-.54 1.64-.92l2.39.96c.21.08.46 0 .57-.2l1.92-3.32" +
+                    "c.11-.2.06-.47-.12-.61l-2.03-1.58z" +
+                    "M12 15.5c-1.93 0-3.5-1.57-3.5-3.5S10.07 8.5 12 8.5" +
+                    "s3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z";
 
     private static Node svgIcon(String path, double boxSize) {
         javafx.scene.shape.SVGPath svg = new javafx.scene.shape.SVGPath();
@@ -2025,9 +2363,11 @@ public class MainController {
             private final Label title = new Label();
             private final Label meta = new Label();
             private final Label status = new Label();
-            private final Label speed = new Label();
-            private final Label eta = new Label();
 
+            private final Label speedDot = new Label("·");
+            private final Label speed = new Label();
+            private final Label etaDot = new Label("·");
+            private final Label eta = new Label();
             // Thumbnail (left)
             private final StackPane thumbBox = new StackPane();
             private final ImageView thumb = new ImageView();
@@ -2060,7 +2400,11 @@ public class MainController {
                 showBtn.accept(pauseBtn, false);
                 showBtn.accept(resumeBtn, false);
                 showBtn.accept(cancelBtn, false);
+//                showBtn.accept(folderBtn, true);
+
                 showBtn.accept(folderBtn, true);
+                // default: enabled فقط لما يكون COMPLETED+file exists
+                folderBtn.setDisable(true);
                 showBtn.accept(retryBtn, false);
 
                 if (isDownloading) {
@@ -2087,8 +2431,28 @@ public class MainController {
                 }
             }
 
+            private static final java.util.concurrent.ExecutorService THUMB_POOL =
+                    java.util.concurrent.Executors.newFixedThreadPool(
+                            4,
+                            r -> {
+                                Thread t = new Thread(r, "thumb-pool");
+                                t.setDaemon(true);
+                                return t;
+                            }
+                    );
+
+            // in-flight fetches so we don't start N threads for the same URL
+            private static final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<Image>> THUMB_INFLIGHT =
+                    new java.util.concurrent.ConcurrentHashMap<>();
+
             private void loadThumbUrl(String url) {
                 try {
+                    // Avoid re-doing work for the same URL (cells are reused)
+                    if (url != null && url.equals(lastThumbUrl)) {
+                        return;
+                    }
+                    lastThumbUrl = url;
+
                     // No URL -> show placeholder
                     if (url == null || url.isBlank()) {
                         thumb.setImage(null);
@@ -2109,34 +2473,41 @@ public class MainController {
                     thumb.setImage(null);
                     thumbPlaceholder.setVisible(true);
 
-                    // Fetch in background (avoid JavaFX URL loading issues)
-                    Thread t = new Thread(() -> {
-                        try {
-                            byte[] bytes = fetchUrlBytes(url);
-                            if (bytes == null || bytes.length == 0) return;
+                    // Reuse in-flight fetch if exists
+                    java.util.concurrent.CompletableFuture<Image> fut = THUMB_INFLIGHT.computeIfAbsent(url, key ->
+                            java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                                try {
+                                    byte[] bytes = fetchUrlBytes(key);
+                                    if (bytes == null || bytes.length == 0) return null;
 
-                            Image img = new Image(new java.io.ByteArrayInputStream(bytes));
-                            if (img.isError() || img.getWidth() <= 0) return;
+                                    Image img = new Image(new java.io.ByteArrayInputStream(bytes));
+                                    if (img.isError() || img.getWidth() <= 0) return null;
 
-                            MAIN_THUMB_CACHE.put(url, img);
+                                    MAIN_THUMB_CACHE.put(key, img);
+                                    return img;
+                                } catch (Exception ignored) {
+                                    return null;
+                                }
+                            }, THUMB_POOL).whenComplete((img, ex) -> {
+                                // remove from inflight after completion
+                                THUMB_INFLIGHT.remove(key);
+                            })
+                    );
 
-                            Platform.runLater(() -> {
-                                // Cell reuse safety: apply only if current item still wants this url
-                                DownloadRow it = getItem();
-                                String cur = null;
-                                try { if (it != null && it.thumbUrl != null) cur = it.thumbUrl.get(); } catch (Exception ignored) {}
-                                if (cur == null || !cur.equals(url)) return;
+                    fut.thenAccept(img -> {
+                        if (img == null) return;
+                        Platform.runLater(() -> {
+                            // Cell reuse safety: apply only if this cell still wants this url
+                            DownloadRow it = getItem();
+                            String cur = null;
+                            try { if (it != null && it.thumbUrl != null) cur = it.thumbUrl.get(); } catch (Exception ignored) {}
+                            if (cur == null || !cur.equals(url)) return;
 
-                                thumb.setImage(img);
-                                thumbPlaceholder.setVisible(false);
-                                applyCoverViewport(thumb, img, 108, 66);
-                            });
-
-                        } catch (Exception ignored) {
-                        }
-                    }, "thumb-fetch");
-                    t.setDaemon(true);
-                    t.start();
+                            thumb.setImage(img);
+                            thumbPlaceholder.setVisible(false);
+                            applyCoverViewport(thumb, img, 108, 66);
+                        });
+                    });
 
                 } catch (Exception ignored) {
                     thumb.setImage(null);
@@ -2165,13 +2536,138 @@ public class MainController {
                 }
             }
 
+
             private final ProgressBar bar = new ProgressBar(0);
+
+            // Smooth visual progress (prevents jumping when yt-dlp updates in bursts)
+            private double targetProgress = 0.0;      // desired progress value (0..1) OR -1 for indeterminate
+            private double visualProgress = 0.0;      // what we actually show
+            private DownloadRow progressBoundRow;     // which row this cell is currently listening to
+            private javafx.beans.value.ChangeListener<Number> progressListener;
+
+            private final AnimationTimer progressSmoother = new AnimationTimer() {
+                private long lastNs = 0;
+
+                @Override
+                public void handle(long now) {
+                    if (lastNs == 0) { lastNs = now; return; }
+
+                    // Indeterminate
+                    if (targetProgress < 0) {
+                        if (bar.getProgress() != ProgressIndicator.INDETERMINATE_PROGRESS) {
+                            bar.progressProperty().unbind();
+                            bar.setProgress(ProgressIndicator.INDETERMINATE_PROGRESS);
+                        }
+                        return;
+                    }
+
+                    // If we were indeterminate before, snap to target first
+                    if (bar.getProgress() < 0) {
+                        visualProgress = clamp01(targetProgress);
+                        bar.progressProperty().unbind();
+                        bar.setProgress(visualProgress);
+                        return;
+                    }
+
+                    double tp = clamp01(targetProgress);
+
+                    // time-based smoothing so it feels consistent across machines
+                    double dt = (now - lastNs) / 1_000_000_000.0;
+                    lastNs = now;
+
+                    // smoothing speed (bigger = faster catch-up)
+                    double k = 12.0; // ~0.25s to settle; tweak 8..14
+                    double alpha = 1.0 - Math.exp(-k * dt);
+
+                    visualProgress = visualProgress + (tp - visualProgress) * alpha;
+
+                    if (Math.abs(tp - visualProgress) < 0.0015) {
+                        visualProgress = tp;
+                    }
+
+                    bar.progressProperty().unbind();
+                    bar.setProgress(clamp01(visualProgress));
+                }
+
+                @Override
+                public void stop() {
+                    super.stop();
+                    lastNs = 0;
+                }
+            };
+
+            private void bindSmoothProgress(DownloadRow row) {
+                // detach old
+                try {
+                    if (progressBoundRow != null && progressListener != null) {
+                        progressBoundRow.progress.removeListener(progressListener);
+                    }
+                } catch (Exception ignored) {}
+
+                progressBoundRow = row;
+
+                if (row == null) {
+                    targetProgress = 0.0;
+                    visualProgress = 0.0;
+                    bar.progressProperty().unbind();
+                    bar.setProgress(0);
+                    try { progressSmoother.stop(); } catch (Exception ignored) {}
+                    return;
+                }
+
+                if (progressListener == null) {
+                    progressListener = (obs, oldV, newV) -> {
+                        if (newV == null) return;
+                        targetProgress = newV.doubleValue();
+                    };
+                }
+
+                try { row.progress.addListener(progressListener); } catch (Exception ignored) {}
+
+                // init
+                try { targetProgress = row.progress.get(); } catch (Exception ignored) { targetProgress = 0.0; }
+                if (targetProgress < 0) {
+                    bar.progressProperty().unbind();
+                    bar.setProgress(ProgressIndicator.INDETERMINATE_PROGRESS);
+                } else {
+                    visualProgress = clamp01(targetProgress);
+                    bar.progressProperty().unbind();
+                    bar.setProgress(visualProgress);
+                }
+
+                // start smoother (idempotent)
+                try { progressSmoother.start(); } catch (Exception ignored) {}
+            }
+
+            private void unbindSmoothProgress() {
+                try {
+                    if (progressBoundRow != null && progressListener != null) {
+                        progressBoundRow.progress.removeListener(progressListener);
+                    }
+                } catch (Exception ignored) {}
+                progressBoundRow = null;
+                targetProgress = 0.0;
+                visualProgress = 0.0;
+                bar.progressProperty().unbind();
+                bar.setProgress(0);
+                try { progressSmoother.stop(); } catch (Exception ignored) {}
+            }
+
+            private double clamp01(double v) {
+                if (v < 0) return 0;
+                if (v > 1) return 1;
+                return v;
+            }
+
+
+
 
             private final Button pauseBtn = new Button();
             private final Button resumeBtn = new Button();
             private final Button cancelBtn = new Button();
             private final Button folderBtn = new Button();
             private final Button retryBtn = new Button();
+            private final Button clearBtn = new Button();
 
             private final HBox actions = new HBox(8);
             private final VBox textBox = new VBox(6);
@@ -2187,11 +2683,29 @@ public class MainController {
                 title.getStyleClass().add("gx-task-title");
                 title.setWrapText(false);
 
+
                 meta.getStyleClass().add("gx-task-meta");
-                status.getStyleClass().add("gx-task-status");
-                speed.getStyleClass().add("gx-task-status");
-                eta.getStyleClass().add("gx-task-status");
-                sizeLabel.getStyleClass().add("gx-task-status");
+
+        // Footer / metrics: unify font + color + size
+                status.getStyleClass().addAll("gx-task-status", "gx-task-metric");
+                speed.getStyleClass().addAll("gx-task-status", "gx-task-metric");
+                eta.getStyleClass().addAll("gx-task-status", "gx-task-metric");
+                sizeLabel.getStyleClass().addAll("gx-task-status", "gx-task-metric");
+
+                speedDot.getStyleClass().addAll("gx-task-status", "gx-task-metric");
+                etaDot.getStyleClass().addAll("gx-task-status", "gx-task-metric");
+
+                speedDot.setOpacity(0.6);
+                etaDot.setOpacity(0.6);
+
+                // dots tight
+                speedDot.setMinWidth(10);
+                speedDot.setPrefWidth(10);
+                etaDot.setMinWidth(10);
+                etaDot.setPrefWidth(10);
+
+
+
                 // Fixed width to avoid jitter when numbers change
                 sizeLabel.setMinWidth(180);
                 sizeLabel.setPrefWidth(180);
@@ -2223,9 +2737,14 @@ public class MainController {
                 setupSvgButton(resumeBtn, ICON_PLAY);
                 setupSvgButton(cancelBtn, ICON_CANCEL);
                 cancelBtn.getStyleClass().add("cancel");
-                cancelBtn.setGraphic(svgIcon(ICON_CANCEL, 28)); // بدل 34
+                cancelBtn.setGraphic(svgIcon(ICON_CANCEL, 30));
                 setupSvgButton(folderBtn, ICON_FOLDER_OPEN);
                 setupSvgButton(retryBtn, ICON_RETRY);
+                // Clear button (remove row) - SVG like other action buttons
+                setupSvgButton(clearBtn, ICON_CLEAR);
+
+//                clearBtn.setGraphic(svgIcon(ICON_CLEAR, 30)); // نفس حجم cancel تقريباً
+                MainController.this.installTooltip(clearBtn, "Clear item");
 
                 MainController.this.installTooltip(pauseBtn, "Pause download");
                 MainController.this.installTooltip(resumeBtn, "Resume download");
@@ -2237,7 +2756,7 @@ public class MainController {
                 actions.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
                 actions.setFillHeight(true);
                 actions.setMinHeight(40);
-                actions.getChildren().addAll(pauseBtn, resumeBtn, cancelBtn, folderBtn, retryBtn);
+                actions.getChildren().addAll(pauseBtn, resumeBtn, cancelBtn, retryBtn, folderBtn, clearBtn);
 
                 textBox.getChildren().addAll(title, meta);
                 HBox.setHgrow(textBox, Priority.ALWAYS);
@@ -2246,7 +2765,7 @@ public class MainController {
                 headerRow.getChildren().addAll(thumbBox, textBox, actions);
 
                 footerRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
-                footerRow.setSpacing(6);
+                footerRow.setSpacing(2);
 
                 // Use a spacer so metrics stay grouped on the far right without stretching the status text.
                 final Region footerSpacer = new Region();
@@ -2255,6 +2774,7 @@ public class MainController {
                 // Metrics styling (fixed width + monospace so numbers don't "jitter")
                 sizeLabel.getStyleClass().addAll("gx-task-status", "gx-task-metric");
                 speed.getStyleClass().addAll("gx-task-status", "gx-task-metric");
+
                 eta.getStyleClass().addAll("gx-task-status", "gx-task-metric");
 
                 // IMPORTANT: force LTR for numeric metrics to avoid RTL/bidi spacing artifacts
@@ -2268,18 +2788,39 @@ public class MainController {
                 speed.setStyle(metricStyle);
                 eta.setStyle(metricStyle);
 
+                status.setStyle(metricStyle);
+                speedDot.setStyle(metricStyle);
+                etaDot.setStyle(metricStyle);
+
+
                 // Fixed widths so the layout stays stable while values change
-                sizeLabel.setMinWidth(170);
-                sizeLabel.setPrefWidth(170);
-                sizeLabel.setMaxWidth(170);
+//                sizeLabel.setMinWidth(170);
+//                sizeLabel.setPrefWidth(170);
+//                sizeLabel.setMaxWidth(170);
+//
+//                speed.setMinWidth(120);
+//                speed.setPrefWidth(120);
+//                speed.setMaxWidth(120);
+//
+//                eta.setMinWidth(70);
+//                eta.setPrefWidth(70);
+//                eta.setMaxWidth(70);
 
-                speed.setMinWidth(120);
-                speed.setPrefWidth(120);
-                speed.setMaxWidth(120);
+                sizeLabel.setMinWidth(155);
+                sizeLabel.setPrefWidth(155);
+                sizeLabel.setMaxWidth(155);
 
-                eta.setMinWidth(70);
-                eta.setPrefWidth(70);
-                eta.setMaxWidth(70);
+                speed.setMinWidth(85);
+                speed.setPrefWidth(85);
+                speed.setMaxWidth(85);
+
+                speed.setTextOverrun(OverrunStyle.CLIP);
+                speed.setNodeOrientation(NodeOrientation.LEFT_TO_RIGHT);
+                speed.setAlignment(Pos.CENTER_LEFT);
+
+                eta.setMinWidth(60);
+                eta.setPrefWidth(60);
+                eta.setMaxWidth(60);
 
                 // Right-align metrics
                 sizeLabel.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
@@ -2291,7 +2832,16 @@ public class MainController {
                 speed.setTextOverrun(javafx.scene.control.OverrunStyle.CLIP);
                 eta.setTextOverrun(javafx.scene.control.OverrunStyle.CLIP);
 
-                footerRow.getChildren().setAll(status, footerSpacer, speed, sizeLabel, eta);
+                // Details on row downloading
+                footerRow.getChildren().setAll(
+                        status,
+                        speedDot,
+                        speed,
+                        footerSpacer,
+                        sizeLabel,
+//                        etaDot,
+                        eta
+                );
                 card.getStyleClass().add("gx-task-card");
                 card.getChildren().addAll(headerRow, bar, footerRow);
                 VBox.setVgrow(card, Priority.NEVER);
@@ -2315,25 +2865,156 @@ public class MainController {
                     cancelDownloadRow(it);
                 });
 
+                clearBtn.setOnAction(e -> {
+                    DownloadRow it = getItem();
+                    if (it == null) return;
+
+                    // ---- Determine if this download might have produced partial files (risk) ----
+                    // We show the confirm dialog for ANY non-completed row, even if progress==0,
+                    // because yt-dlp may already have created .part/.ytdl files before we parse outputFile.
+                    boolean risky = true;
+                    try {
+                        if (it.state != null && it.state.get() == DownloadRow.State.COMPLETED) {
+                            risky = false;
+                        }
+                    } catch (Exception ignored) {}
+
+                    // Resolve output path if known
+                    java.nio.file.Path absOut = null;
+                    try {
+                        java.nio.file.Path out = (it.outputFile != null) ? it.outputFile.get() : null;
+                        if (out != null) {
+                            absOut = out.toAbsolutePath().normalize();
+                            // if the final file exists, it's definitely a candidate for delete
+                            if (java.nio.file.Files.exists(absOut)) risky = true;
+                        }
+                    } catch (Exception ignored) {}
+
+                    // If there is a running process, it's risky
+                    try {
+                        Process pr = activeProcesses.get(it);
+                        if (pr != null && pr.isAlive()) risky = true;
+                    } catch (Exception ignored) {}
+
+                    // Also consider progress > 0 as risky
+                    try {
+                        if (it.progress != null && it.progress.get() > 0.0001) risky = true;
+                    } catch (Exception ignored) {}
+
+                    // Title/name for dialog
+                    String fileName = null;
+                    try {
+                        fileName = (it.title == null) ? null : it.title.get();
+                    } catch (Exception ignored) {}
+                    if (fileName == null || fileName.isBlank()) fileName = "this download";
+
+                    // ---- Native confirm only if risky ----
+                    boolean deleteFiles = false;
+                    if (risky) {
+                        // We can offer delete even if absOut is not known yet; we'll delete common partials from the folder.
+                        NativeDialogs.RemoveChoice choice = NativeDialogs.showRemoveConfirm(fileName, true);
+
+                        if (choice == null || choice == NativeDialogs.RemoveChoice.CANCEL) {
+                            return; // user cancelled
+                        }
+
+                        deleteFiles = (choice == NativeDialogs.RemoveChoice.REMOVE_AND_DELETE);
+                    }
+
+                    // ---- Cancel any running process AFTER confirmation ----
+                    try {
+                        Process p = activeProcesses.get(it);
+                        if (p != null && p.isAlive()) {
+                            stopReasons.put(it, "CANCEL");
+                            try { p.destroy(); } catch (Exception ignored) {}
+                            try { p.destroyForcibly(); } catch (Exception ignored) {}
+                        }
+                    } catch (Exception ignored) {}
+
+                    try { activeProcesses.remove(it); } catch (Exception ignored) {}
+                    try { stopReasons.remove(it); } catch (Exception ignored) {}
+
+                    // ---- Delete files if requested ----
+                    if (deleteFiles) {
+                        // 1) If we know the final output path, delete it and its common sidecars
+                        if (absOut != null) {
+                            try { java.nio.file.Files.deleteIfExists(absOut); } catch (Exception ignored) {}
+                            try { java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(absOut.toString() + ".part")); } catch (Exception ignored) {}
+                            try { java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(absOut.toString() + ".ytdl")); } catch (Exception ignored) {}
+                            try { java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(absOut.toString() + ".temp")); } catch (Exception ignored) {}
+                            try { java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(absOut.toString() + ".tmp")); } catch (Exception ignored) {}
+                        }
+
+                        // 2) Also delete common partial files inside the target folder (covers cases where outputFile isn't parsed yet)
+                        try {
+                            String folderStr = (it.folder == null) ? null : it.folder.trim();
+                            if (folderStr != null && !folderStr.isBlank()) {
+                                java.nio.file.Path dir = java.nio.file.Paths.get(folderStr).toAbsolutePath().normalize();
+                                if (java.nio.file.Files.exists(dir) && java.nio.file.Files.isDirectory(dir)) {
+                                    try (java.nio.file.DirectoryStream<java.nio.file.Path> ds = java.nio.file.Files.newDirectoryStream(dir)) {
+                                        for (java.nio.file.Path pth : ds) {
+                                            if (pth == null) continue;
+                                            String n = null;
+                                            try { n = pth.getFileName().toString().toLowerCase(java.util.Locale.ROOT); } catch (Exception ignored) {}
+                                            if (n == null) continue;
+
+                                            // delete known temp/partial patterns
+                                            boolean isPartial = n.endsWith(".part") || n.endsWith(".ytdl") || n.endsWith(".tmp") || n.endsWith(".temp") || n.endsWith(".part-frag") || n.endsWith(".f");
+
+                                            if (isPartial) {
+                                                try { java.nio.file.Files.deleteIfExists(pth); } catch (Exception ignored) {}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (Exception ignored) {}
+                    }
+
+                    // ---- Remove card + save history ----
+                    Platform.runLater(() -> {
+                        try { downloadItems.remove(it); } catch (Exception ignored) {}
+                        try { scheduleHistorySave(); } catch (Exception ignored) {}
+                    });
+                });
+
+
                 folderBtn.setOnAction(e -> {
                     DownloadRow it = getItem();
                     if (it == null) return;
+
+                    // ✅ Only allow opening when COMPLETED
+                    try {
+                        if (it.state == null || it.state.get() != DownloadRow.State.COMPLETED) {
+                            return;
+                        }
+                    } catch (Exception ignored) {
+                        return;
+                    }
 
                     try {
                         java.nio.file.Path outFile = null;
                         if (it.outputFile != null) outFile = it.outputFile.get();
 
-                        // 1) لو عندي مسار الملف النهائي: اعمل Reveal/Select
-                        if (outFile != null && java.nio.file.Files.exists(outFile)) {
-                            revealInFileManager(outFile); // mac: open -R
-                            return;
+                        // Must know the final file AND it must exist
+                        if (outFile != null) {
+                            java.nio.file.Path abs = null;
+                            try { abs = outFile.toAbsolutePath().normalize(); } catch (Exception ignored) {}
+
+                            if (abs != null && java.nio.file.Files.exists(abs)) {
+                                revealInFileManager(abs);
+                                return;
+                            }
                         }
 
-                        // 2) fallback: افتح فولدر التحميل
-                        java.io.File dir = new java.io.File(it.folder);
-                        if (java.awt.Desktop.isDesktopSupported() && dir.exists()) {
-                            java.awt.Desktop.getDesktop().open(dir);
+                        // ❌ File missing -> do NOT open folder, just inform
+                        if (statusText != null) {
+                            String name = null;
+                            try { name = it.title == null ? null : it.title.get(); } catch (Exception ignored) {}
+                            if (name == null || name.isBlank()) name = "This file";
+                            statusText.setText(name + " was moved or deleted.");
                         }
+
                     } catch (Exception ignored) {}
                 });
 
@@ -2363,6 +3044,9 @@ public class MainController {
                 if (empty || item == null) {
                     setText(null);
                     setGraphic(null);
+                    // stop smoother (cell reuse safety)
+                    try { unbindSmoothProgress(); } catch (Exception ignored) {}
+
                     // Unbind/reset metric visibility so reused cells don't keep old bindings
                     try {
                         sizeLabel.visibleProperty().unbind();
@@ -2379,6 +3063,18 @@ public class MainController {
                         eta.setVisible(true);
                         eta.setManaged(true);
                     } catch (Exception ignored) {}
+                    // Unbind/reset dot label bindings so reused cells don't keep old bindings
+                    try {
+                        speedDot.visibleProperty().unbind();
+                        speedDot.managedProperty().unbind();
+                        etaDot.visibleProperty().unbind();
+                        etaDot.managedProperty().unbind();
+
+                        speedDot.setVisible(true);
+                        speedDot.setManaged(true);
+                        etaDot.setVisible(true);
+                        etaDot.setManaged(true);
+                    } catch (Exception ignored) {}
                     // Unbind/reset footer text bindings too (cell reuse safety)
                     try {
                         status.textProperty().unbind();
@@ -2393,6 +3089,11 @@ public class MainController {
                         bar.setVisible(true);
                         bar.setManaged(true);
                     } catch (Exception ignored) {}
+
+                    lastThumbUrl = null;
+                    thumb.setImage(null);
+
+                    setPadding(javafx.geometry.Insets.EMPTY);
                     return;
                 }
 
@@ -2413,14 +3114,28 @@ public class MainController {
                 // Attach listener to current item
                 setUserData(item);
                 if (thumbUrlListener == null) {
-                    thumbUrlListener = (obs, oldV, newV) -> Platform.runLater(() -> loadThumbUrl(newV));
+                    thumbUrlListener = (obs, oldV, newV) -> loadThumbUrl(newV);
                 }
                 if (item.thumbUrl != null) {
                     item.thumbUrl.addListener(thumbUrlListener);
                 }
                 if (stateListener == null) {
-                    stateListener = (obs, oldV, newV) -> Platform.runLater(() -> applyButtonsForState(newV));
-                }
+                    stateListener = (obs, oldV, newV) -> Platform.runLater(() -> {
+                        applyButtonsForState(newV);
+
+                        DownloadRow cur = getItem();
+                        boolean canOpen = false;
+                        try {
+                            if (cur != null && cur.state != null && cur.state.get() == DownloadRow.State.COMPLETED
+                                    && cur.outputFile != null && cur.outputFile.get() != null) {
+                                java.nio.file.Path abs = cur.outputFile.get().toAbsolutePath().normalize();
+                                canOpen = java.nio.file.Files.exists(abs);
+                            }
+                        } catch (Exception ignored) {
+                            canOpen = false;
+                        }
+                        folderBtn.setDisable(!canOpen);
+                    });                }
                 try {
                     if (item.state != null) {
                         item.state.addListener(stateListener);
@@ -2438,6 +3153,7 @@ public class MainController {
                 sizeLabel.textProperty().unbind();
 
                 status.textProperty().bind(item.status);
+                // Ensure normal binding is active by default (the preparing animation will unbind it if needed)
                 speed.textProperty().bind(item.speed);
                 eta.textProperty().bind(item.eta);
                 sizeLabel.textProperty().bind(item.size);
@@ -2446,8 +3162,17 @@ public class MainController {
                 final String turl = (item.thumbUrl == null) ? null : item.thumbUrl.get();
                 loadThumbUrl(turl);
 
+                // Show speed / ETA only when we actually have values (so they don't appear during "Preparing...")
                 javafx.beans.binding.BooleanBinding isDownloading =
                         item.state.isEqualTo(DownloadRow.State.DOWNLOADING);
+
+                javafx.beans.binding.BooleanBinding showSpeed =
+                        isDownloading.and(item.speed.isNotNull()).and(item.speed.isNotEmpty());
+
+                javafx.beans.binding.BooleanBinding showEta =
+                        isDownloading.and(item.eta.isNotNull()).and(item.eta.isNotEmpty());
+
+
 
                 // size: show only when we actually have size text
                 javafx.beans.binding.BooleanBinding showSize =
@@ -2467,33 +3192,69 @@ public class MainController {
                 sizeLabel.visibleProperty().bind(showSize);
                 sizeLabel.managedProperty().bind(showSize);
 
-                speed.visibleProperty().bind(isDownloading);
-                speed.managedProperty().bind(isDownloading);
+                speed.visibleProperty().bind(showSpeed);
+                speed.managedProperty().bind(showSpeed);
 
-                eta.visibleProperty().bind(isDownloading);
-                eta.managedProperty().bind(isDownloading);
+                eta.visibleProperty().bind(showEta);
+                eta.managedProperty().bind(showEta);
+
+                // Bind the dots to the same logic (speedDot same as speed, etaDot appears only if BOTH size and eta are shown)
+                speedDot.visibleProperty().bind(showSpeed);
+                speedDot.managedProperty().bind(showSpeed);
+
+                javafx.beans.binding.BooleanBinding showEtaDot = showEta.and(showSize);
+                etaDot.visibleProperty().bind(showEtaDot);
+                etaDot.managedProperty().bind(showEtaDot);
 
                 // Always show status (visible and managed)
                 status.setVisible(true);
                 status.setManaged(true);
 
-                // Progress bar (supports indeterminate when progress < 0)
-                try {
-                    bar.progressProperty().unbind();
-                } catch (Exception ignored) {}
-                bar.progressProperty().bind(item.progress);
+                // Progress bar (smooth visual progress; supports indeterminate when progress < 0)
+                bindSmoothProgress(item);
                 bar.setVisible(true);
                 bar.setManaged(true);
 
-        // Toggle which buttons appear based on state (reactive)
-        // ----------- In your download progress parsing logic, you must update the size label as described -----------
-        // The below is a template for where you parse progress lines and update item.size:
-        // When parsing [download] lines, set "Downloaded: <downloadedPart>" instead of "<downloaded> / <total>"
-        // On completion, set "Final size: <size>" if possible.
-                DownloadRow.State st = DownloadRow.State.QUEUED;
-                try { st = item.state.get(); } catch (Exception ignored) {}
+                // Read current state once + apply buttons once
+                DownloadRow.State st;
+                try { st = item.state.get(); } catch (Exception ignored) { st = DownloadRow.State.QUEUED; }
                 applyButtonsForState(st);
 
+                boolean isPreparing = false;
+                try {
+                    String sv = item.status.get();
+                    // During yt-dlp prepare we keep state DOWNLOADING + status begins with "Preparing"
+                    isPreparing = (st == DownloadRow.State.DOWNLOADING)
+                            && (sv != null)
+                            && sv.toLowerCase(java.util.Locale.ROOT).startsWith("preparing");
+                } catch (Exception ignored) {}
+
+
+                try {
+                    clearBtn.setVisible(true);
+                    clearBtn.setManaged(true);
+                } catch (Exception ignored) {}
+
+                // ✅ Folder button enabled only when COMPLETED and outputFile exists
+                try {
+                    boolean canOpen = false;
+                    if (item.state != null && item.state.get() == DownloadRow.State.COMPLETED
+                            && item.outputFile != null && item.outputFile.get() != null) {
+
+                        java.nio.file.Path p = item.outputFile.get();
+                        try {
+                            java.nio.file.Path abs = p.toAbsolutePath().normalize();
+                            canOpen = java.nio.file.Files.exists(abs);
+                        } catch (Exception ignored) {
+                            canOpen = false;
+                        }
+                    }
+                    folderBtn.setDisable(!canOpen);
+                } catch (Exception ignored) {
+                    folderBtn.setDisable(true);
+                }
+
+                setPadding(new javafx.geometry.Insets(10, 0, 10, 0));
                 setGraphic(card);
             }
         });
@@ -2715,61 +3476,267 @@ public class MainController {
         }
     }
 
+    private void applyGrabXDialogStyles(javafx.scene.control.DialogPane dp) {
+        if (dp == null) return;
+
+        // Apply our dialog skin class
+        try {
+            if (!dp.getStyleClass().contains("gx-dialog")) {
+                dp.getStyleClass().add("gx-dialog");
+            }
+        } catch (Exception ignored) {}
+
+        // Always attach app stylesheets to the dialog
+        try {
+            dp.getStylesheets().clear();
+
+            // Prefer current scene stylesheets (same look as the app)
+            javafx.scene.Scene sc = (root == null) ? null : root.getScene();
+            if (sc != null && sc.getStylesheets() != null && !sc.getStylesheets().isEmpty()) {
+                dp.getStylesheets().addAll(sc.getStylesheets());
+            }
+
+            // Ensure the key CSS files are present (fallback / safety)
+            try {
+                String theme = getClass().getResource("/com/grabx/app/grabx/styles/theme-base.css").toExternalForm();
+                if (!dp.getStylesheets().contains(theme)) dp.getStylesheets().add(theme);
+            } catch (Exception ignored) {}
+            try {
+                String layout = getClass().getResource("/com/grabx/app/grabx/styles/layout.css").toExternalForm();
+                if (!dp.getStylesheets().contains(layout)) dp.getStylesheets().add(layout);
+            } catch (Exception ignored) {}
+            try {
+                String buttons = getClass().getResource("/com/grabx/app/grabx/styles/buttons.css").toExternalForm();
+                if (!dp.getStylesheets().contains(buttons)) dp.getStylesheets().add(buttons);
+            } catch (Exception ignored) {}
+
+        } catch (Exception ignored) {}
+
+        // Prevent Modena white background bleed
+        try { dp.setStyle("-fx-background-color: transparent;"); } catch (Exception ignored) {}
+    }
+
 
     private void addDownloadItemToList(String url, String folder, String mode, String quality) {
         ensureDownloadsListView();
 
-        // 1) عنوان مبدئي
-        String initialTitle = "Loading ..."; // subtle loading placeholder
-        if (url == null || url.isBlank()) {
-            initialTitle = "(empty link)";
-        }
+        String initialTitle = shorten(url);
+        if (initialTitle == null || initialTitle.isBlank()) initialTitle = "New item";
 
-        // 2) أنشئ صف التحميل
         DownloadRow row = new DownloadRow(url, initialTitle, folder, mode, quality);
+        // خَلّي “Loading/Preparing” في status مش في العنوان
+        row.status.set("Preparing");
 
-        // Thumbnail (YouTube only for now)
+        // Thumbnail
         try {
             String thumb = thumbFromUrl(url);
-            if (thumb != null && !thumb.isBlank() && row.thumbUrl != null) {
+            if (thumb != null && !thumb.isBlank()) {
                 row.thumbUrl.set(thumb);
             }
-        } catch (Exception ignored) {
-        }
+        } catch (Exception ignored) {}
 
-        // 3) أضِف في أعلى القائمة
+        // ✅ أي تغيير مهم = احفظ التاريخ (العنوان/الحالة/مسار الملف)
+        try {
+            row.title.addListener((o, a, b) -> scheduleHistorySave());
+            row.state.addListener((o, a, b) -> scheduleHistorySave());
+            row.outputFile.addListener((o, a, b) -> scheduleHistorySave());
+        } catch (Exception ignored) {}
+
         Platform.runLater(() -> {
             downloadItems.add(0, row);
             startDownloadRow(row, false);
+            scheduleHistorySave();
         });
 
-        // 4) حدّث شريط الحالة
-        if (statusText != null) {
-            statusText.setText("Queued: " + row.title.get());
-        }
+        if (statusText != null) statusText.setText("Queued: " + row.title.get());
 
-        // 5) جلب العنوان الحقيقي بالخلفية (بدون yt-dlp لتقليل التأخير)
-// استخدام YouTube oEmbed (سريع وخفيف) بدل تشغيل yt-dlp مرة ثانية.
+        // ✅ oEmbed title (سريع) وبعدها احفظ التاريخ مرة ثانية
         if (url != null && !url.isBlank()) {
             new Thread(() -> {
                 String realTitle = fetchTitleWithOEmbed(url);
                 Platform.runLater(() -> {
                     if (realTitle != null && !realTitle.isBlank()) {
-                        row.title.set(realTitle);
+                        row.setTitleOnce(realTitle);
                         if (statusText != null) statusText.setText("Queued: " + realTitle);
                     } else {
                         String fallback = shorten(url);
                         if (fallback == null || fallback.isBlank()) fallback = "Unknown title";
-                        row.title.set(fallback);
+                        row.setTitleOnce(fallback);
                         if (statusText != null) statusText.setText("Queued: " + fallback);
                     }
+                    scheduleHistorySave();
                 });
             }, "title-oembed").start();
         }
-
-
     }
 
+
+//    -------
+
+    private void markHistoryDirtyAndSaveSoon() {
+        // Debounce: لا تكتب على الديسك 100 مرة بالثانية
+        if (!historySaveScheduled.compareAndSet(false, true)) return;
+
+        Platform.runLater(() -> {
+            try {
+                saveDownloadHistoryToDisk();
+            } finally {
+                historySaveScheduled.set(false);
+            }
+        });
+    }
+
+    private void saveDownloadHistoryToDisk() {
+        try {
+            Files.createDirectories(HISTORY_DIR);
+
+            // snapshot
+            java.util.List<DownloadRow> snapshot = new java.util.ArrayList<>(downloadItems);
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("[\n");
+
+            int count = 0;
+            for (DownloadRow r : snapshot) {
+                if (r == null) continue;
+                if (count >= HISTORY_MAX_ITEMS) break;
+
+                String title = safeGet(r.title);
+                if (title == null || title.isBlank()) title = "New item";
+
+                String state = "QUEUED";
+                try { state = (r.state.get() == null ? "QUEUED" : r.state.get().name()); } catch (Exception ignored) {}
+
+                String outFile = null;
+                try {
+                    if (r.outputFile != null && r.outputFile.get() != null) outFile = r.outputFile.get().toString();
+                } catch (Exception ignored) {}
+
+                long ts = System.currentTimeMillis();
+
+                String obj = "{"
+                        + "\"url\":" + j(r.url) + ","
+                        + "\"title\":" + j(title) + ","
+                        + "\"folder\":" + j(r.folder) + ","
+                        + "\"mode\":" + j(r.mode) + ","
+                        + "\"quality\":" + j(r.quality) + ","
+                        + "\"state\":" + j(state) + ","
+                        + "\"outputFile\":" + j(outFile) + ","
+                        + "\"ts\":" + ts
+                        + "}";
+
+                sb.append("  ").append(obj);
+                count++;
+                if (count < snapshot.size() && count < HISTORY_MAX_ITEMS) sb.append(",");
+                sb.append("\n");
+            }
+
+            sb.append("]\n");
+            Files.writeString(HISTORY_FILE, sb.toString(), StandardCharsets.UTF_8);
+
+        } catch (Exception ignored) {}
+    }
+
+    private void loadDownloadHistoryFromDisk() {
+        try {
+            if (!Files.exists(HISTORY_FILE)) return;
+            String json = Files.readString(HISTORY_FILE, StandardCharsets.UTF_8);
+            if (json == null || json.isBlank()) return;
+
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("\\{[^\\{\\}]*\\}")
+                    .matcher(json);
+
+            java.util.List<DownloadRow> loaded = new java.util.ArrayList<>();
+
+            while (m.find()) {
+                String obj = m.group();
+
+                String url = unj(extractJsonString(obj, "url"));
+                if (url == null || url.isBlank()) continue;
+
+                String title = unj(extractJsonString(obj, "title"));
+                if (title == null || title.isBlank()) title = shorten(url);
+                if (title == null || title.isBlank()) title = "New item";
+
+                String folder = unj(extractJsonString(obj, "folder"));
+                String mode = unj(extractJsonString(obj, "mode"));
+                String quality = unj(extractJsonString(obj, "quality"));
+                String state = unj(extractJsonString(obj, "state"));
+                String outFile = unj(extractJsonString(obj, "outputFile"));
+
+                DownloadRow row = new DownloadRow(url, title, safeStr(folder), safeStr(mode), safeStr(quality));
+                row.setTitleOnce(title);
+
+                // restore state
+                try {
+                    DownloadRow.State st = DownloadRow.State.valueOf(safeStr(state, "QUEUED"));
+                    row.setState(st);
+                } catch (Exception ignored) {
+                    row.setState(DownloadRow.State.QUEUED);
+                }
+
+                // restore outputFile
+                try {
+                    if (outFile != null && !outFile.isBlank()) row.outputFile.set(Paths.get(outFile));
+                } catch (Exception ignored) {}
+
+                loaded.add(row);
+            }
+
+            if (!loaded.isEmpty()) {
+                Platform.runLater(() -> downloadItems.setAll(loaded));
+            }
+
+        } catch (Exception ignored) {}
+    }
+
+    private static String safeGet(javafx.beans.property.StringProperty p) {
+        try { return p == null ? null : p.get(); } catch (Exception e) { return null; }
+    }
+
+    private static String safeStr(String s) { return safeStr(s, ""); }
+    private static String safeStr(String s, String def) {
+        if (s == null) return def;
+        String v = s.trim();
+        return v.isEmpty() ? def : v;
+    }
+
+    // --- tiny JSON helpers (no external libs) ---
+    private static String j(String s) {
+        if (s == null) return "null";
+        String v = s.replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t");
+        return "\"" + v + "\"";
+    }
+
+    private static String unj(String s) {
+        if (s == null) return null;
+        return s.replace("\\n", "\n")
+                .replace("\\r", "\r")
+                .replace("\\t", "\t")
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\");
+    }
+
+    private static String extractJsonString(String obj, String key) {
+        try {
+            java.util.regex.Matcher m = java.util.regex.Pattern
+                    .compile("\"" + java.util.regex.Pattern.quote(key) + "\"\\s*:\\s*(\"(.*?)\"|null)", java.util.regex.Pattern.DOTALL)
+                    .matcher(obj);
+            if (!m.find()) return null;
+            if ("null".equals(m.group(1))) return null;
+            return m.group(2);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+
+//    ------
 
     // Only keep the version with yt-dlp --progress-template and regex patterns DEST1, DEST2, MERGE, PROG, etc.
 
@@ -2785,7 +3752,7 @@ public class MainController {
         // UI immediately: preparing (indeterminate)
         Platform.runLater(() -> {
             row.setState(DownloadRow.State.DOWNLOADING);
-            row.status.set("Preparing...");
+            row.status.set("Preparing");
             row.size.set("");
             row.speed.set("");
             row.eta.set("");
@@ -2813,7 +3780,7 @@ public class MainController {
             // gx:  12.3%| 1.2MiB/s| 00:12
             final java.util.regex.Pattern PROG =
                     java.util.regex.Pattern.compile(
-                            "^gx:\\s*([0-9.]+)%\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)$"
+                            "^(?:gx:|download:gx:)\\s*([0-9.]+)%\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)$"
                     );
 
             // fallback native progress line
@@ -2922,8 +3889,16 @@ public class MainController {
                                     ps = ps.substring(1, ps.length() - 1);
                                 }
                                 java.nio.file.Path finalOut = java.nio.file.Paths.get(ps);
+                                try {
+                                    if (!finalOut.isAbsolute()) {
+                                        // Resolve relative output paths against the selected output directory
+                                        finalOut = outDir.resolve(finalOut).normalize();
+                                    }
+                                } catch (Exception ignored) {}
+
+                                final java.nio.file.Path finalOut2 = finalOut;
                                 Platform.runLater(() -> {
-                                    try { row.outputFile.set(finalOut); } catch (Exception ignored) {}
+                                    try { row.outputFile.set(finalOut2); } catch (Exception ignored) {}
                                 });
                             }
                         } catch (Exception ignored) {}
@@ -3018,13 +3993,13 @@ public class MainController {
                             String sl = s.toLowerCase(java.util.Locale.ROOT);
 
                             if (sl.contains("downloading m3u8") || sl.contains("m3u8 information")) {
-                                phase = "Preparing stream...";
+                                phase = "Preparing stream";
                             } else if (sl.contains("downloading webpage")) {
-                                phase = "Preparing...";
+                                phase = "Preparing";
                             } else if (sl.contains("extracting")) {
-                                phase = "Extracting info...";
+                                phase = "Extracting info";
                             } else if (s.startsWith("[info]") || s.startsWith("[youtube]") || s.startsWith("[generic]")) {
-                                phase = "Preparing...";
+                                phase = "Preparing";
                             }
 
                             if (phase != null) {
@@ -3156,23 +4131,57 @@ public class MainController {
             b /= 1000.0;
             i++;
         }
-        return String.format(java.util.Locale.US, "%.2f %s", b, u[i]);
+        return String.format(java.util.Locale.US, "%.1f %s", b, u[i]);
     }
+
+//    private static String normalizeSpeedUnit(String spd) {
+//        if (spd == null) return null;
+//        String s = spd.trim();
+//        if (s.isEmpty()) return s;
+//
+//        // Convert binary units to decimal-looking units for consistency with size (KB/MB/GB)
+//        s = s.replace("KiB/s", "KB/s")
+//                .replace("MiB/s", "MB/s")
+//                .replace("GiB/s", "GB/s")
+//                .replace("TiB/s", "TB/s");
+//
+//        // Ensure spacing is consistent (e.g., "256.50KB/s" -> "256.50 KB/s")
+//        s = s.replaceAll("(?i)(\\d)(KB/s|MB/s|GB/s|TB/s)$", "$1 $2");
+//        return s;
+//
+//    }
 
     private static String normalizeSpeedUnit(String spd) {
         if (spd == null) return null;
+
         String s = spd.trim();
-        if (s.isEmpty()) return s;
+        if (s.isEmpty() || "NA".equalsIgnoreCase(s)) return "";
 
-        // Convert binary units to decimal-looking units for consistency with size (KB/MB/GB)
+        // توحيد الوحدات
         s = s.replace("KiB/s", "KB/s")
-             .replace("MiB/s", "MB/s")
-             .replace("GiB/s", "GB/s")
-             .replace("TiB/s", "TB/s");
+                .replace("MiB/s", "MB/s")
+                .replace("GiB/s", "GB/s")
+                .replace("TiB/s", "TB/s");
 
-        // Ensure spacing is consistent (e.g., "256.50KB/s" -> "256.50 KB/s")
-        s = s.replaceAll("(?i)(\\d)(KB/s|MB/s|GB/s|TB/s)$", "$1 $2");
-        return s;
+        // استخراج الرقم + الوحدة
+        java.util.regex.Matcher m =
+                java.util.regex.Pattern
+                        .compile("([0-9]+(?:\\.[0-9]+)?)\\s*(KB/s|MB/s|GB/s|TB/s)",
+                                java.util.regex.Pattern.CASE_INSENSITIVE)
+                        .matcher(s);
+
+        if (!m.find()) return s;
+
+        double value;
+        try {
+            value = Double.parseDouble(m.group(1));
+        } catch (Exception e) {
+            return s;
+        }
+
+        String unit = m.group(2).toUpperCase();
+
+        return String.format(java.util.Locale.US, "%.1f %s", value, unit);
     }
 
     private void pauseDownloadRow(DownloadRow row) {
@@ -3190,13 +4199,45 @@ public class MainController {
 
     private void cancelDownloadRow(DownloadRow row) {
         if (row == null) return;
-        Process p = activeProcesses.get(row);
+
+        // Mark that this stop is user-intended cancel (so waitFor handler won't treat it as FAILED)
         stopReasons.put(row, "CANCEL");
-        if (p != null) {
-            try { p.destroy(); } catch (Exception ignored) {}
-            try { p.destroyForcibly(); } catch (Exception ignored) {}
+
+        final Process p = activeProcesses.get(row);
+
+        // Update UI immediately
+        Platform.runLater(() -> {
+            row.setState(DownloadRow.State.CANCELLED);
+            row.status.set("Cancelled");
+            row.speed.set("");
+            row.eta.set("");
+            // Keep progress frozen (DownloadRow.setState already freezes indeterminate)
+        });
+
+        // If there is no active process, just clean up maps and return
+        if (p == null || !p.isAlive()) {
+            activeProcesses.remove(row);
+            return;
         }
-        row.setState(DownloadRow.State.CANCELLED);
+
+        // Try graceful stop first
+        try { p.destroy(); } catch (Exception ignored) {}
+
+        // Safety: if still alive after a short delay, force kill
+        new Thread(() -> {
+            try {
+                Thread.sleep(900);
+            } catch (InterruptedException ignored) {}
+
+            try {
+                if (p.isAlive()) {
+                    try { p.destroyForcibly(); } catch (Exception ignored) {}
+                }
+            } finally {
+                // Ensure map cleanup even if waitFor hasn't run yet
+                try { activeProcesses.remove(row); } catch (Exception ignored) {}
+            }
+        }, "cancel-download-kill").start();
     }
 
     private void resumeDownloadRow(DownloadRow row) {
@@ -3284,24 +4325,80 @@ public class MainController {
         return "https://img.youtube.com/vi/" + id + "/hqdefault.jpg";
     }
 
-    // To git the selected file in folder
-    private void revealInFileManager(Path file) {
-        try {
-            if (file == null) return;
 
-            String os = System.getProperty("os.name", "").toLowerCase();
+    // Reveal/select a file in the OS file manager (best-effort)
+//    private static void revealInFileManager(java.nio.file.Path file) {
+//        if (file == null) return;
+//        try {
+//            java.nio.file.Path f = file.toAbsolutePath().normalize();
+//            if (!java.nio.file.Files.exists(f)) {
+//                // If file missing, open parent folder
+//                java.nio.file.Path parent = f.getParent();
+//                if (parent != null) openInFileManager(parent);
+//                return;
+//            }
+//
+//            String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
+//            if (os.contains("mac")) {
+//                new ProcessBuilder("open", "-R", f.toString()).start();
+//                return;
+//            }
+//            if (os.contains("win")) {
+//                // Explorer select
+//                new ProcessBuilder("explorer", "/select,", f.toString()).start();
+//                return;
+//            }
+//
+//            // Linux: no universal "select"; open parent folder
+//            java.nio.file.Path parent = f.getParent();
+//            if (parent != null) openInFileManager(parent);
+//
+//        } catch (Exception ignored) {}
+//    }
+
+
+    // Reveal/select a file in the OS file manager (best-effort)
+    private static void revealInFileManager(java.nio.file.Path file) {
+        if (file == null) return;
+
+        try {
+            java.nio.file.Path f = file.toAbsolutePath().normalize();
+
+            // ✅ If file is missing: DO NOT open folder. Show notice instead.
+            if (!java.nio.file.Files.exists(f)) {
+                javafx.application.Platform.runLater(() -> {
+                    try {
+                        javafx.scene.control.Alert a =
+                                new javafx.scene.control.Alert(javafx.scene.control.Alert.AlertType.INFORMATION);
+                        a.setTitle("File not found");
+                        a.setHeaderText("This file is no longer in its original location.");
+                        a.setContentText("It looks like the file was moved, renamed, or deleted.");
+                        a.show();
+                    } catch (Exception ignored) {}
+                });
+                return;
+            }
+
+            String os = System.getProperty("os.name", "")
+                    .toLowerCase(java.util.Locale.ROOT);
 
             if (os.contains("mac")) {
-                new ProcessBuilder("open", "-R", file.toAbsolutePath().toString()).start();
-            } else if (os.contains("win")) {
-                new ProcessBuilder("explorer.exe", "/select,", file.toAbsolutePath().toString()).start();
-            } else {
-                // Linux: best effort
-                Path parent = file.getParent();
-                if (parent != null) new ProcessBuilder("xdg-open", parent.toAbsolutePath().toString()).start();
+                new ProcessBuilder("open", "-R", f.toString()).start();
+                return;
             }
+
+            if (os.contains("win")) {
+                new ProcessBuilder("explorer", "/select,", f.toString()).start();
+                return;
+            }
+
+            // Linux: best effort (no universal select)
+            java.nio.file.Path parent = f.getParent();
+            if (parent != null) openInFileManager(parent);
+
         } catch (Exception ignored) {}
     }
+
 
     // === Thumbnail rendering helpers (cover crop + rounded clip) ===
     private static void applyCoverViewport(ImageView iv, Image img, double targetW, double targetH) {
@@ -3443,6 +4540,7 @@ public class MainController {
 
 
         Label status = new Label("Loading playlist...");
+
         status.getStyleClass().add("gx-text-muted");
 
         ListView<PlaylistEntry> list = new ListView<>();
@@ -4678,4 +5776,171 @@ public class MainController {
         }
     }
 
+    // Open a folder in the OS file manager
+    private static void openInFileManager(java.nio.file.Path folder) {
+        if (folder == null) return;
+        try {
+            java.nio.file.Path dir = folder.toAbsolutePath().normalize();
+            if (java.awt.Desktop.isDesktopSupported()) {
+                java.awt.Desktop.getDesktop().open(dir.toFile());
+                return;
+            }
+        } catch (Exception ignored) {}
+
+        // Fallbacks
+        try {
+            String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
+            if (os.contains("mac")) {
+                new ProcessBuilder("open", folder.toAbsolutePath().toString()).start();
+            } else if (os.contains("win")) {
+                new ProcessBuilder("explorer", folder.toAbsolutePath().toString()).start();
+            } else {
+                new ProcessBuilder("xdg-open", folder.toAbsolutePath().toString()).start();
+            }
+        } catch (Exception ignored) {}
+    }
+
+    // ===== Remove download confirm (mac-like custom dialog) =====
+    private static final class RemoveConfirmResult {
+        final boolean confirmed;
+        final boolean deleteFiles;
+        RemoveConfirmResult(boolean confirmed, boolean deleteFiles) {
+            this.confirmed = confirmed;
+            this.deleteFiles = deleteFiles;
+        }
+    }
+
+    private RemoveConfirmResult showRemoveDownloadConfirmDialog(String fileName, boolean canDeleteFiles) {
+        try {
+            final javafx.stage.Stage owner;
+            try {
+                owner = (root != null && root.getScene() != null && root.getScene().getWindow() instanceof javafx.stage.Stage st)
+                        ? st : null;
+            } catch (Exception ignored) {
+                return null;
+            }
+
+            final javafx.stage.Stage stage = new javafx.stage.Stage();
+            stage.initStyle(javafx.stage.StageStyle.TRANSPARENT);
+            stage.setResizable(false);
+            stage.setAlwaysOnTop(true);
+            if (owner != null) {
+                stage.initOwner(owner);
+                stage.initModality(javafx.stage.Modality.WINDOW_MODAL);
+            }
+
+            // Root card
+            javafx.scene.layout.VBox card = new javafx.scene.layout.VBox(16);
+            card.getStyleClass().add("gx-remove-card");
+            card.setMinWidth(420);
+            card.setMaxWidth(420);
+
+            // Top row: icon + text
+            javafx.scene.layout.HBox top = new javafx.scene.layout.HBox(14);
+            top.setAlignment(javafx.geometry.Pos.TOP_LEFT);
+
+            javafx.scene.layout.StackPane iconWrap = new javafx.scene.layout.StackPane();
+            iconWrap.getStyleClass().add("gx-remove-icon");
+            javafx.scene.control.Label warn = new javafx.scene.control.Label("!");
+            warn.getStyleClass().add("gx-remove-icon-text");
+            iconWrap.getChildren().add(warn);
+
+            javafx.scene.layout.VBox text = new javafx.scene.layout.VBox(8);
+            javafx.scene.control.Label title = new javafx.scene.control.Label("Are you sure you want to remove");
+            title.getStyleClass().add("gx-remove-title");
+
+            String safe = (fileName == null) ? "this download" : fileName;
+            javafx.scene.control.Label msg = new javafx.scene.control.Label("\"" + safe + "\"?");
+            msg.getStyleClass().add("gx-remove-filename");
+            msg.setWrapText(true);
+            msg.setMaxWidth(300);
+            msg.setTextAlignment(javafx.scene.text.TextAlignment.LEFT);
+            // keep file name readable even if it contains mixed RTL/LTR
+            msg.setNodeOrientation(javafx.geometry.NodeOrientation.LEFT_TO_RIGHT);
+
+            text.getChildren().addAll(title, msg);
+            top.getChildren().addAll(iconWrap, text);
+
+            // Checkbox row
+            javafx.scene.control.CheckBox deleteChk = new javafx.scene.control.CheckBox("Delete with Files");
+            deleteChk.getStyleClass().add("gx-remove-check");
+            deleteChk.setSelected(true);
+            deleteChk.setDisable(!canDeleteFiles);
+            if (!canDeleteFiles) deleteChk.setSelected(false);
+
+            // Buttons row
+            javafx.scene.control.Button noBtn = new javafx.scene.control.Button("No");
+            javafx.scene.control.Button yesBtn = new javafx.scene.control.Button("Yes");
+            noBtn.getStyleClass().add("gx-remove-no");
+            yesBtn.getStyleClass().add("gx-remove-yes");
+            noBtn.setDefaultButton(false);
+            yesBtn.setDefaultButton(true);
+
+            javafx.scene.layout.HBox btns = new javafx.scene.layout.HBox(12);
+            btns.setAlignment(javafx.geometry.Pos.CENTER);
+            btns.getChildren().addAll(noBtn, yesBtn);
+
+            card.getChildren().addAll(top, deleteChk, btns);
+
+            // Scene (transparent) + click-outside to close
+            javafx.scene.layout.StackPane overlay = new javafx.scene.layout.StackPane(card);
+            overlay.getStyleClass().add("gx-remove-overlay");
+            overlay.setPadding(new javafx.geometry.Insets(18));
+            overlay.setPickOnBounds(true);
+
+            javafx.scene.Scene sc = new javafx.scene.Scene(overlay);
+            sc.setFill(javafx.scene.paint.Color.TRANSPARENT);
+
+            // attach app stylesheets so our CSS classes apply
+            try {
+                if (owner != null && owner.getScene() != null && owner.getScene().getStylesheets() != null) {
+                    sc.getStylesheets().addAll(owner.getScene().getStylesheets());
+                }
+            } catch (Exception ignored) {}
+
+            stage.setScene(sc);
+
+            // Center on owner
+            if (owner != null) {
+                stage.setX(owner.getX() + (owner.getWidth() - 460) / 2.0);
+                stage.setY(owner.getY() + (owner.getHeight() - 260) / 2.0);
+            }
+
+            final java.util.concurrent.atomic.AtomicReference<RemoveConfirmResult> out =
+                    new java.util.concurrent.atomic.AtomicReference<>(null);
+
+            noBtn.setOnAction(e -> {
+                out.set(new RemoveConfirmResult(false, false));
+                stage.close();
+            });
+
+            yesBtn.setOnAction(e -> {
+                out.set(new RemoveConfirmResult(true, deleteChk.isSelected()));
+                stage.close();
+            });
+
+            // ESC closes
+            sc.setOnKeyPressed(ev -> {
+                if (ev.getCode() == javafx.scene.input.KeyCode.ESCAPE) {
+                    out.set(new RemoveConfirmResult(false, false));
+                    stage.close();
+                }
+            });
+
+            // Click outside closes
+            overlay.setOnMouseClicked(ev -> {
+                if (ev.getTarget() == overlay) {
+                    out.set(new RemoveConfirmResult(false, false));
+                    stage.close();
+                }
+            });
+
+            stage.showAndWait();
+            return out.get();
+
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
 }
+

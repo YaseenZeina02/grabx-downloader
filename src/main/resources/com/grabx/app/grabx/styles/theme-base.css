@@ -2,6 +2,17 @@
    GrabX – Base Theme
    =============================== */
 
+@font-face {
+    font-family: "Cairo";
+    src: url("/fonts/Cairo-Regular.ttf");
+}
+
+@font-face {
+    font-family: "Cairo";
+    src: url("/fonts/Cairo-Bold.ttf");
+}
+
+
 .gx-root {
     -fx-font-family: "Inter", "SF Pro Display", "Segoe UI", Arial;
     -fx-background-color: #0F1115;
@@ -34,3 +45,4 @@
 .gx-status-paused      { -fx-text-fill: #F59E0B; }
 .gx-status-completed   { -fx-text-fill: #22C55E; }
 .gx-status-cancelled   { -fx-text-fill: #EF4444; }
+
