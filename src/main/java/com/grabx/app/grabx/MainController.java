@@ -2442,6 +2442,41 @@ public class MainController {
                         return;
                     }
 
+                    // Local cached file (file://...) -> load directly (no HTTP)
+                    if (url.startsWith("file:")) {
+                        try {
+                            Image img = MAIN_THUMB_CACHE.get(url);
+                            if (img == null) {
+                                img = new Image(url, true);
+                                MAIN_THUMB_CACHE.put(url, img);
+                            }
+
+                            thumb.setImage(img);
+                            thumbPlaceholder.setVisible(false);
+
+                            // apply viewport once loaded
+                            if (img.getWidth() > 0 && img.getHeight() > 0) {
+                                applyCoverViewport(thumb, img, 108, 66);
+                            } else {
+                                Image finalImg = img;
+                                img.progressProperty().addListener((o, ov, nv) -> {
+                                    try {
+                                        if (nv != null && nv.doubleValue() >= 1.0 && finalImg.getWidth() > 0 && finalImg.getHeight() > 0) {
+                                            applyCoverViewport(thumb, finalImg, 108, 66);
+                                        }
+                                    } catch (Exception ignored) {}
+                                });
+                            }
+                            return;
+                        } catch (Exception ignored) {
+                            thumb.setImage(null);
+                            thumbPlaceholder.setVisible(true);
+                            return;
+                        }
+                    }
+
+
+
                     // Cache hit
                     Image cached = MAIN_THUMB_CACHE.get(url);
                     if (cached != null) {
@@ -3513,56 +3548,96 @@ public class MainController {
         String thumbUrl = null;
         try {
             thumbUrl = thumbFromUrl(url);
-            if (thumbUrl != null) {
+            if (thumbUrl != null && !thumbUrl.isBlank()) {
 
-                // 1️⃣ لو موجود بالكاش → اعرض فورًا
-//                Path cached = ThumbnailCacheManager.getCachedPath(url);
-                // Thumbnail
+                // show instantly (cached if exists, else remote)
                 try {
-                    if (thumbUrl != null) {
+                    java.nio.file.Path cached =
+                            com.grabx.app.grabx.thumbs.ThumbnailCacheManager.getCachedPath(url);
 
-                        // 1) If cached on disk -> show instantly
-                        java.nio.file.Path cachedThumbPath = ThumbnailCacheManager.getCachedPath(url);
-                        if (cachedThumbPath != null) {
-                            row.thumbUrl.set(cachedThumbPath.toUri().toString());
-                        }
-
-                        // 2) Ensure it gets cached (download once in background)
-                        ThumbnailCacheManager.fetchAndCacheAsync(
-                                url,
-                                thumbUrl,
-                                () -> {
-                                    java.nio.file.Path p = ThumbnailCacheManager.getCachedPath(url);
-                                    if (p != null) {
-                                        Platform.runLater(() -> row.thumbUrl.set(p.toUri().toString()));
-                                    }
-                                }
-                        );
+                    if (cached != null) {
+                        row.thumbUrl.set(cached.toUri().toString());   // file://...
+                    } else {
+                        row.thumbUrl.set(thumbUrl);                   // https://...
                     }
                 } catch (Exception ignored) {
+                    try { row.thumbUrl.set(thumbUrl); } catch (Exception ignored2) {}
                 }
 
-                if (cached != null) {
-                    row.thumbUrl.set(cached.toUri().toString());
-                }
-
-                // 2️⃣ تأكد إنه محفوظ بالكاش (مرة واحدة فقط)
-                ThumbnailCacheManager.fetchAndCacheAsync(
+                // ensure it gets cached on disk once
+                com.grabx.app.grabx.thumbs.ThumbnailCacheManager.fetchAndCacheAsync(
                         url,
                         thumbUrl,
                         () -> {
-                            Path p = ThumbnailCacheManager.getCachedPath(url);
+                            java.nio.file.Path p =
+                                    com.grabx.app.grabx.thumbs.ThumbnailCacheManager.getCachedPath(url);
                             if (p != null) {
-                                Platform.runLater(() ->
-                                        row.thumbUrl.set(p.toUri().toString())
-                                );
+                                javafx.application.Platform.runLater(() -> {
+                                    try { row.thumbUrl.set(p.toUri().toString()); } catch (Exception ignored) {}
+                                });
                             }
                         }
                 );
             }
-        } catch (Exception ignored) {
-        }
+        } catch (Exception ignored) {}
+
         System.out.println("thumbUrl=" + thumbUrl);
+
+
+
+//        String thumbUrl = null;
+//        try {
+//            thumbUrl = thumbFromUrl(url);
+//            if (thumbUrl != null) {
+//
+//                // 1️⃣ لو موجود بالكاش → اعرض فورًا
+////                Path cached = ThumbnailCacheManager.getCachedPath(url);
+//                // Thumbnail
+//                try {
+//                    if (thumbUrl != null) {
+//
+//                        // 1) If cached on disk -> show instantly
+//                        java.nio.file.Path cachedThumbPath = ThumbnailCacheManager.getCachedPath(url);
+//                        if (cachedThumbPath != null) {
+//                            row.thumbUrl.set(cachedThumbPath.toUri().toString());
+//                        }
+//
+//                        // 2) Ensure it gets cached (download once in background)
+//                        ThumbnailCacheManager.fetchAndCacheAsync(
+//                                url,
+//                                thumbUrl,
+//                                () -> {
+//                                    java.nio.file.Path p = ThumbnailCacheManager.getCachedPath(url);
+//                                    if (p != null) {
+//                                        Platform.runLater(() -> row.thumbUrl.set(p.toUri().toString()));
+//                                    }
+//                                }
+//                        );
+//                    }
+//                } catch (Exception ignored) {
+//                }
+//
+//                if (cached != null) {
+//                    row.thumbUrl.set(cached.toUri().toString());
+//                }
+//
+//                // 2️⃣ تأكد إنه محفوظ بالكاش (مرة واحدة فقط)
+//                ThumbnailCacheManager.fetchAndCacheAsync(
+//                        url,
+//                        thumbUrl,
+//                        () -> {
+//                            Path p = ThumbnailCacheManager.getCachedPath(url);
+//                            if (p != null) {
+//                                Platform.runLater(() ->
+//                                        row.thumbUrl.set(p.toUri().toString())
+//                                );
+//                            }
+//                        }
+//                );
+//            }
+//        } catch (Exception ignored) {
+//        }
+//        System.out.println("thumbUrl=" + thumbUrl);
 
         // ✅ أي تغيير مهم = احفظ التاريخ (العنوان/الحالة/مسار الملف)
         try {
