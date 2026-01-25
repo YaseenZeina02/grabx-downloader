@@ -10,6 +10,8 @@ public class DownloadRow {
 
     public final BooleanProperty titleLocked = new SimpleBooleanProperty(false);
 
+    public long completedAt = -1;
+
     public void setTitleOnce(String t) {
         if (titleLocked.get()) return;
         if (t == null || t.isBlank()) return;
@@ -79,7 +81,13 @@ public class DownloadRow {
                 speed.set("");
                 eta.set("");
             }
-            case COMPLETED -> status.set("Completed");
+//            case COMPLETED -> status.set("Completed");
+            case COMPLETED -> {
+                status.set("Completed");
+                if (completedAt <= 0) {
+                    completedAt = System.currentTimeMillis();
+                }
+            }
             case CANCELLED -> status.set("Cancelled");
             case FAILED -> status.set("Failed");
         }

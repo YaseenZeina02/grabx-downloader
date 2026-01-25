@@ -4,15 +4,13 @@ import com.grabx.app.grabx.core.model.DownloadRow;
 import com.grabx.app.grabx.ui.components.HoverBubble;
 import com.grabx.app.grabx.ui.components.NoSelectionModel;
 import com.grabx.app.grabx.ui.dialogs.NativeDialogs;
-import com.grabx.app.grabx.ui.probe.ProbeQualitiesResult;
+import com.grabx.app.grabx.thumbs.ThumbnailCacheManager;
 import javafx.animation.*;
 import javafx.geometry.NodeOrientation;
 import javafx.geometry.Pos;
 import javafx.scene.layout.HBox;
 import javafx.collections.transformation.FilteredList;
 
-import java.awt.Desktop;
-import java.net.URI;
 import java.nio.file.Files;
 import java.util.Map;
 import java.util.concurrent.*;
@@ -20,11 +18,7 @@ import java.util.concurrent.*;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
-import com.grabx.app.grabx.core.model.probe.AudioProbeService;
-import com.grabx.app.grabx.core.model.probe.VideoProbeService;
 import com.grabx.app.grabx.ui.components.ScrollbarAutoHide;
-import com.grabx.app.grabx.ui.probe.AudioFormatInfo;
-import com.grabx.app.grabx.ui.probe.ProbeAudioResult;
 import com.grabx.app.grabx.ui.sidebar.SidebarItem;
 import com.grabx.app.grabx.ui.playlist.PlaylistEntry;
 import javafx.application.Platform;
@@ -32,7 +26,6 @@ import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
-import javafx.geometry.Bounds;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.prefs.Preferences;
@@ -46,7 +39,6 @@ import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
 import javafx.stage.DirectoryChooser;
-import javafx.stage.Modality;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 import java.io.BufferedReader;
@@ -60,7 +52,8 @@ import javafx.beans.property.SimpleStringProperty;
 import javafx.beans.property.StringProperty;
 
 import java.io.File;
-import java.util.Optional;
+
+import static com.grabx.app.grabx.util.YtDlpManager.cached;
 
 public class MainController {
     @FXML
@@ -1228,14 +1221,6 @@ public class MainController {
         } catch (Exception ignored) {}
     }
 
-//    private static String safeGet(javafx.beans.property.StringProperty p) {
-//        try {
-//            String v = (p == null) ? null : p.get();
-//            return (v == null) ? "" : v;
-//        } catch (Exception e) {
-//            return "";
-//        }
-//    }
 
     private void saveDownloadHistoryAsync() {
         new Thread(() -> {
@@ -1270,15 +1255,9 @@ public class MainController {
                         if (p != null) outPath = p.toAbsolutePath().normalize().toString();
                     } catch (Exception ignored) {}
 
-                    long lastUpdated = System.currentTimeMillis();
-                    if ("COMPLETED".equals(state) && outPath != null && !outPath.isBlank()) {
-                        try {
-                            java.nio.file.Path p = java.nio.file.Paths.get(outPath);
-                            if (java.nio.file.Files.exists(p)) {
-                                lastUpdated = java.nio.file.Files.getLastModifiedTime(p).toMillis();
-                            }
-                        } catch (Exception ignored) {}
-                    }
+                    long lastUpdated = r.completedAt > 0
+                            ? r.completedAt
+                            : System.currentTimeMillis();
 
                     if (lastUpdated < cutoff) continue;
 
@@ -1389,6 +1368,9 @@ public class MainController {
                     }
 
                     r.setState(st);
+                    if (st == DownloadRow.State.COMPLETED && lastUpdated > 0) {
+                        r.completedAt = lastUpdated;
+                    }
                 } catch (Exception ignored) {
                     r.setState(DownloadRow.State.QUEUED);
                 }
@@ -3528,19 +3510,67 @@ public class MainController {
         row.status.set("Preparing");
 
         // Thumbnail
+        String thumbUrl = null;
         try {
-            String thumb = thumbFromUrl(url);
-            if (thumb != null && !thumb.isBlank()) {
-                row.thumbUrl.set(thumb);
+            thumbUrl = thumbFromUrl(url);
+            if (thumbUrl != null) {
+
+                // 1️⃣ لو موجود بالكاش → اعرض فورًا
+//                Path cached = ThumbnailCacheManager.getCachedPath(url);
+                // Thumbnail
+                try {
+                    if (thumbUrl != null) {
+
+                        // 1) If cached on disk -> show instantly
+                        java.nio.file.Path cachedThumbPath = ThumbnailCacheManager.getCachedPath(url);
+                        if (cachedThumbPath != null) {
+                            row.thumbUrl.set(cachedThumbPath.toUri().toString());
+                        }
+
+                        // 2) Ensure it gets cached (download once in background)
+                        ThumbnailCacheManager.fetchAndCacheAsync(
+                                url,
+                                thumbUrl,
+                                () -> {
+                                    java.nio.file.Path p = ThumbnailCacheManager.getCachedPath(url);
+                                    if (p != null) {
+                                        Platform.runLater(() -> row.thumbUrl.set(p.toUri().toString()));
+                                    }
+                                }
+                        );
+                    }
+                } catch (Exception ignored) {
+                }
+
+                if (cached != null) {
+                    row.thumbUrl.set(cached.toUri().toString());
+                }
+
+                // 2️⃣ تأكد إنه محفوظ بالكاش (مرة واحدة فقط)
+                ThumbnailCacheManager.fetchAndCacheAsync(
+                        url,
+                        thumbUrl,
+                        () -> {
+                            Path p = ThumbnailCacheManager.getCachedPath(url);
+                            if (p != null) {
+                                Platform.runLater(() ->
+                                        row.thumbUrl.set(p.toUri().toString())
+                                );
+                            }
+                        }
+                );
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
+        System.out.println("thumbUrl=" + thumbUrl);
 
         // ✅ أي تغيير مهم = احفظ التاريخ (العنوان/الحالة/مسار الملف)
         try {
             row.title.addListener((o, a, b) -> scheduleHistorySave());
             row.state.addListener((o, a, b) -> scheduleHistorySave());
             row.outputFile.addListener((o, a, b) -> scheduleHistorySave());
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
         Platform.runLater(() -> {
             downloadItems.add(0, row);
@@ -4045,7 +4075,6 @@ public class MainController {
 
                     if (code == 0) {
                         row.setState(DownloadRow.State.COMPLETED);
-                        row.status.set("Completed");
                         // CHANGED: set final size from disk if possible
                         try {
                             java.nio.file.Path out = null;

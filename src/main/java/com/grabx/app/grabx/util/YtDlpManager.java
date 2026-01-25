@@ -8,7 +8,7 @@ import java.util.*;
 
 public final class YtDlpManager {
 
-    private static volatile Path cached;
+    public static volatile Path cached;
 
     private YtDlpManager() {}
 
