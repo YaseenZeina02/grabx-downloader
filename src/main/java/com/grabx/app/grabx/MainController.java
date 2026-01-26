@@ -116,6 +116,10 @@ public class MainController {
     private static final Set<String> PLAYLIST_THUMB_INFLIGHT = ConcurrentHashMap.newKeySet();
 
     private final java.util.Map<DownloadRow, Process> activeProcesses = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private final java.util.concurrent.ConcurrentHashMap<DownloadRow, Double> lastProgressMap =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     private final java.util.Map<DownloadRow, String> stopReasons = new java.util.concurrent.ConcurrentHashMap<>();
     //    private static final String YTDLP_OUT_TMPL = "%(title).200B [%(id)s].%(ext)s";
     private static final String YTDLP_OUT_TMPL = "%(title)s.%(ext)s";
@@ -812,6 +816,33 @@ public class MainController {
         if (statusText != null) {
             statusText.setText("All active downloads cancelled");
         }
+    }
+
+
+    private void applyProgressMonotonic(DownloadRow row, double newPct) {
+        if (row == null) return;
+        if (newPct < 0) return;
+
+        if (newPct > 1.0) newPct = 1.0;
+
+        Double prevObj = lastProgressMap.get(row);
+        double prev = (prevObj == null) ? -1.0 : prevObj;
+
+        if (prev < 0) {
+            lastProgressMap.put(row, newPct);
+            row.progress.set(newPct);
+            return;
+        }
+
+        // سماحية بسيطة جدًا للـ rounding
+        double epsilon = 0.003; // 0.3%
+        if (newPct + epsilon < prev) {
+            return; // تجاهل الرجعة للخلف
+        }
+
+        if (newPct > prev) lastProgressMap.put(row, newPct);
+
+        row.progress.set(Math.max(prev, newPct));
     }
 
     // ========= Tooltips (stable + no flicker) =========
@@ -4121,8 +4152,7 @@ public class MainController {
                                 row.status.set("Downloading");
                                 row.size.set(sizeText == null ? "" : sizeText);
 
-                                if (row.progress.get() < 0 && fpct >= 0) row.progress.set(fpct);
-                                if (fpct >= 0) row.progress.set(fpct);
+                                applyProgressMonotonic(row, fpct);
 
                                 if (spd != null && !spd.isBlank() && !"NA".equalsIgnoreCase(spd))
                                     row.speed.set(normalizeSpeedUnit(spd));
@@ -4151,8 +4181,7 @@ public class MainController {
                             double fpct = pct;
                             Platform.runLater(() -> {
                                 row.status.set("Downloading");
-                                if (row.progress.get() < 0 && fpct >= 0) row.progress.set(fpct);
-                                if (fpct >= 0) row.progress.set(fpct);
+                                applyProgressMonotonic(row, fpct);
                                 if (spd != null && !spd.isBlank()) row.speed.set(normalizeSpeedUnit(spd));
                                 if (et != null && !et.isBlank()) row.eta.set(et);
                             });
@@ -4202,14 +4231,17 @@ public class MainController {
                     if ("CANCEL".equals(reason)) {
                         row.setState(DownloadRow.State.CANCELLED);
                         row.status.set("Cancelled");
+                        lastProgressMap.remove(row);
                         row.size.set("");
                         row.speed.set("");
                         row.eta.set("");
                         return;
                     }
+
                     if ("PAUSE".equals(reason)) {
                         row.setState(DownloadRow.State.PAUSED);
                         row.status.set("Paused");
+                        lastProgressMap.remove(row);
                         row.size.set("");
                         row.speed.set("");
                         row.eta.set("");
@@ -4233,6 +4265,7 @@ public class MainController {
                             row.size.set("");
                         }
                         row.progress.set(1.0);
+                        lastProgressMap.put(row, 1.0);
                         row.speed.set("");
                         row.eta.set("");
                     } else {
