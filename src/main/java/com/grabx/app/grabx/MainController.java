@@ -4259,6 +4259,32 @@ public class MainController {
         }, "yt-dlp-download").start();
     }
 
+    private static void killProcessTree(Process p) {
+        if (p == null) return;
+
+        try {
+            ProcessHandle h = p.toHandle();
+
+            // graceful destroy descendants first
+            h.descendants().forEach(ph -> {
+                try { ph.destroy(); } catch (Exception ignored) {}
+            });
+            try { h.destroy(); } catch (Exception ignored) {}
+
+            // small wait then force kill still-alive
+            try { Thread.sleep(150); } catch (Exception ignored) {}
+
+            h.descendants().forEach(ph -> {
+                try { if (ph.isAlive()) ph.destroyForcibly(); } catch (Exception ignored) {}
+            });
+            try { if (h.isAlive()) h.destroyForcibly(); } catch (Exception ignored) {}
+
+        } catch (Exception ignored) {
+            // fallback: at least kill main process
+            try { p.destroyForcibly(); } catch (Exception ignored2) {}
+        }
+    }
+
     // Decode Unicode escape sequences like \u0645\u0627 -> ما
     private static String unescapeUnicode(String s) {
         if (s == null || !s.contains("\\u")) return s;
@@ -4306,23 +4332,6 @@ public class MainController {
         return String.format(java.util.Locale.US, "%.1f %s", b, u[i]);
     }
 
-//    private static String normalizeSpeedUnit(String spd) {
-//        if (spd == null) return null;
-//        String s = spd.trim();
-//        if (s.isEmpty()) return s;
-//
-//        // Convert binary units to decimal-looking units for consistency with size (KB/MB/GB)
-//        s = s.replace("KiB/s", "KB/s")
-//                .replace("MiB/s", "MB/s")
-//                .replace("GiB/s", "GB/s")
-//                .replace("TiB/s", "TB/s");
-//
-//        // Ensure spacing is consistent (e.g., "256.50KB/s" -> "256.50 KB/s")
-//        s = s.replaceAll("(?i)(\\d)(KB/s|MB/s|GB/s|TB/s)$", "$1 $2");
-//        return s;
-//
-//    }
-
     private static String normalizeSpeedUnit(String spd) {
         if (spd == null) return null;
 
@@ -4356,60 +4365,79 @@ public class MainController {
         return String.format(java.util.Locale.US, "%.1f %s", value, unit);
     }
 
+//    private void pauseDownloadRow(DownloadRow row) {
+//        if (row == null) return;
+//        Process p = activeProcesses.get(row);
+//        if (p == null || !p.isAlive()) {
+//            row.setState(DownloadRow.State.PAUSED);
+//            return;
+//        }
+//        stopReasons.put(row, "PAUSE");
+//        try { p.destroy(); } catch (Exception ignored) {}
+//        try { p.destroyForcibly(); } catch (Exception ignored) {}
+//        row.setState(DownloadRow.State.PAUSED);
+//    }
+
+
     private void pauseDownloadRow(DownloadRow row) {
         if (row == null) return;
-        Process p = activeProcesses.get(row);
+
+        final Process p = activeProcesses.get(row);
+
         if (p == null || !p.isAlive()) {
-            row.setState(DownloadRow.State.PAUSED);
+            Platform.runLater(() -> {
+                row.setState(DownloadRow.State.PAUSED);
+                row.status.set("Paused");
+                row.speed.set("");
+                row.eta.set("");
+            });
             return;
         }
+
+        // مهم: عشان waitFor ما يعتبرها FAILED
         stopReasons.put(row, "PAUSE");
-        try { p.destroy(); } catch (Exception ignored) {}
-        try { p.destroyForcibly(); } catch (Exception ignored) {}
-        row.setState(DownloadRow.State.PAUSED);
+
+        // اقتل yt-dlp + ffmpeg children
+        killProcessTree(p);
+
+        Platform.runLater(() -> {
+            row.setState(DownloadRow.State.PAUSED);
+            row.status.set("Paused");
+            row.speed.set("");
+            row.eta.set("");
+        });
     }
 
     private void cancelDownloadRow(DownloadRow row) {
         if (row == null) return;
 
-        // Mark that this stop is user-intended cancel (so waitFor handler won't treat it as FAILED)
+        // مهم: عشان waitFor ما يعتبرها FAILED
         stopReasons.put(row, "CANCEL");
 
         final Process p = activeProcesses.get(row);
 
-        // Update UI immediately
+        // حدّث UI فورًا
         Platform.runLater(() -> {
             row.setState(DownloadRow.State.CANCELLED);
             row.status.set("Cancelled");
             row.speed.set("");
             row.eta.set("");
-            // Keep progress frozen (DownloadRow.setState already freezes indeterminate)
+            // خلي progress زي ما هو (setState بتتعامل مع indeterminate)
         });
 
-        // If there is no active process, just clean up maps and return
+        // لو ما في process شغّال
         if (p == null || !p.isAlive()) {
             activeProcesses.remove(row);
             return;
         }
 
-        // Try graceful stop first
-        try { p.destroy(); } catch (Exception ignored) {}
+        // اقتل yt-dlp + ffmpeg children (cross-platform)
+        try {
+            killProcessTree(p);
+        } catch (Exception ignored) {}
 
-        // Safety: if still alive after a short delay, force kill
-        new Thread(() -> {
-            try {
-                Thread.sleep(900);
-            } catch (InterruptedException ignored) {}
-
-            try {
-                if (p.isAlive()) {
-                    try { p.destroyForcibly(); } catch (Exception ignored) {}
-                }
-            } finally {
-                // Ensure map cleanup even if waitFor hasn't run yet
-                try { activeProcesses.remove(row); } catch (Exception ignored) {}
-            }
-        }, "cancel-download-kill").start();
+        // تنظيف سريع (حتى لو waitFor كمان رح يشيله)
+        try { activeProcesses.remove(row); } catch (Exception ignored) {}
     }
 
     private void resumeDownloadRow(DownloadRow row) {
@@ -4422,8 +4450,6 @@ public class MainController {
         startDownloadRow(row, true); // --continue
     }
 
-
-
     // --- Thumbnail helpers and cache ---
     private static final java.util.Map<String, javafx.scene.image.Image> MAIN_THUMB_CACHE =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -4433,11 +4459,6 @@ public class MainController {
         String u = url.trim();
         if (u.isEmpty()) return null;
 
-        // Try common patterns:
-        // - youtu.be/<id>
-        // - watch?v=<id>
-        // - /shorts/<id>
-        // - /embed/<id>
         try {
             // youtu.be/<id>
             int yb = u.indexOf("youtu.be/");
@@ -4496,37 +4517,6 @@ public class MainController {
         if (id == null || id.isBlank()) return null;
         return "https://img.youtube.com/vi/" + id + "/hqdefault.jpg";
     }
-
-
-    // Reveal/select a file in the OS file manager (best-effort)
-//    private static void revealInFileManager(java.nio.file.Path file) {
-//        if (file == null) return;
-//        try {
-//            java.nio.file.Path f = file.toAbsolutePath().normalize();
-//            if (!java.nio.file.Files.exists(f)) {
-//                // If file missing, open parent folder
-//                java.nio.file.Path parent = f.getParent();
-//                if (parent != null) openInFileManager(parent);
-//                return;
-//            }
-//
-//            String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
-//            if (os.contains("mac")) {
-//                new ProcessBuilder("open", "-R", f.toString()).start();
-//                return;
-//            }
-//            if (os.contains("win")) {
-//                // Explorer select
-//                new ProcessBuilder("explorer", "/select,", f.toString()).start();
-//                return;
-//            }
-//
-//            // Linux: no universal "select"; open parent folder
-//            java.nio.file.Path parent = f.getParent();
-//            if (parent != null) openInFileManager(parent);
-//
-//        } catch (Exception ignored) {}
-//    }
 
 
     // Reveal/select a file in the OS file manager (best-effort)
