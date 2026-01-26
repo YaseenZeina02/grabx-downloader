@@ -5,14 +5,16 @@ import com.grabx.app.grabx.ui.components.HoverBubble;
 import com.grabx.app.grabx.ui.components.NoSelectionModel;
 import com.grabx.app.grabx.ui.dialogs.NativeDialogs;
 import com.grabx.app.grabx.thumbs.ThumbnailCacheManager;
+import com.grabx.app.grabx.util.YtDlpManager;
 import javafx.animation.*;
 import javafx.geometry.NodeOrientation;
 import javafx.geometry.Pos;
 import javafx.scene.layout.HBox;
 import javafx.collections.transformation.FilteredList;
 
+import java.io.IOException;
 import java.nio.file.Files;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.*;
 
 import java.nio.file.Path;
@@ -44,8 +46,6 @@ import javafx.util.Duration;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.util.HashSet;
-import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javafx.beans.property.SimpleStringProperty;
@@ -53,7 +53,7 @@ import javafx.beans.property.StringProperty;
 
 import java.io.File;
 
-import static com.grabx.app.grabx.util.YtDlpManager.cached;
+import static com.grabx.app.grabx.util.YtDlpManager.*;
 
 public class MainController {
     @FXML
@@ -311,48 +311,89 @@ public class MainController {
     // Matches: 1920x1080, 3840x2160 ...
     private static final Pattern YTDLP_HEIGHT_X = Pattern.compile("\\b\\d{3,4}x(\\d{3,4})\\b");
 
-    private static Set<Integer> probeHeightsWithYtDlp(String url) {
+
+    private static VideoInfo probeOnceFast(String url) {
+        long t = tStart("probeOnceFast", url);
+
+        try {
+            String json = YtDlpManager.run(List.of(
+                    "-J",
+                    "--no-playlist",
+                    "--no-warnings",
+                    url
+            ));
+
+            if (json == null || json.isBlank()) return null;
+            return parseVideoInfoFast(json);
+
+        } catch (Exception e) {
+            return null;
+        } finally {
+            tEnd("probeOnceFast", t);
+        }
+    }
+
+    private static VideoInfo parseVideoInfoFast(String json) {
+        VideoInfo info = new VideoInfo();
+
+        try {
+            var om = new com.fasterxml.jackson.databind.ObjectMapper();
+            var root = om.readTree(json);
+            var formats = root.get("formats");
+            if (formats == null || !formats.isArray()) return info;
+
+            for (var f : formats) {
+                if (!f.has("height")) continue;
+                int h = f.get("height").asInt(-1);
+                if (h > 0) info.heights.add(normalizeHeight(h));
+            }
+
+            // best = أعلى ارتفاع
+            if (!info.heights.isEmpty()) {
+                info.bestBytes = -1;
+            }
+
+        } catch (Exception ignored) {}
+
+        return info;
+    }
+
+    static class VideoInfo {
+        Set<Integer> heights = new TreeSet<>();
+        Map<Integer, Long> sizeByHeight = new HashMap<>();
+        long bestBytes = -1;
+    }
+
+
+    private static Set<Integer> probeHeightsFastJson(String url) {
         Set<Integer> heights = new HashSet<>();
         if (url == null || url.isBlank()) return heights;
 
         try {
-            ProcessBuilder pb = new ProcessBuilder(
-                    "yt-dlp",
-                    "-F",
+            List<String> args = List.of(
                     "--no-warnings",
                     "--no-playlist",
-                    url
+                    "-J",
+                    url.trim()
             );
-            pb.redirectErrorStream(true);
-            Process p = pb.start();
 
-            try (BufferedReader br = new BufferedReader(
-                    new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8)
-            )) {
-                String line;
-                while ((line = br.readLine()) != null) {
+            String json = com.grabx.app.grabx.util.YtDlpManager.run(args);
+            if (json == null || json.isBlank()) return heights;
 
-                    // ex: 1920x1080
-                    Matcher mx = YTDLP_HEIGHT_X.matcher(line);
-                    while (mx.find()) {
-                        int h = normalizeHeight(safeParseInt(mx.group(1)));
-                        if (h > 0) heights.add(h);
-                    }
+            com.fasterxml.jackson.databind.ObjectMapper om =
+                    new com.fasterxml.jackson.databind.ObjectMapper();
 
-                    // ex: 1080p / 1080p60 / 2160p60 ...
-                    Matcher mp = YTDLP_HEIGHT_P.matcher(line);
-                    while (mp.find()) {
-                        int h = normalizeHeight(safeParseInt(mp.group(1)));
-                        if (h > 0) heights.add(h);
-                    }
-                }
+            var root = om.readTree(json);
+            var formats = root.get("formats");
+            if (formats == null || !formats.isArray()) return heights;
+
+            for (var f : formats) {
+                if (!f.has("height")) continue;
+                int h = f.get("height").asInt(-1);
+                if (h > 0) heights.add(normalizeHeight(h));
             }
+        } catch (Exception ignored) {}
 
-            p.waitFor();
-        } catch (Exception ignored) {
-        }
-
-        // keep ONLY ladder values
         return normalizeHeights(heights);
     }
 
@@ -513,7 +554,7 @@ public class MainController {
         }
 
         // 1) detect heights once (FAST)
-        heights = probeHeightsWithYtDlp(url);
+        heights = probeHeightsFastJson(url);
 
         // 2) compute exact bytes ONLY for the highest detected height (FAST enough for Get)
         Integer bestH = null;
@@ -1114,46 +1155,25 @@ public class MainController {
     }
 
     // Normalize slightly-off heights from yt-dlp (e.g., 1434 -> 1440, 1076 -> 1080, 718 -> 720)
-    private static int normalizeHeight(int raw) {
-        if (raw <= 0) return raw;
+    private static int normalizeHeight(int h) {
+        if (h <= 0) return -1;
 
-        int[] ladder = {2160, 1440, 1080, 720, 480, 360, 240, 144};
-
-        int best = -1;
-        int bestDiff = Integer.MAX_VALUE;
-        for (int std : ladder) {
-            int diff = Math.abs(raw - std);
-            if (diff < bestDiff) {
-                bestDiff = diff;
-                best = std;
-            }
-        }
-
-        int tol;
-        if (best >= 1440) tol = 40;
-        else if (best >= 720) tol = 20;
-        else tol = 10;
-
-        return (bestDiff <= tol) ? best : raw;
+        // Keep ONLY standard ladder heights (prevents 45p/90p/40p storyboard)
+        return switch (h) {
+            case 144, 240, 360, 480, 720, 1080, 1440, 2160, 4320 -> h;
+            default -> -1;
+        };
     }
 
-    private static java.util.Set<Integer> normalizeHeights(java.util.Set<Integer> rawHeights) {
-        java.util.Set<Integer> out = new java.util.HashSet<>();
-        if (rawHeights == null) return out;
-
-        for (Integer h : rawHeights) {
-            if (h == null) continue;
-            int n = normalizeHeight(h);
-            if (n > 0) out.add(n);
+    private static Set<Integer> normalizeHeights(Set<Integer> in) {
+        Set<Integer> out = new TreeSet<>();
+        if (in == null) return out;
+        for (Integer v : in) {
+            if (v == null) continue;
+            int nh = normalizeHeight(v);
+            if (nh > 0) out.add(nh);
         }
-
-        // Keep ONLY standard ladder values
-        int[] ladder = {2160, 1440, 1080, 720, 480, 360, 240, 144};
-        java.util.Set<Integer> filtered = new java.util.HashSet<>();
-        for (int std : ladder) {
-            if (out.contains(std)) filtered.add(std);
-        }
-        return filtered;
+        return out;
     }
 
     // ========== Add Link dialog state tracking for clipboard auto-paste ==========
@@ -1955,74 +1975,61 @@ public class MainController {
                 setSizeText.accept("Estimated size: —");
                 return;
             }
-
+            System.out.println("Before analyze:  " + url+"\n");
             lastType[0] = analyzeUrlType(url);
+            System.out.println("After analyze:  " + url+"\n");
+
 
             // If it's a single video, probe available heights and rebuild the quality list accordingly
+//            if (lastType[0] == ContentType.VIDEO) {
+//                info.setText("Analyzing formats...");
+//                info.setTextFill(Color.web("#9aa4b2"));
+//
+//                new Thread(() -> {
+//                    // BACKGROUND ONLY
+//                    VideoInfo vi = probeOnceFast(url);
+//
+//                    Platform.runLater(() -> {
+//                        if (vi == null || vi.heights.isEmpty()) {
+//                            fillQualityCombo(qualityCombo);
+//                        } else {
+//                            fillQualityComboFromHeights(qualityCombo, vi.heights);
+//                            lastProbedHeights[0] = vi.heights;
+//                        }
+//
+//                        applyTypeToUi.run();
+//                        okBtn.setDisable(false);
+//                    });
+//
+//                }, "probe-fast").start();
+//
+//                return;
+//            }
+
             if (lastType[0] == ContentType.VIDEO) {
                 info.setText("Analyzing formats...");
                 info.setTextFill(Color.web("#9aa4b2"));
 
                 new Thread(() -> {
-                    ProbeQualitiesResult pr = probeQualitiesWithSizes(url);
-
-                    final java.util.Set<Integer> heights = (pr == null || pr.heights == null) ? java.util.Set.of() : pr.heights;
-                    final java.util.Map<Integer, Long> bytesByHeight = (pr == null || pr.bytesByHeight == null) ? java.util.Map.of() : pr.bytesByHeight;
+                    VideoInfo vi = probeOnceFast(url); // one call only
 
                     Platform.runLater(() -> {
-                        // keep for later (when user switches back to Video)
-                        lastProbedHeights[0] = heights;
-                        lastProbedSizeTextByQualityLabel[0].clear();
-
-                        // Seed SIZE_CACHE so switching qualities is instant (no more yt-dlp calls)
-                        if (bytesByHeight != null && !bytesByHeight.isEmpty()) {
-
-                            // best = highest detected height
-                            Integer bestH = null;
-                            for (Integer h : heights) {
-                                if (h == null || h <= 0) continue;
-                                if (bestH == null || h > bestH) bestH = h;
-                            }
-
-                            if (bestH != null) {
-                                Long b = bytesByHeight.get(bestH);
-                                if (b != null && b > 0) {
-                                    SIZE_CACHE.put(url + "|" + MODE_VIDEO + "|" + QUALITY_BEST, b);
-                                    lastProbedSizeTextByQualityLabel[0].put(QUALITY_BEST, formatBytesDecimal(b));
-                                }
-                            }
-
-                            // per-height entries (1080p/720p/...) using the same label generator used in the UI
-                            for (var en : bytesByHeight.entrySet()) {
-                                Integer h = en.getKey();
-                                Long b = en.getValue();
-                                if (h == null || h <= 0 || b == null || b <= 0) continue;
-
-                                String label = formatHeightLabel(h);
-                                SIZE_CACHE.put(url + "|" + MODE_VIDEO + "|" + label, b);
-                                lastProbedSizeTextByQualityLabel[0].put(label, formatBytesDecimal(b));
-                            }
-                        }
-
-                        // If user is currently in Audio mode, keep audio list.
-                        if (MODE_AUDIO.equals(modeCombo.getValue())) {
-                            qualityCombo.getItems().setAll(buildAudioOptions());
-                            if (qualityCombo.getValue() == null || qualityCombo.getValue().isBlank()
-                                    || QUALITY_SEPARATOR.equals(qualityCombo.getValue())
-                                    || QUALITY_BEST.equals(qualityCombo.getValue())) {
-                                qualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
-                            }
+                        if (vi == null || vi.heights == null || vi.heights.isEmpty()) {
+                            fillQualityCombo(qualityCombo);
                         } else {
-                            // show only the heights that actually exist; fallback if empty
-                            fillQualityComboFromHeights(qualityCombo, heights);
+                            fillQualityComboFromHeights(qualityCombo, vi.heights);
+                            lastProbedHeights[0] = vi.heights;
                         }
 
                         applyTypeToUi.run();
-                        updateSizeAsync.run();
-                    });
-                }, "probe-qualities").start();
+                        okBtn.setDisable(false);
 
-                return; // UI will update after probing
+                        // OPTIONAL: خلي size estimation يصير بعدين
+                        // updateSizeAsync.run();
+                    });
+                }, "probe-fast").start();
+
+                return;
             }
 
             // ✅ Playlist: open playlist screen immediately
@@ -2424,6 +2431,8 @@ public class MainController {
         }
 
 //        downloadsList.setItems(downloadItems);
+        // Prewarm yt-dlp binary in background at startup
+        com.grabx.app.grabx.util.YtDlpManager.prewarmAsync();
         if (filteredDownloadItems == null) {
             filteredDownloadItems = new FilteredList<>(downloadItems, r -> true);
         }
@@ -3680,64 +3689,6 @@ public class MainController {
             }
         } catch (Exception ignored) {}
 
-        System.out.println("thumbUrl=" + thumbUrl);
-
-
-
-//        String thumbUrl = null;
-//        try {
-//            thumbUrl = thumbFromUrl(url);
-//            if (thumbUrl != null) {
-//
-//                // 1️⃣ لو موجود بالكاش → اعرض فورًا
-////                Path cached = ThumbnailCacheManager.getCachedPath(url);
-//                // Thumbnail
-//                try {
-//                    if (thumbUrl != null) {
-//
-//                        // 1) If cached on disk -> show instantly
-//                        java.nio.file.Path cachedThumbPath = ThumbnailCacheManager.getCachedPath(url);
-//                        if (cachedThumbPath != null) {
-//                            row.thumbUrl.set(cachedThumbPath.toUri().toString());
-//                        }
-//
-//                        // 2) Ensure it gets cached (download once in background)
-//                        ThumbnailCacheManager.fetchAndCacheAsync(
-//                                url,
-//                                thumbUrl,
-//                                () -> {
-//                                    java.nio.file.Path p = ThumbnailCacheManager.getCachedPath(url);
-//                                    if (p != null) {
-//                                        Platform.runLater(() -> row.thumbUrl.set(p.toUri().toString()));
-//                                    }
-//                                }
-//                        );
-//                    }
-//                } catch (Exception ignored) {
-//                }
-//
-//                if (cached != null) {
-//                    row.thumbUrl.set(cached.toUri().toString());
-//                }
-//
-//                // 2️⃣ تأكد إنه محفوظ بالكاش (مرة واحدة فقط)
-//                ThumbnailCacheManager.fetchAndCacheAsync(
-//                        url,
-//                        thumbUrl,
-//                        () -> {
-//                            Path p = ThumbnailCacheManager.getCachedPath(url);
-//                            if (p != null) {
-//                                Platform.runLater(() ->
-//                                        row.thumbUrl.set(p.toUri().toString())
-//                                );
-//                            }
-//                        }
-//                );
-//            }
-//        } catch (Exception ignored) {
-//        }
-//        System.out.println("thumbUrl=" + thumbUrl);
-
         // ✅ أي تغيير مهم = احفظ التاريخ (العنوان/الحالة/مسار الملف)
         try {
             row.title.addListener((o, a, b) -> scheduleHistorySave());
@@ -4073,6 +4024,40 @@ public class MainController {
                     while ((line = br.readLine()) != null) {
                         String s = line.trim();
                         if (s.isEmpty()) continue;
+
+                        // NEWFILE: yt-dlp started a new stream/file (audio/video). Reset monotonic progress so it can start from 0 again.
+                        if (s.startsWith("[download] Destination:") || s.startsWith("[ExtractAudio] Destination:")) {
+                            lastProgressMap.remove(row);
+                            Platform.runLater(() -> {
+                                try {
+                                    row.downloadedBytes.set(0);
+                                    row.totalBytes.set(-1);
+                                    row.speed.set("");
+                                    row.eta.set("");
+                                    row.size.set("");
+                                    if (row.progress.get() < 0) row.progress.set(0);
+                                    row.progress.set(0);
+                                    row.status.set("Downloading");
+                                    if (row.state.get() != DownloadRow.State.DOWNLOADING) row.setState(DownloadRow.State.DOWNLOADING);
+                                } catch (Exception ignored) {}
+                            });
+                        }
+
+                        // POST: merging/postprocessing (progress is misleading here)
+                        if (s.contains("Merging formats into") || s.startsWith("[Merger]") ||
+                                s.contains("Post-process") || s.contains("Postprocessing") ||
+                                s.contains("Fixing") || s.contains("Extracting") ||
+                                s.contains("Deleting original file") || s.contains("Deleting original files")) {
+
+                            Platform.runLater(() -> {
+                                try {
+                                    row.speed.set("");
+                                    row.eta.set("");
+                                    row.status.set("Merging...");
+                                    row.progress.set(-1); // indeterminate
+                                } catch (Exception ignored) {}
+                            });
+                        }
 
                         if (s.startsWith("ERROR:")) lastError[0] = s;
 
@@ -5645,6 +5630,8 @@ public class MainController {
                 while ((line = br.readLine()) != null) {
                     line = line.trim();
                     if (line.isEmpty()) continue;
+
+
                     int idx = line.indexOf('|');
                     String id = idx >= 0 ? line.substring(0, idx).trim() : line;
                     if (id.isBlank()) continue;

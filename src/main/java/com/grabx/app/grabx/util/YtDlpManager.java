@@ -8,6 +8,16 @@ import java.util.*;
 
 public final class YtDlpManager {
 
+    private static final java.util.prefs.Preferences PREFS = java.util.prefs.Preferences.userRoot().node("com.grabx.app.grabx");
+
+    // Persisted resolved binary path so we don't redo heavy extraction/probing every run.
+    private static final String PREF_YTDLP_PATH = "ytdlp.path";
+    private static final String PREF_YTDLP_VER  = "ytdlp.version";
+    private static final String PREF_YTDLP_TS   = "ytdlp.resolvedAt";
+
+    private static final Object INIT_LOCK = new Object();
+    private static volatile boolean initDone = false;
+
     public static volatile Path cached;
 
     private YtDlpManager() {}
@@ -33,78 +43,146 @@ public final class YtDlpManager {
 
     /** Returns yt-dlp path (bundled first, then PATH fallback). */
     public static Path ensureAvailable() {
-        System.out.println("YTDLP ensureAvailable() CALLED");
-
-        var cl = YtDlpManager.class.getClassLoader();
-        System.out.println("RES mac=" + cl.getResource("tools/yt-dlp/mac/yt-dlp"));
-//        System.out.println("RES mac.universal=" + cl.getResource("tools/yt-dlp/mac.universal/yt-dlp"));
-//        System.out.println("RES mac/arm64=" + cl.getResource("tools/yt-dlp/mac/arm64/yt-dlp"));
-        System.out.println("RES win=" + cl.getResource("tools/yt-dlp/windows/x64/yt-dlp.exe"));
-        System.out.println("RES lin=" + cl.getResource("tools/yt-dlp/linux/x64/yt-dlp"));
-
-        if (cached != null && Files.exists(cached)) return cached;
-
-        // 1) bundled (prefer bundled on macOS/packaged app)
+        // Fast path: already resolved this run.
         try {
-            String res = resolveBundledResourcePath();
-            if (res == null) {
-                // fallback to PATH
-                Path fromPath = findOnPath(detectOS() == OS.WINDOWS ? "yt-dlp.exe" : "yt-dlp");
-                if (fromPath != null) return cached = fromPath;
-                return null;
-            }
+            if (cached != null && Files.exists(cached)) return cached;
+        } catch (Exception ignored) {}
 
-            Path toolsDir = getAppToolsDir();
-            Files.createDirectories(toolsDir);
+        // One-time init per run: try prefs first, then do bundled extract once.
+        ensureInitializedOnce();
 
-            String outName = outputBinaryFileName();
-            Path out = toolsDir.resolve(outName);
+        try {
+            if (cached != null && Files.exists(cached)) return cached;
+        } catch (Exception ignored) {}
 
-            if (!Files.exists(out) || Files.size(out) == 0) {
-                try (InputStream in = YtDlpManager.class.getClassLoader().getResourceAsStream(res)) {
-                    if (in == null) return null;
-                    Files.copy(in, out, StandardCopyOption.REPLACE_EXISTING);
-                }
-            }
-
-            // mac/linux: executable
-            OS os = detectOS();
-            if (os == OS.MAC || os == OS.LINUX) {
-                try { out.toFile().setExecutable(true, false); } catch (Exception ignored) {}
-                try {
-                    new ProcessBuilder("chmod", "+x", out.toAbsolutePath().toString())
-                            .redirectErrorStream(true)
-                            .start()
-                            .waitFor();
-                } catch (Exception ignored) {}
-            }
-
-            // quick smoke-test to understand failures (prints to console)
-            try {
-                List<String> test = new ArrayList<>();
-                test.add(out.toAbsolutePath().toString());
-                test.add("--version");
-                Process t = new ProcessBuilder(test).redirectErrorStream(true).start();
-                String ver;
-                try (BufferedReader r = new BufferedReader(new InputStreamReader(t.getInputStream(), StandardCharsets.UTF_8))) {
-                    ver = r.readLine();
-                }
-                t.waitFor();
-                System.out.println("YTDLP extracted=" + out + "  version=" + ver);
-            } catch (Exception ignored) {}
-
-            return cached = out;
-
-        } catch (Exception e) {
-            // 2) PATH fallback if bundled failed
+        // Last resort: PATH lookup (very fast) if init failed.
+        try {
             Path fromPath = findOnPath(detectOS() == OS.WINDOWS ? "yt-dlp.exe" : "yt-dlp");
             if (fromPath != null) return cached = fromPath;
-            return null;
+        } catch (Exception ignored) {}
+
+        return null;
+    }
+
+    /**
+     * Resolves yt-dlp ONCE per app run.
+     * 1) Use persisted path from Preferences if still valid.
+     * 2) Otherwise extract bundled binary (if present) into app tools dir.
+     * 3) Persist the resolved path + version.
+     */
+    private static void ensureInitializedOnce() {
+        if (initDone) return;
+        synchronized (INIT_LOCK) {
+            if (initDone) return;
+
+            // 1) Try persisted path first (fast, no extraction, no chmod).
+            try {
+                String saved = PREFS.get(PREF_YTDLP_PATH, null);
+                if (saved != null && !saved.isBlank()) {
+                    Path p = Paths.get(saved);
+                    if (Files.exists(p)) {
+                        cached = p;
+                        initDone = true;
+                        return;
+                    }
+                }
+            } catch (Exception ignored) {}
+
+            // 2) Try bundled extraction.
+            try {
+                String res = resolveBundledResourcePath();
+                if (res != null) {
+                    Path toolsDir = getAppToolsDir();
+                    Files.createDirectories(toolsDir);
+
+                    String outName = outputBinaryFileName();
+                    Path out = toolsDir.resolve(outName);
+
+                    if (!Files.exists(out) || Files.size(out) == 0) {
+                        try (InputStream in = YtDlpManager.class.getClassLoader().getResourceAsStream(res)) {
+                            if (in != null) {
+                                Files.copy(in, out, StandardCopyOption.REPLACE_EXISTING);
+                            }
+                        }
+                    }
+
+                    // mac/linux: executable
+                    OS os = detectOS();
+                    if (os == OS.MAC || os == OS.LINUX) {
+                        try { out.toFile().setExecutable(true, false); } catch (Exception ignored) {}
+                        try {
+                            new ProcessBuilder("chmod", "+x", out.toAbsolutePath().toString())
+                                    .redirectErrorStream(true)
+                                    .start()
+                                    .waitFor();
+                        } catch (Exception ignored) {}
+                    }
+
+                    // Persist + smoke test (only once, here)
+                    String ver = null;
+                    try {
+                        List<String> test = new ArrayList<>();
+                        test.add(out.toAbsolutePath().toString());
+                        test.add("--version");
+                        Process t = new ProcessBuilder(test).redirectErrorStream(true).start();
+                        try (BufferedReader r = new BufferedReader(new InputStreamReader(t.getInputStream(), StandardCharsets.UTF_8))) {
+                            ver = r.readLine();
+                        }
+                        t.waitFor();
+                    } catch (Exception ignored) {}
+
+                    cached = out;
+                    try {
+                        PREFS.put(PREF_YTDLP_PATH, out.toAbsolutePath().toString());
+                        if (ver != null) PREFS.put(PREF_YTDLP_VER, ver);
+                        PREFS.putLong(PREF_YTDLP_TS, System.currentTimeMillis());
+                    } catch (Exception ignored) {}
+
+                    initDone = true;
+                    return;
+                }
+            } catch (Exception ignored) {}
+
+            // 3) PATH fallback (persist if found)
+            try {
+                Path fromPath = findOnPath(detectOS() == OS.WINDOWS ? "yt-dlp.exe" : "yt-dlp");
+                if (fromPath != null) {
+                    cached = fromPath;
+                    try {
+                        PREFS.put(PREF_YTDLP_PATH, fromPath.toAbsolutePath().toString());
+                        PREFS.putLong(PREF_YTDLP_TS, System.currentTimeMillis());
+                    } catch (Exception ignored) {}
+                }
+            } catch (Exception ignored) {}
+
+            initDone = true;
         }
+    }
+
+    /** Optional: call this at app startup to pre-warm yt-dlp without blocking UI. */
+    public static void prewarmAsync() {
+        new Thread(() -> {
+            try { ensureAvailable(); } catch (Exception ignored) {}
+        }, "grabx-prewarm-ytdlp").start();
+    }
+
+    /** Convenience: read the persisted path for Settings UI. */
+    public static String getPersistedPath() {
+        try { return PREFS.get(PREF_YTDLP_PATH, null); } catch (Exception e) { return null; }
+    }
+
+    /** Convenience: read the persisted version for Settings UI. */
+    public static String getPersistedVersion() {
+        try { return PREFS.get(PREF_YTDLP_VER, null); } catch (Exception e) { return null; }
     }
 
     /** Run yt-dlp and return stdout+stderr (merged) as UTF-8. */
     public static String run(List<String> args) throws IOException, InterruptedException {
+        long t = tStart(
+                "run",
+                String.join(" ", args)
+        );
+
         Path bin = ensureAvailable();
         if (bin == null || !Files.exists(bin)) throw new FileNotFoundException("yt-dlp not found");
 
@@ -123,7 +201,10 @@ public final class YtDlpManager {
             String line;
             while ((line = br.readLine()) != null) sb.append(line).append('\n');
         }
-        p.waitFor();
+//        p.waitFor();
+        int code = p.waitFor();
+        tEnd("run(exit=" + code + ")", t);
+
         return sb.toString();
     }
 
@@ -198,10 +279,28 @@ public final class YtDlpManager {
                 String s = line.trim();
                 if (s.isEmpty()) continue;
 
+                // ---- internal phase signals for the UI (so progress doesn't get stuck at 100%) ----
+                // yt-dlp often downloads audio first, then video, then merges => percent resets.
+                if (listener != null) {
+                    // New output file/stream (audio/video). Reset monotonic progress on the UI side.
+                    if (s.startsWith("[download] Destination:") || s.startsWith("[download] Destination")) {
+                        listener.onStatus("GX_EVT_NEWFILE");
+                    }
+
+                    // Merge / post-processing phases (progress is not meaningful here)
+                    if (s.contains("Merging formats into") || s.startsWith("[Merger]") ||
+                        s.contains("Post-process") || s.contains("Postprocessing") ||
+                        s.contains("Fixing") || s.contains("Extracting") ||
+                        s.contains("Deleting original file") || s.contains("Deleting original files")) {
+                        listener.onStatus("GX_EVT_POST");
+                    }
+                }
+
                 if (s.startsWith("[download]")) {
                     ParsedProgress pp = parseProgressLine(s);
                     if (pp != null && listener != null) listener.onProgress(pp.percent, pp.speed, pp.eta);
                 }
+
                 if (listener != null) listener.onStatus(s);
             }
         }
@@ -347,5 +446,26 @@ public final class YtDlpManager {
             if (Files.exists(cand)) return cand;
         }
         return null;
+    }
+
+
+    // ============================
+// yt-dlp timing helpers
+// ============================
+    private static boolean YTDLP_TIMING = true; // عطّلها لاحقًا لو بدك
+
+    public static long tStart(String tag, String detail) {
+        if (!YTDLP_TIMING) return 0L;
+        System.out.println(
+                "[yt-dlp][START] " + tag +
+                        (detail != null ? " | " + detail : "")
+        );
+        return System.nanoTime();
+    }
+
+    public static void tEnd(String tag, long startNs) {
+        if (!YTDLP_TIMING || startNs == 0L) return;
+        long ms = (System.nanoTime() - startNs) / 1_000_000;
+        System.out.println("[yt-dlp][END]   " + tag + " | took " + ms + " ms");
     }
 }

@@ -8,6 +8,7 @@ module com.grabx.app.grabx {
     requires javafx.graphics;
     requires java.prefs;
     requires java.net.http;
+    requires com.fasterxml.jackson.databind;
 
 
     // Current controller package
