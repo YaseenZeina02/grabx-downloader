@@ -109,12 +109,24 @@ public final class ThumbnailCacheManager {
     }
     public static Path getCachedPath(String url) {
         if (url == null || url.isBlank()) return null;
-
         Path p = getThumbPath(url);
         try {
             return Files.exists(p) ? p : null;
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    public static void fetchAndCacheBlocking(String key, String thumbUrl) {
+        if (key == null || key.isBlank() || thumbUrl == null || thumbUrl.isBlank()) return;
+
+        Path out = getThumbPath(key);
+        try {
+            if (Files.exists(out)) return;
+            Files.createDirectories(out.getParent());
+            try (InputStream in = new URL(thumbUrl).openStream()) {
+                Files.copy(in, out, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (Exception ignored) {}
     }
 }

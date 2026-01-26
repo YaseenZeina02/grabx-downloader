@@ -1329,6 +1329,16 @@ public class MainController {
                         (quality == null || quality.isBlank()) ? QUALITY_BEST : quality
                 );
 
+                // Restore thumbnail from disk cache only (no HTTP at startup)
+                try {
+                    java.nio.file.Path tp = ThumbnailCacheManager.getCachedPath(url);
+                    if (tp != null) {
+                        r.thumbUrl.set(tp.toUri().toString()); // file://... يظهر فورًا
+                    } else {
+                        r.thumbUrl.set(null); // لا تعمل HTTP وقت الإقلاع
+                    }
+                } catch (Exception ignored) {}
+
                 // لو العنوان فاضي لكن عندنا ملف فعلي، اشتقه من اسم الملف
                 try {
                     if ((title == null || title.isBlank()) && outPath != null && !outPath.isBlank()) {
@@ -1399,11 +1409,60 @@ public class MainController {
                         if (filteredDownloadItems != null) {
                             filteredDownloadItems.setPredicate(filteredDownloadItems.getPredicate());
                         }
+                        warmMissingThumbnailsAsync(restored);
                     } catch (Exception ignored) {}
                 });
             }
-
         } catch (Exception ignored) {}
+    }
+
+    // After startup (delayed), fill missing thumbnails for older history entries.
+    // This does NOT block UI startup. It will do HTTP only for items that have no cached file.
+    private void warmMissingThumbnailsAsync(java.util.List<DownloadRow> rows) {
+        if (rows == null || rows.isEmpty()) return;
+
+        // Delay a bit so UI shows instantly first.
+        UI_DELAY_EXEC.schedule(() -> {
+            new Thread(() -> {
+                for (DownloadRow r : rows) {
+                    try {
+                        if (r == null) continue;
+                        if (r.url == null || r.url.isBlank()) continue;
+
+                        // If already has a thumb, skip
+                        String cur = null;
+                        try { cur = (r.thumbUrl == null) ? null : r.thumbUrl.get(); } catch (Exception ignored) {}
+                        if (cur != null && !cur.isBlank()) continue;
+
+                        // If cached file exists, use it
+                        java.nio.file.Path cached = com.grabx.app.grabx.thumbs.ThumbnailCacheManager.getCachedPath(r.url);
+                        if (cached != null) {
+                            java.nio.file.Path fCached = cached;
+                            javafx.application.Platform.runLater(() -> {
+                                try { r.thumbUrl.set(fCached.toUri().toString()); } catch (Exception ignored) {}
+                            });
+                            continue;
+                        }
+
+                        // Otherwise: compute thumb URL (YouTube only) and cache it to disk
+                        String thumbUrl = thumbFromUrl(r.url);
+                        if (thumbUrl == null || thumbUrl.isBlank()) continue;
+
+                        // blocking fetch in this background thread (NOT UI)
+                        com.grabx.app.grabx.thumbs.ThumbnailCacheManager.fetchAndCacheBlocking(r.url, thumbUrl);
+
+                        java.nio.file.Path after = com.grabx.app.grabx.thumbs.ThumbnailCacheManager.getCachedPath(r.url);
+                        if (after != null) {
+                            java.nio.file.Path fAfter = after;
+                            javafx.application.Platform.runLater(() -> {
+                                try { r.thumbUrl.set(fAfter.toUri().toString()); } catch (Exception ignored) {}
+                            });
+                        }
+
+                    } catch (Exception ignored) {}
+                }
+            }, "grabx-warm-thumbs").start();
+        }, 1500, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
     // Cache for computed sizes to avoid re-running yt-dlp repeatedly (key: url|mode|quality)
@@ -2491,25 +2550,34 @@ public class MainController {
                     thumbPlaceholder.setVisible(true);
 
                     // Reuse in-flight fetch if exists
-                    java.util.concurrent.CompletableFuture<Image> fut = THUMB_INFLIGHT.computeIfAbsent(url, key ->
-                            java.util.concurrent.CompletableFuture.supplyAsync(() -> {
-                                try {
-                                    byte[] bytes = fetchUrlBytes(key);
-                                    if (bytes == null || bytes.length == 0) return null;
+                    java.util.concurrent.CompletableFuture<Image> fut =
+                            THUMB_INFLIGHT.computeIfAbsent(url, key ->
+                                    java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                                        try {
+                                            // 1) Try cache first (no network)
+                                            Image img = ThumbnailCacheManager.loadCached(key);
+                                            if (img != null) {
+                                                MAIN_THUMB_CACHE.put(key, img);
+                                                return img;
+                                            }
 
-                                    Image img = new Image(new java.io.ByteArrayInputStream(bytes));
-                                    if (img.isError() || img.getWidth() <= 0) return null;
+                                            // 2) Not cached -> download ONCE to disk (runs in THUMB_POOL thread)
+                                            ThumbnailCacheManager.fetchAndCacheBlocking(key, key);
 
-                                    MAIN_THUMB_CACHE.put(key, img);
-                                    return img;
-                                } catch (Exception ignored) {
-                                    return null;
-                                }
-                            }, THUMB_POOL).whenComplete((img, ex) -> {
-                                // remove from inflight after completion
-                                THUMB_INFLIGHT.remove(key);
-                            })
-                    );
+                                            // 3) Load from disk after download
+                                            Image loaded = ThumbnailCacheManager.loadCached(key);
+                                            if (loaded != null) {
+                                                MAIN_THUMB_CACHE.put(key, loaded);
+                                            }
+                                            return loaded;
+
+                                        } catch (Exception ignored) {
+                                            return null;
+                                        }
+                                    }, THUMB_POOL).whenComplete((img, ex) -> {
+                                        THUMB_INFLIGHT.remove(key);
+                                    })
+                            );
 
                     fut.thenAccept(img -> {
                         if (img == null) return;
