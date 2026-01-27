@@ -365,37 +365,45 @@ public class MainController {
     }
 
 
-    private static Set<Integer> probeHeightsFastJson(String url) {
-        Set<Integer> heights = new HashSet<>();
-        if (url == null || url.isBlank()) return heights;
+private static Set<Integer> probeHeightsFastJson(String url) {
+    Set<Integer> heights = new HashSet<>();
+    if (url == null || url.isBlank()) return heights;
 
-        try {
-            List<String> args = List.of(
-                    "--no-warnings",
-                    "--no-playlist",
-                    "-J",
-                    url.trim()
-            );
+    try {
+        List<String> args = List.of(
+                "--no-warnings",
+                "--no-playlist",
+                "-J",
+                "--encoding", "utf-8",
+                url.trim()
+        );
 
-            String json = com.grabx.app.grabx.util.YtDlpManager.run(args);
-            if (json == null || json.isBlank()) return heights;
+        String json = com.grabx.app.grabx.util.YtDlpManager.run(args);
+        if (json == null) return heights;
 
-            com.fasterxml.jackson.databind.ObjectMapper om =
-                    new com.fasterxml.jackson.databind.ObjectMapper();
+        // Sometimes yt-dlp may emit non-JSON lines (network errors, warnings, etc.).
+        // Keep only the first JSON object if possible.
+        int firstBrace = json.indexOf('{');
+        if (firstBrace > 0) json = json.substring(firstBrace);
+        if (json.isBlank() || !json.trim().startsWith("{")) return heights;
 
-            var root = om.readTree(json);
-            var formats = root.get("formats");
-            if (formats == null || !formats.isArray()) return heights;
+        com.fasterxml.jackson.databind.ObjectMapper om =
+                new com.fasterxml.jackson.databind.ObjectMapper();
 
-            for (var f : formats) {
-                if (!f.has("height")) continue;
-                int h = f.get("height").asInt(-1);
-                if (h > 0) heights.add(normalizeHeight(h));
-            }
-        } catch (Exception ignored) {}
+        var root = om.readTree(json);
+        var formats = root.get("formats");
+        if (formats == null || !formats.isArray()) return heights;
 
-        return normalizeHeights(heights);
-    }
+        for (var f : formats) {
+            if (!f.has("height")) continue;
+            int h = f.get("height").asInt(-1);
+            int nh = normalizeHeight(h);
+            if (nh > 0) heights.add(nh);
+        }
+    } catch (Exception ignored) {}
+
+    return normalizeHeights(heights);
+}
 
     private static final Pattern YTDLP_SIZE = Pattern.compile("\\b(\\d+(?:\\.\\d+)?)(KiB|MiB|GiB)\\b");
 
@@ -1115,6 +1123,7 @@ public class MainController {
                 QUALITY_SEPARATOR,
                 "1080p",
                 "720p",
+                "540p",
                 "480p",
                 "360p",
                 "240p",
@@ -1151,6 +1160,7 @@ public class MainController {
         // keep your labels consistent
         if (h >= 2160) return "2160p (4K)";
         if (h >= 1440) return "1440p (2K)";
+        if (h >= 540 && h < 720) return "540p";
         return h + "p";
     }
 
@@ -1158,11 +1168,25 @@ public class MainController {
     private static int normalizeHeight(int h) {
         if (h <= 0) return -1;
 
-        // Keep ONLY standard ladder heights (prevents 45p/90p/40p storyboard)
-        return switch (h) {
-            case 144, 240, 360, 480, 720, 1080, 1440, 2160, 4320 -> h;
-            default -> -1;
-        };
+        // Ignore tiny storyboard/thumbnail heights
+        if (h < 120) return -1;
+
+        // Accept common ladder heights (and close variants)
+        int[] ladder = {144, 240, 360, 480, 540, 720, 1080, 1440, 2160, 4320};
+        int best = -1;
+        int bestDiff = Integer.MAX_VALUE;
+
+        for (int v : ladder) {
+            int diff = Math.abs(h - v);
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                best = v;
+            }
+        }
+
+        // Tolerance: allow small encoder variations
+        int tolerance = 28;
+        return (bestDiff <= tolerance) ? best : -1;
     }
 
     private static Set<Integer> normalizeHeights(Set<Integer> in) {
@@ -4027,7 +4051,17 @@ public class MainController {
 
                         // NEWFILE: yt-dlp started a new stream/file (audio/video). Reset monotonic progress so it can start from 0 again.
                         if (s.startsWith("[download] Destination:") || s.startsWith("[ExtractAudio] Destination:")) {
+
+                            final String phaseLabel;
+                            if (audioOnly || MODE_AUDIO.equals(mode) || "Audio".equalsIgnoreCase(mode) || "Audio only".equalsIgnoreCase(mode)) {
+                                phaseLabel = "Downloading audio . . . ";
+                            } else {
+                                final boolean isAudioStream = isAudioStreamFromDestinationLine(s);
+                                phaseLabel = isAudioStream ? "Downloading audio . . . " : "Downloading video . . . ";
+                            }
+
                             lastProgressMap.remove(row);
+
                             Platform.runLater(() -> {
                                 try {
                                     row.downloadedBytes.set(0);
@@ -4037,8 +4071,12 @@ public class MainController {
                                     row.size.set("");
                                     if (row.progress.get() < 0) row.progress.set(0);
                                     row.progress.set(0);
-                                    row.status.set("Downloading");
-                                    if (row.state.get() != DownloadRow.State.DOWNLOADING) row.setState(DownloadRow.State.DOWNLOADING);
+
+                                    row.status.set(phaseLabel);
+
+                                    if (row.state.get() != DownloadRow.State.DOWNLOADING)
+                                        row.setState(DownloadRow.State.DOWNLOADING);
+
                                 } catch (Exception ignored) {}
                             });
                         }
@@ -4053,7 +4091,7 @@ public class MainController {
                                 try {
                                     row.speed.set("");
                                     row.eta.set("");
-                                    row.status.set("Merging...");
+                                    row.status.set("Merging . . .");
                                     row.progress.set(-1); // indeterminate
                                 } catch (Exception ignored) {}
                             });
@@ -4097,7 +4135,12 @@ public class MainController {
                         if (m.find()) {
                             if (startedDownloading.compareAndSet(false, true)) {
                                 Platform.runLater(() -> {
-                                    row.status.set("Downloading");
+//                                    row.status.set("Downloading");
+                                    String cur = row.status.get();
+                                    if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
+                                        row.status.set("Downloading");
+                                    }
+        // أو ببساطة احذفها إذا أنت أصلاً بتضبط status من NEWFILE
                                     row.size.set("");
                                     if (row.progress.get() < 0) row.progress.set(0);
                                 });
@@ -4134,7 +4177,12 @@ public class MainController {
                             double fpct = pct;
 
                             Platform.runLater(() -> {
-                                row.status.set("Downloading");
+//                                row.status.set("Downloading");
+                                String cur = row.status.get();
+                                if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
+                                    row.status.set("Downloading");
+                                }
+                                // أو ببساطة احذفها إذا أنت أصلاً بتضبط status من NEWFILE
                                 row.size.set(sizeText == null ? "" : sizeText);
 
                                 applyProgressMonotonic(row, fpct);
@@ -4153,7 +4201,12 @@ public class MainController {
                         if (mf.find()) {
                             if (startedDownloading.compareAndSet(false, true)) {
                                 Platform.runLater(() -> {
-                                    row.status.set("Downloading");
+//                                    row.status.set("Downloading");
+                                    String cur = row.status.get();
+                                    if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
+                                        row.status.set("Downloading");
+                                    }
+                                    // أو ببساطة احذفها إذا أنت أصلاً بتضبط status من NEWFILE
                                     if (row.progress.get() < 0) row.progress.set(0);
                                 });
                             }
@@ -4165,7 +4218,12 @@ public class MainController {
 
                             double fpct = pct;
                             Platform.runLater(() -> {
-                                row.status.set("Downloading");
+//                                row.status.set("Downloading");
+                                String cur = row.status.get();
+                                if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
+                                    row.status.set("Downloading");
+                                }
+                                // أو ببساطة احذفها إذا أنت أصلاً بتضبط status من NEWFILE
                                 applyProgressMonotonic(row, fpct);
                                 if (spd != null && !spd.isBlank()) row.speed.set(normalizeSpeedUnit(spd));
                                 if (et != null && !et.isBlank()) row.eta.set(et);
@@ -4198,7 +4256,11 @@ public class MainController {
                             if (s.startsWith("[download]")) {
                                 if (startedDownloading.compareAndSet(false, true)) {
                                     Platform.runLater(() -> {
-                                        row.status.set("Downloading");
+//                                        row.status.set("Downloading");
+                                        String cur = row.status.get();
+                                        if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
+                                            row.status.set("Downloading");
+                                        }
                                         if (row.progress.get() < 0) row.progress.set(0);
                                     });
                                 }
@@ -4275,6 +4337,68 @@ public class MainController {
                 });
             }
         }, "yt-dlp-download").start();
+    }
+    private static boolean isAudioExtension(String ext) {
+        if (ext == null) return false;
+        ext = ext.toLowerCase(java.util.Locale.ROOT).trim();
+        return ext.equals("m4a") || ext.equals("mp3") || ext.equals("aac") || ext.equals("opus") ||
+                ext.equals("ogg") || ext.equals("flac") || ext.equals("wav");
+    }
+
+    private static boolean isAudioStreamFromDestinationLine(String s) {
+        if (s == null) return false;
+
+        // ExtractAudio lines are always audio
+        if (s.startsWith("[ExtractAudio]")) return true;
+
+        // Accept both:
+        // [download] Destination: ...
+        // [download] Destination ...
+        int idx = s.indexOf("Destination");
+        if (idx < 0) return false;
+
+        int colon = s.indexOf(":", idx);
+        String path = (colon >= 0)
+                ? s.substring(colon + 1).trim()
+                : s.substring(idx + "Destination".length()).trim();
+
+        if (path.isEmpty()) return false;
+
+        // remove quotes if any
+        if ((path.startsWith("\"") && path.endsWith("\"")) || (path.startsWith("'") && path.endsWith("'"))) {
+            path = path.substring(1, path.length() - 1).trim();
+        }
+        if (path.isEmpty()) return false;
+
+        // Strong signal: YouTube format-id embedded in filename: ".f140." / ".f251." etc.
+        // Examples:
+        //   title.f251.webm  (audio opus)
+        //   title.f140.m4a   (audio m4a)
+        //   title.f137.mp4   (video)
+        try {
+            java.util.regex.Matcher mid = java.util.regex.Pattern
+                    .compile("\\.f(\\d{2,4})\\.", java.util.regex.Pattern.CASE_INSENSITIVE)
+                    .matcher(path);
+
+            if (mid.find()) {
+                int fid = Integer.parseInt(mid.group(1));
+
+                // Common audio-only ids on YouTube
+                if (fid == 139 || fid == 140 || fid == 141 || fid == 249 || fid == 250 || fid == 251
+                        || fid == 599 || fid == 600) {
+                    return true;
+                }
+                // if it has a format id and it's not in audio set -> very likely video
+                return false;
+            }
+        } catch (Exception ignored) {}
+
+        // Fallback: audio extensions => audio
+        int dot = path.lastIndexOf('.');
+        if (dot < 0 || dot == path.length() - 1) return false;
+
+        String ext = path.substring(dot + 1).toLowerCase(java.util.Locale.ROOT).trim();
+        return isAudioExtension(ext);
     }
 
     private static void killProcessTree(Process p) {
