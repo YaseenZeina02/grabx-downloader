@@ -3528,7 +3528,7 @@ public class MainController {
 
     private void addDownloadItemToList(String url, String folder, String mode, String quality) {
         ensureDownloadsListView();
-
+        url = normalizeYoutubeSingleVideoUrl(url);
         String initialTitle = shorten(url);
         if (initialTitle == null || initialTitle.isBlank()) initialTitle = "New item";
 
@@ -3557,12 +3557,13 @@ public class MainController {
                 }
 
                 // ensure it gets cached on disk once
+                String finalUrl = url;
                 com.grabx.app.grabx.thumbs.ThumbnailCacheManager.fetchAndCacheAsync(
                         url,
                         thumbUrl,
                         () -> {
                             java.nio.file.Path p =
-                                    com.grabx.app.grabx.thumbs.ThumbnailCacheManager.getCachedPath(url);
+                                    com.grabx.app.grabx.thumbs.ThumbnailCacheManager.getCachedPath(finalUrl);
                             if (p != null) {
                                 javafx.application.Platform.runLater(() -> {
                                     try { row.thumbUrl.set(p.toUri().toString()); } catch (Exception ignored) {}
@@ -3591,15 +3592,16 @@ public class MainController {
 
         // ✅ oEmbed title (سريع) وبعدها احفظ التاريخ مرة ثانية
         if (url != null && !url.isBlank()) {
+            String finalUrl1 = url;
             new Thread(() -> {
-                String realTitle = fetchTitleWithOEmbed(url);
+                String realTitle = fetchTitleWithOEmbed(finalUrl1);
                 Platform.runLater(() -> {
                     if (realTitle != null && !realTitle.isBlank()) {
 //                        row.setTitleOnce(realTitle);
                         row.setTitleOnce(makeUniqueUiTitle(realTitle, row));
                         if (statusText != null) statusText.setText("Queued: " + realTitle);
                     } else {
-                        String fallback = shorten(url);
+                        String fallback = shorten(finalUrl1);
                         if (fallback == null || fallback.isBlank()) fallback = "Unknown title";
 //                        row.setTitleOnce(fallback);
                         row.setTitleOnce(makeUniqueUiTitle(fallback, row));
@@ -3736,6 +3738,7 @@ public class MainController {
                             requestedHeight = -1;
                         }
                     }
+                    
                 }
 
                 // Decide output template:
@@ -3745,9 +3748,6 @@ public class MainController {
                 if (audioOnly) {
                     baseTpl = "%(title)s [audio].%(ext)s";
                 } else {
-                    // IMPORTANT: use the *selected* quality in the filename when the user chose a specific height,
-                    // so downloading 240p and 360p for the same video produces different filenames even if yt-dlp
-                    // ends up selecting the same actual height.
                     if (requestedHeight > 0) {
                         baseTpl = "%(title)s [" + requestedHeight + "p].%(ext)s";
                     } else {
@@ -4189,6 +4189,71 @@ public class MainController {
 
         } catch (Exception ignored) {
             return null;
+        }
+    }
+
+    private static String normalizeYoutubeSingleVideoUrl(String input) {
+        if (input == null) return null;
+        String u = input.trim();
+        if (u.isBlank()) return u;
+
+        try {
+            java.net.URI uri = new java.net.URI(u);
+
+            String host = uri.getHost();
+            if (host == null) host = "";
+            host = host.toLowerCase(java.util.Locale.ROOT);
+
+            // handle youtu.be/<id>
+            if (host.contains("youtu.be")) {
+                String path = uri.getPath(); // "/ID"
+                if (path != null && path.length() > 1) {
+                    String id = path.substring(1);
+                    int slash = id.indexOf('/');
+                    if (slash > 0) id = id.substring(0, slash);
+                    if (!id.isBlank()) {
+                        return "https://www.youtube.com/watch?v=" + id;
+                    }
+                }
+                return u;
+            }
+
+            // only normalize youtube domains
+            if (!host.contains("youtube.com")) return u;
+
+            String path = uri.getPath() == null ? "" : uri.getPath();
+
+            // shorts/<id> -> watch?v=<id>
+            if (path.startsWith("/shorts/")) {
+                String id = path.substring("/shorts/".length());
+                int slash = id.indexOf('/');
+                if (slash > 0) id = id.substring(0, slash);
+                if (!id.isBlank()) {
+                    return "https://www.youtube.com/watch?v=" + id;
+                }
+                return u;
+            }
+
+            // watch?v=<id>  -> keep only v
+            String q = uri.getRawQuery();
+            if (q == null || q.isBlank()) return u;
+
+            String v = null;
+            for (String part : q.split("&")) {
+                int eq = part.indexOf('=');
+                String k = (eq >= 0) ? part.substring(0, eq) : part;
+                String val = (eq >= 0) ? part.substring(eq + 1) : "";
+                if ("v".equals(k)) {
+                    v = java.net.URLDecoder.decode(val, java.nio.charset.StandardCharsets.UTF_8);
+                    break;
+                }
+            }
+            if (v == null || v.isBlank()) return u;
+
+            return "https://www.youtube.com/watch?v=" + v;
+
+        } catch (Exception ignored) {
+            return u;
         }
     }
 
