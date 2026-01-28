@@ -59,6 +59,9 @@ import static com.grabx.app.grabx.util.YtDlpManager.*;
 
 public class MainController {
     @FXML
+    private TextField searchField;
+
+    @FXML
     private Label statusText;
     @FXML
     private BorderPane root;
@@ -2345,10 +2348,21 @@ public class MainController {
             cmd.add(selector);
             cmd.add(u);
 
+            Path ffmpeg = com.grabx.app.grabx.util.FfmpegManager.ensureAvailable();
+            if (ffmpeg != null) {
+                cmd.add("--ffmpeg-location");
+                cmd.add(ffmpeg.toAbsolutePath().toString());
+                System.out.println("[FFMPEG] Using ffmpeg at: " + ffmpeg);
+            } else {
+                System.out.println("[FFMPEG] ffmpeg not available, yt-dlp will try system ffmpeg.");
+            }
+
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.redirectErrorStream(true);
             pb.environment().putIfAbsent("PYTHONIOENCODING", "utf-8");
+
             Process p = pb.start();
+
             StringBuilder sb = new StringBuilder(256 * 1024);
             try (java.io.BufferedReader br = new java.io.BufferedReader(
                     new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
@@ -3716,12 +3730,14 @@ public class MainController {
                 cmd.add("--encoding");
                 cmd.add("utf-8");
 
+
                 // Build format selector first (we also need it to probe the final output filename)
                 String selector;
                 int requestedHeight = -1; // used for stable filenames by selected quality
 
                 if (audioOnly) {
                     selector = "bestaudio/best";
+
                 } else {
                     String q = (quality == null) ? QUALITY_BEST : quality;
 
@@ -3803,29 +3819,85 @@ public class MainController {
                 );
 
                 // Apply format selection
+//                if (audioOnly) {
+//                    cmd.add("-x");
+//                    cmd.add("--audio-quality");
+//                    cmd.add("0");
+//
+//                    String fmt = quality;
+//                    if (fmt == null || fmt.isBlank() || AUDIO_BEST.equals(fmt) || QUALITY_SEPARATOR.equals(fmt)) {
+//                        fmt = AUDIO_DEFAULT_FORMAT; // مثلا "mp3"
+//                    }
+//
+//                    cmd.add("--audio-format");
+//                    cmd.add(fmt);
+//
+//                    cmd.add("--add-metadata");
+//                    cmd.add("--embed-thumbnail");
+//                    cmd.add("--convert-thumbnails");
+//                    cmd.add("jpg");
+//                    cmd.add("--postprocessor-args");
+//                    cmd.add("ffmpeg:-id3v2_version 3");
+//
+//                    cmd.add("-f");
+//                    cmd.add(selector);
+//                } else {
+//                    cmd.add("-f");
+//                    cmd.add(selector);
+//                }
+
+
                 if (audioOnly) {
                     cmd.add("-x");
-                    cmd.add("--audio-quality"); cmd.add("0");
+                    cmd.add("--audio-quality");
+                    cmd.add("0");
 
                     String fmt = quality;
                     if (fmt == null || fmt.isBlank() || AUDIO_BEST.equals(fmt) || QUALITY_SEPARATOR.equals(fmt)) {
-                        fmt = AUDIO_DEFAULT_FORMAT; // mp3
+                        fmt = AUDIO_DEFAULT_FORMAT;
                     }
-                    cmd.add("--audio-format"); cmd.add(fmt);
-                    cmd.add("-f"); cmd.add(selector);
+                    fmt = fmt.trim().toLowerCase(java.util.Locale.ROOT);
+                    cmd.add("--audio-format");
+                    cmd.add(fmt);
+                    cmd.add("--add-metadata");
+
+                    if (supportsAudioThumbnailEmbedding(fmt)) {
+                        cmd.add("--embed-thumbnail");
+                        cmd.add("--convert-thumbnails");
+                        cmd.add("jpg");
+                        cmd.add("--postprocessor-args");
+                        cmd.add("ffmpeg:-id3v2_version 3");
+                        System.out.println("[AUDIO] Thumbnail embed ENABLED for: " + fmt);
+                    } else {
+                        System.out.println("[AUDIO] Thumbnail embed NOT supported for: " + fmt + " -> continue without thumbnail");
+                    }
+
+                    cmd.add("-f");
+                    cmd.add(selector);
 
                 } else {
-                    cmd.add("-f"); cmd.add(selector);
+                    cmd.add("-f");
+                    cmd.add(selector);
                 }
 
 
                 cmd.add(url);
+
+                Path ffmpeg = com.grabx.app.grabx.util.FfmpegManager.ensureAvailable();
+                if (ffmpeg != null) {
+                    cmd.add("--ffmpeg-location");
+                    cmd.add(ffmpeg.toAbsolutePath().toString());
+                    System.out.println("[FFMPEG] Using ffmpeg at: " + ffmpeg);
+                } else {
+                    System.out.println("[FFMPEG] ffmpeg not available, yt-dlp will try system ffmpeg.");
+                }
 
                 ProcessBuilder pb = new ProcessBuilder(cmd);
                 pb.redirectErrorStream(true);
                 pb.environment().putIfAbsent("PYTHONIOENCODING", "utf-8");
 
                 p = pb.start();
+
                 activeProcesses.put(row, p);
 
                 try (java.io.BufferedReader br = new java.io.BufferedReader(
@@ -4133,6 +4205,23 @@ public class MainController {
                 });
             }
         }, "yt-dlp-download").start();
+    }
+
+    private static boolean supportsAudioThumbnailEmbedding(String fmt) {
+        if (fmt == null) return false;
+        String f = fmt.trim().toLowerCase(java.util.Locale.ROOT);
+
+        // wav intentionally NOT included
+        return f.equals("mp3")
+                || f.equals("m4a")
+                || f.equals("opus")
+                || f.equals("ogg")
+                || f.equals("flac")
+                || f.equals("mka")
+                || f.equals("mkv")
+                || f.equals("mp4")
+                || f.equals("m4b")
+                || f.equals("m4p");
     }
 
     // Probe the exact output filename yt-dlp would use for the given selector + template.
@@ -5662,61 +5751,82 @@ public class MainController {
     }
 
 
-    private static java.util.List<PlaylistEntry> probePlaylistFlat(String playlistUrl) {
-        java.util.List<PlaylistEntry> out = new java.util.ArrayList<>();
-        if (playlistUrl == null || playlistUrl.isBlank()) return out;
+private static java.util.List<PlaylistEntry> probePlaylistFlat(String playlistUrl) {
+    java.util.List<PlaylistEntry> out = new java.util.ArrayList<>();
+    if (playlistUrl == null || playlistUrl.isBlank()) return out;
 
-        try {
-            // Flat playlist to avoid heavy metadata; print: ID|TITLE
-            ProcessBuilder pb = new ProcessBuilder(
-                    "yt-dlp",
-                    "--flat-playlist",
-                    "--no-warnings",
-                    "--print",
-                    "%(id)s|%(title)s",
-                    playlistUrl
-            );
-            pb.redirectErrorStream(true);
-            Process p = pb.start();
+    try {
+        // Build yt-dlp command
+        java.util.List<String> cmd = new java.util.ArrayList<>();
+        cmd.add("yt-dlp");
 
-            try (BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = br.readLine()) != null) {
-                    line = line.trim();
-                    if (line.isEmpty()) continue;
-
-
-                    int idx = line.indexOf('|');
-                    String id = idx >= 0 ? line.substring(0, idx).trim() : line;
-                    if (id.isBlank()) continue;
-                    String title = idx >= 0 ? line.substring(idx + 1).trim() : "";
-                    int index = out.size() + 1;
-
-                    PlaylistEntry entry = new PlaylistEntry(index, id, title, youtubeThumbUrl(id), true);
-
-                    // yt-dlp flat playlist returns these special titles for unavailable items
-                    String t = (title == null) ? "" : title.trim();
-                    boolean unavailable = t.equalsIgnoreCase("[Private video]")
-                            || t.equalsIgnoreCase("[Deleted video]")
-                            || t.toLowerCase().contains("private video")
-                            || t.toLowerCase().contains("deleted video");
-
-                    if (unavailable) {
-                        entry.setUnavailable(true);
-                        entry.setUnavailableReason(t);
-                        entry.setSelected(false); // do not auto-select
-                    }
-
-                    out.add(entry);
-                }
-            }
-
-            p.waitFor();
-        } catch (Exception ignored) {
+        // If ffmpeg is available, tell yt-dlp where it is.
+        // This helps on fresh machines where ffmpeg isn't installed system-wide.
+        java.nio.file.Path ffmpeg = com.grabx.app.grabx.util.FfmpegManager.ensureAvailable();
+        if (ffmpeg != null) {
+            cmd.add("--ffmpeg-location");
+            cmd.add(ffmpeg.toAbsolutePath().toString());
+            System.out.println("[FFMPEG] probePlaylistFlat: using ffmpeg at: " + ffmpeg);
+        } else {
+            System.out.println("[FFMPEG] probePlaylistFlat: ffmpeg not available, yt-dlp will try system ffmpeg (if any)." );
         }
 
-        return out;
+        // Flat playlist to avoid heavy metadata; print: ID|TITLE
+        cmd.add("--flat-playlist");
+        cmd.add("--no-warnings");
+        cmd.add("--print");
+        cmd.add("%(id)s|%(title)s");
+        cmd.add(playlistUrl);
+
+        ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.redirectErrorStream(true);
+        pb.environment().putIfAbsent("PYTHONIOENCODING", "utf-8");
+
+        Process p = pb.start();
+
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+
+                int idx = line.indexOf('|');
+                String id = idx >= 0 ? line.substring(0, idx).trim() : line;
+                if (id.isBlank()) continue;
+
+                String title = idx >= 0 ? line.substring(idx + 1).trim() : "";
+                int index = out.size() + 1;
+
+                PlaylistEntry entry = new PlaylistEntry(index, id, title, youtubeThumbUrl(id), true);
+
+                // yt-dlp flat playlist returns these special titles for unavailable items
+                String t = (title == null) ? "" : title.trim();
+                boolean unavailable = t.equalsIgnoreCase("[Private video]")
+                        || t.equalsIgnoreCase("[Deleted video]")
+                        || t.toLowerCase().contains("private video")
+                        || t.toLowerCase().contains("deleted video");
+
+                if (unavailable) {
+                    entry.setUnavailable(true);
+                    entry.setUnavailableReason(t);
+                    entry.setSelected(false); // do not auto-select
+                }
+
+                out.add(entry);
+            }
+        }
+
+        int code = p.waitFor();
+        if (code != 0) {
+            System.out.println("[yt-dlp] probePlaylistFlat exit code: " + code);
+        }
+
+    } catch (Exception e) {
+        System.out.println("[yt-dlp] probePlaylistFlat failed: " + e.getMessage());
     }
+
+    return out;
+}
 
     private static String youtubeThumbUrl(String videoId) {
         if (videoId == null || videoId.isBlank()) return null;
