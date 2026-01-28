@@ -25,7 +25,8 @@ public class DownloadRow {
         PAUSED,
         COMPLETED,
         CANCELLED,
-        FAILED
+        FAILED,
+        MISSING
     }
 
     public final String url;
@@ -90,6 +91,7 @@ public class DownloadRow {
             }
             case CANCELLED -> status.set("Cancelled");
             case FAILED -> status.set("Failed");
+            case MISSING -> status.set("Missing");
         }
     }
 }

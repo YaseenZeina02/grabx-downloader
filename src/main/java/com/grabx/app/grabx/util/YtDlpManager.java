@@ -64,18 +64,10 @@ public final class YtDlpManager {
         return null;
     }
 
-    /**
-     * Resolves yt-dlp ONCE per app run.
-     * 1) Use persisted path from Preferences if still valid.
-     * 2) Otherwise extract bundled binary (if present) into app tools dir.
-     * 3) Persist the resolved path + version.
-     */
     private static void ensureInitializedOnce() {
         if (initDone) return;
         synchronized (INIT_LOCK) {
             if (initDone) return;
-
-            // 1) Try persisted path first (fast, no extraction, no chmod).
             try {
                 String saved = PREFS.get(PREF_YTDLP_PATH, null);
                 if (saved != null && !saved.isBlank()) {
@@ -210,10 +202,9 @@ public final class YtDlpManager {
 
 
 
-// ============================
-// Download support (blocking)
-// ============================
-
+    // ============================
+    // Download support (blocking)
+    // ============================
     public static final class DownloadRequest {
         public final String url;
         public final Path outputDir;
@@ -248,9 +239,21 @@ public final class YtDlpManager {
         cmd.add("--no-warnings");
         cmd.add("--progress");
         cmd.add("--encoding"); cmd.add("utf-8");
+        // Avoid overwriting an existing file with the same name
+        cmd.add("--no-overwrites");
+        // Auto-number duplicates: (1), (2), ...
+        cmd.add("--autonumber-start");
+        cmd.add("1");
 
+        String outTpl;
+        if (req.audioOnly) {
+            outTpl = "%(title)s [audio] (%(autonumber)d).%(ext)s";
+        } else {
+            outTpl = "%(title)s [%(height)sp] (%(autonumber)d).%(ext)s";
+        }
         cmd.add("-o");
-        cmd.add(req.outputDir.resolve("%(title)s.%(ext)s").toString());
+        cmd.add(req.outputDir.resolve(outTpl).toString());
+
 
         if (req.audioOnly) {
             cmd.add("-x");
@@ -415,8 +418,6 @@ public final class YtDlpManager {
         if (os == OS.MAC) {
             // Try multiple layouts (some repos keep a universal binary, others keep per-arch)
             c.add("tools/yt-dlp/mac/yt-dlp");
-//            c.add("tools/yt-dlp/mac.universal/yt-dlp");
-//            c.add("tools/yt-dlp/mac/" + (arch == ARCH.ARM64 ? "arm64" : "x64") + "/yt-dlp");
         } else if (os == OS.LINUX) {
             // linux/{arm64|x64}/yt-dlp
             c.add("tools/yt-dlp/linux/" + (arch == ARCH.ARM64 ? "arm64" : "x64") + "/yt-dlp");
@@ -450,8 +451,8 @@ public final class YtDlpManager {
 
 
     // ============================
-// yt-dlp timing helpers
-// ============================
+    // yt-dlp timing helpers
+    // ============================
     private static boolean YTDLP_TIMING = true; // عطّلها لاحقًا لو بدك
 
     public static long tStart(String tag, String detail) {

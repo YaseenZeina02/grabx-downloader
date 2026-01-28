@@ -7,6 +7,8 @@ import com.grabx.app.grabx.ui.dialogs.NativeDialogs;
 import com.grabx.app.grabx.thumbs.ThumbnailCacheManager;
 import com.grabx.app.grabx.util.YtDlpManager;
 import javafx.animation.*;
+import javafx.beans.binding.Bindings;
+import javafx.beans.binding.BooleanBinding;
 import javafx.geometry.NodeOrientation;
 import javafx.geometry.Pos;
 import javafx.scene.layout.HBox;
@@ -103,10 +105,48 @@ public class MainController {
                 t.setDaemon(true);
                 return t;
             },
-            // if queue is full, run in caller thread would block UI; so we discard and try later
-//            new ThreadPoolExecutor.DiscardPolicy()
+
             new ThreadPoolExecutor.AbortPolicy()
     );
+
+    private static final String ICON_PLUS =
+            "M19 11H13V5h-2v6H5v2h6v6h2v-6h6v-2z";
+
+    private static final String ICON_FOLDER_OPEN =
+            "M3 6.5C3 5.12 4.12 4 5.5 4H10L12 6H18.5C19.88 6 21 7.12 21 8.5V17.5C21 18.88 19.88 20 18.5 20H5.5C4.12 20 3 18.88 3 17.5V6.5Z";
+
+    private static final String ICON_PAUSE =
+            "M6 5h4v14H6V5zm8 0h4v14h-4V5z";
+
+    private static final String ICON_PLAY =
+            "M8 5v14l11-7L8 5z";
+
+    private static final String ICON_CANCEL =
+            "M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.29 9.17 12 2.89 5.71 4.3 4.29 10.59 10.6 16.89 4.29z";
+
+    private static final String ICON_RETRY =
+            "M12 5a7 7 0 1 1-6.32 4H3l3.5-3.5L10 9H7.76A5.5 5.5 0 1 0 12 6.5V5z";
+
+    private static final String ICON_CLEAR =
+            "M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z";
+
+    private static final String ICON_SETTINGS =
+            "M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58" +
+                    "c.18-.14.23-.41.12-.61l-1.92-3.32c-.11-.2-.36-.28-.57-.2l-2.39.96" +
+                    "c-.5-.38-1.04-.69-1.64-.92l-.36-2.54c-.03-.22-.22-.38-.45-.38h-3.84" +
+                    "c-.23 0-.42.16-.45.38l-.36 2.54c-.6.23-1.14.54-1.64.92l-2.39-.96" +
+                    "c-.21-.08-.46 0-.57.2L2.71 8.89c-.11.2-.06.47.12.61l2.03 1.58" +
+                    "c-.04.31-.06.63-.06.94s.02.63.06.94L2.83 14.54c-.18.14-.23.41-.12.61" +
+                    "l1.92 3.32c.11.2.36.28.57.2l2.39-.96c.5.38 1.04.69 1.64.92l.36 2.54" +
+                    "c.03.22.22.38.45.38h3.84c.23 0 .42-.16.45-.38l.36-2.54" +
+                    "c.6-.23 1.14-.54 1.64-.92l2.39.96c.21.08.46 0 .57-.2l1.92-3.32" +
+                    "c.11-.2.06-.47-.12-.61l-2.03-1.58z" +
+                    "M12 15.5c-1.93 0-3.5-1.57-3.5-3.5S10.07 8.5 12 8.5" +
+                    "s3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z";
+
+    private static final String ICON_LINK=
+            "M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3z";
+
 
     private static final Map<String, ProbeQualitiesResult> PLAYLIST_PROBE_CACHE = new ConcurrentHashMap<>();
     // Cache thumbnails to avoid re-downloading when cells are recycled
@@ -121,10 +161,12 @@ public class MainController {
             new java.util.concurrent.ConcurrentHashMap<>();
 
     private final java.util.Map<DownloadRow, String> stopReasons = new java.util.concurrent.ConcurrentHashMap<>();
-    //    private static final String YTDLP_OUT_TMPL = "%(title).200B [%(id)s].%(ext)s";
     private static final String YTDLP_OUT_TMPL = "%(title)s.%(ext)s";
 
+    private javafx.animation.Timeline missingWatcherTl;
 
+    // Dynamic Sidebar item for Missing (show only if needed)
+    private final SidebarItem SIDEBAR_MISSING_ITEM = new SidebarItem("MISSING", "Missing");
     // =====================
     // Download history (JSON) – lightweight persistence
     // =====================
@@ -190,9 +232,6 @@ public class MainController {
     // Pending tooltips until hoverBubble is ready (scene/root not ready during initialize)
     private final java.util.List<javafx.util.Pair<Button, String>> pendingTooltips = new java.util.ArrayList<>();
     private volatile boolean hoverBubbleReady = false;
-
-
-
 
     // ========= Actions =========
 
@@ -297,6 +336,7 @@ public class MainController {
 
         if (!toRemove.isEmpty()) {
             downloadItems.removeAll(toRemove);
+            updateMissingSidebarItem();
             scheduleHistorySave();
         }
 
@@ -365,45 +405,45 @@ public class MainController {
     }
 
 
-private static Set<Integer> probeHeightsFastJson(String url) {
-    Set<Integer> heights = new HashSet<>();
-    if (url == null || url.isBlank()) return heights;
+    private static Set<Integer> probeHeightsFastJson(String url) {
+        Set<Integer> heights = new HashSet<>();
+        if (url == null || url.isBlank()) return heights;
 
-    try {
-        List<String> args = List.of(
-                "--no-warnings",
-                "--no-playlist",
-                "-J",
-                "--encoding", "utf-8",
-                url.trim()
-        );
+        try {
+            List<String> args = List.of(
+                    "--no-warnings",
+                    "--no-playlist",
+                    "-J",
+                    "--encoding", "utf-8",
+                    url.trim()
+            );
 
-        String json = com.grabx.app.grabx.util.YtDlpManager.run(args);
-        if (json == null) return heights;
+            String json = com.grabx.app.grabx.util.YtDlpManager.run(args);
+            if (json == null) return heights;
 
-        // Sometimes yt-dlp may emit non-JSON lines (network errors, warnings, etc.).
-        // Keep only the first JSON object if possible.
-        int firstBrace = json.indexOf('{');
-        if (firstBrace > 0) json = json.substring(firstBrace);
-        if (json.isBlank() || !json.trim().startsWith("{")) return heights;
+            // Sometimes yt-dlp may emit non-JSON lines (network errors, warnings, etc.).
+            // Keep only the first JSON object if possible.
+            int firstBrace = json.indexOf('{');
+            if (firstBrace > 0) json = json.substring(firstBrace);
+            if (json.isBlank() || !json.trim().startsWith("{")) return heights;
 
-        com.fasterxml.jackson.databind.ObjectMapper om =
-                new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.ObjectMapper om =
+                    new com.fasterxml.jackson.databind.ObjectMapper();
 
-        var root = om.readTree(json);
-        var formats = root.get("formats");
-        if (formats == null || !formats.isArray()) return heights;
+            var root = om.readTree(json);
+            var formats = root.get("formats");
+            if (formats == null || !formats.isArray()) return heights;
 
-        for (var f : formats) {
-            if (!f.has("height")) continue;
-            int h = f.get("height").asInt(-1);
-            int nh = normalizeHeight(h);
-            if (nh > 0) heights.add(nh);
-        }
-    } catch (Exception ignored) {}
+            for (var f : formats) {
+                if (!f.has("height")) continue;
+                int h = f.get("height").asInt(-1);
+                int nh = normalizeHeight(h);
+                if (nh > 0) heights.add(nh);
+            }
+        } catch (Exception ignored) {}
 
-    return normalizeHeights(heights);
-}
+        return normalizeHeights(heights);
+    }
 
     private static final Pattern YTDLP_SIZE = Pattern.compile("\\b(\\d+(?:\\.\\d+)?)(KiB|MiB|GiB)\\b");
 
@@ -714,6 +754,8 @@ private static Set<Integer> probeHeightsFastJson(String url) {
         ensureDownloadsListView();
         applyFilter("ALL");
         loadDownloadHistoryOnce();
+        updateMissingSidebarItem();
+        startMissingFileWatcher();
 
         setupClipboardAutoPaste();
 
@@ -732,6 +774,8 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                 new SidebarItem("COMPLETED", "Completed"),
                 new SidebarItem("CANCELLED", "Cancelled")
         );
+
+
 
 
         sidebarList.setFixedCellSize(44);
@@ -783,7 +827,7 @@ private static Set<Integer> probeHeightsFastJson(String url) {
             DownloadRow.State st = null;
             try { st = row.state.get(); } catch (Exception ignored) {}
 
-            if ("ALL".equals(k)) return true;
+            if ("ALL".equals(k)) return st != DownloadRow.State.MISSING;
 
             if ("DOWNLOADING".equals(k)) return st == DownloadRow.State.DOWNLOADING;
             if ("PAUSED".equals(k))      return st == DownloadRow.State.PAUSED;
@@ -791,10 +835,85 @@ private static Set<Integer> probeHeightsFastJson(String url) {
 
             // بدك دمج Cancelled + Failed مع بعض (زي ما اتفقنا)
             if ("CANCELLED".equals(k))   return st == DownloadRow.State.CANCELLED || st == DownloadRow.State.FAILED;
+            if ("MISSING".equals(k))     return st == DownloadRow.State.MISSING;
 
             return true;
         });
     }
+//    private void updateMissingSidebarItem() {
+//        boolean hasMissing = downloadItems.stream()
+//                .anyMatch(r -> r != null && r.state.get() == DownloadRow.State.MISSING);
+//
+//        boolean alreadyExists = sidebarList.getItems().stream()
+//                .anyMatch(it -> "MISSING".equals(it.getKey()));
+//
+//        if (hasMissing && !alreadyExists) {
+//            sidebarList.getItems().add(
+//                    new SidebarItem("MISSING", "Missing")
+//            );
+//        }
+//
+//        if (!hasMissing && alreadyExists) {
+//            sidebarList.getItems().removeIf(it -> "MISSING".equals(it.getKey()));
+//        }
+//    }
+
+    private void startMissingFileWatcher() {
+        try {
+            if (missingWatcherTl != null) return;
+        } catch (Exception ignored) {}
+
+        missingWatcherTl = new javafx.animation.Timeline(
+                new javafx.animation.KeyFrame(javafx.util.Duration.seconds(2), ev -> {
+                    try { refreshMissingFromDisk(); } catch (Exception ignored) {}
+                })
+        );
+        missingWatcherTl.setCycleCount(javafx.animation.Animation.INDEFINITE);
+        try { missingWatcherTl.play(); } catch (Exception ignored) {}
+
+        // فحص سريع بعد الإقلاع مباشرة
+        UI_DELAY_EXEC.schedule(() -> javafx.application.Platform.runLater(() -> {
+            try { refreshMissingFromDisk(); } catch (Exception ignored) {}
+        }), 350, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    private void refreshMissingFromDisk() {
+        if (downloadItems == null || downloadItems.isEmpty()) return;
+
+        boolean anyChanged = false;
+
+        for (DownloadRow r : downloadItems) {
+            if (r == null) continue;
+
+            DownloadRow.State st;
+            try { st = r.state.get(); } catch (Exception e) { continue; }
+
+            // فقط: Completed -> Missing إذا الملف اختفى
+            if (st != DownloadRow.State.COMPLETED) continue;
+
+            boolean ok;
+            try {
+                java.nio.file.Path p = (r.outputFile == null) ? null : r.outputFile.get();
+                ok = p != null && java.nio.file.Files.exists(p) && java.nio.file.Files.size(p) > 0;
+            } catch (Exception ignored) {
+                ok = false;
+            }
+
+            if (!ok) {
+                r.setState(DownloadRow.State.MISSING);
+                anyChanged = true;
+            }
+        }
+
+        if (anyChanged && filteredDownloadItems != null) {
+            // خلي الفلاتر تتحرك فوراً
+            filteredDownloadItems.setPredicate(filteredDownloadItems.getPredicate());
+        }
+        if (anyChanged) {
+            Platform.runLater(this::updateMissingSidebarItem);
+        }
+    }
+
 
     // ========= AddLink open helpers (safe showAndWait) =========
 
@@ -861,12 +980,10 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                 cancelDownloadRow(row);
             }
         }
-
         if (statusText != null) {
             statusText.setText("All active downloads cancelled");
         }
     }
-
 
     private void applyProgressMonotonic(DownloadRow row, double newPct) {
         if (row == null) return;
@@ -895,7 +1012,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
     }
 
     // ========= Tooltips (stable + no flicker) =========
-
     private void installTooltips() {
         installTooltip(pauseAllButton, "Pause all");
         installTooltip(resumeAllButton, "Resume all");
@@ -971,7 +1087,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                     }
 
                     javafx.scene.Parent currentRoot = newSc.getRoot();
-
                     if (currentRoot instanceof javafx.scene.layout.StackPane sp) {
                         hoverLayer = new Pane();
                         // Do NOT participate in layout; we only use it as an overlay.
@@ -1025,12 +1140,7 @@ private static Set<Integer> probeHeightsFastJson(String url) {
         });
     }
 
-
-
-
-
     // ========= Analyze URL (backend logic - v1) =========
-
     private enum ContentType {
         DIRECT_FILE,
         VIDEO,
@@ -1249,23 +1359,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
         } catch (Exception ignored) {}
     }
 
-    private static boolean canOpenDownloadedFile(DownloadRow row) {
-        if (row == null) return false;
-
-        try {
-            if (row.state.get() != DownloadRow.State.COMPLETED) return false;
-        } catch (Exception ignored) {
-            return false;
-        }
-
-        try {
-            java.nio.file.Path p = (row.outputFile == null) ? null : row.outputFile.get();
-            return p != null && java.nio.file.Files.exists(p);
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
-
     private static String esc(String s) {
         if (s == null) return "";
         return s.replace("\\", "\\\\")
@@ -1295,7 +1388,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
             if (dir != null) java.nio.file.Files.createDirectories(dir);
         } catch (Exception ignored) {}
     }
-
 
     private void saveDownloadHistoryAsync() {
         new Thread(() -> {
@@ -1431,29 +1523,61 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                     try { r.outputFile.set(java.nio.file.Paths.get(outPath)); } catch (Exception ignored) {}
                 }
 
-                // إذا الملف موجود فعليًا على الجهاز اعتبره Completed
+                // Detect if the output file is actually present on disk
+                boolean fileOk = false;
                 try {
                     if (outPath != null && !outPath.isBlank()) {
                         Path p = Paths.get(outPath);
-                        if (Files.exists(p) && Files.size(p) > 0) {
+                        fileOk = Files.exists(p) && Files.size(p) > 0;
+                        if (fileOk) {
+                            // If the file is present, force COMPLETED
                             state = "COMPLETED";
+                        } else {
+                            // If history says COMPLETED but file is gone -> mark as MISSING
+                            String ss = (state == null) ? "" : state.trim().toUpperCase(java.util.Locale.ROOT);
+                            if ("COMPLETED".equals(ss)) {
+                                state = "MISSING";
+                            }
+                        }
+                    } else {
+                        // No output path: cannot be opened; if it was completed, treat as missing
+                        String ss = (state == null) ? "" : state.trim().toUpperCase(java.util.Locale.ROOT);
+                        if ("COMPLETED".equals(ss)) {
+                            state = "MISSING";
                         }
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                    // On any unexpected error, still avoid showing it as COMPLETED if we can't verify the file
+                    String ss = (state == null) ? "" : state.trim().toUpperCase(java.util.Locale.ROOT);
+                    if ("COMPLETED".equals(ss)) {
+                        state = "MISSING";
+                    }
+                }
 
                 try {
-                    DownloadRow.State st = DownloadRow.State.valueOf(state);
+                    String norm = (state == null) ? "QUEUED" : state.trim().toUpperCase(java.util.Locale.ROOT);
+                    DownloadRow.State st = DownloadRow.State.valueOf(norm);
+
                     // لا نرجّعها DOWNLOADING بعد إعادة تشغيل البرنامج
-//                    if (st == DownloadRow.State.DOWNLOADING) st = DownloadRow.State.PAUSED;
-                    // إذا اكتشفنا الملف فعلاً موجود => لازم تكون COMPLETED
-                    if ("COMPLETED".equals(state)) {
-                        st = DownloadRow.State.COMPLETED;
-                    } else if (st == DownloadRow.State.DOWNLOADING) {
+                    if (st == DownloadRow.State.DOWNLOADING) {
                         st = DownloadRow.State.PAUSED;
                     }
 
+                    // Safety: if something is marked COMPLETED but file isn't OK, downgrade to MISSING
+                    if (st == DownloadRow.State.COMPLETED) {
+                        try {
+                            java.nio.file.Path p = (r.outputFile == null) ? null : r.outputFile.get();
+                            boolean ok = p != null && java.nio.file.Files.exists(p) && java.nio.file.Files.size(p) > 0;
+                            if (!ok) st = DownloadRow.State.MISSING;
+                        } catch (Exception ignored2) {
+                            st = DownloadRow.State.MISSING;
+                        }
+                    }
+
                     r.setState(st);
-                    if (st == DownloadRow.State.COMPLETED && lastUpdated > 0) {
+
+                    // Keep completedAt for COMPLETED, and also keep lastUpdated for MISSING (so it keeps its original date)
+                    if ((st == DownloadRow.State.COMPLETED || st == DownloadRow.State.MISSING) && lastUpdated > 0) {
                         r.completedAt = lastUpdated;
                     }
                 } catch (Exception ignored) {
@@ -1461,13 +1585,17 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                 }
 
                 try {
-                    if (r.state.get() == DownloadRow.State.COMPLETED) {
+                    DownloadRow.State st = r.state.get();
+                    if (st == DownloadRow.State.COMPLETED) {
                         java.nio.file.Path p = r.outputFile.get();
                         if (p != null && java.nio.file.Files.exists(p)) {
                             long sz = java.nio.file.Files.size(p);
                             r.size.set(formatBytesDecimal(sz));
                         }
                         r.progress.set(1.0);
+                    } else if (st == DownloadRow.State.MISSING) {
+                        r.size.set("");
+                        r.progress.set(0.0);
                     } else {
                         r.progress.set(0.0);
                     }
@@ -1485,14 +1613,25 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                             filteredDownloadItems.setPredicate(filteredDownloadItems.getPredicate());
                         }
                         warmMissingThumbnailsAsync(restored);
+                        updateMissingSidebarItem();
                     } catch (Exception ignored) {}
                 });
             }
         } catch (Exception ignored) {}
     }
 
-    // After startup (delayed), fill missing thumbnails for older history entries.
-    // This does NOT block UI startup. It will do HTTP only for items that have no cached file.
+    private void forceRefilterAndRefresh() {
+        try {
+            if (filteredDownloadItems != null) {
+                filteredDownloadItems.setPredicate(filteredDownloadItems.getPredicate());
+            }
+        } catch (Exception ignored) {}
+
+        try {
+            if (downloadsList != null) downloadsList.refresh();
+        } catch (Exception ignored) {}
+    }
+
     private void warmMissingThumbnailsAsync(java.util.List<DownloadRow> rows) {
         if (rows == null || rows.isEmpty()) return;
 
@@ -1799,7 +1938,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                 setSizeText.accept("Estimated size: —");
                 return;
             }
-
             // Build a stable cache key (include mode + quality)
             String modeV = modeCombo.getValue() == null ? "" : modeCombo.getValue();
             String qV = qualityCombo.getValue() == null ? "" : qualityCombo.getValue();
@@ -1811,7 +1949,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                 setSizeText.accept("Estimated size: " + formatBytesDecimal(cached));
                 return;
             }
-
             setSizeText.accept("Estimated size: — ");
 
             // New request id so late background results won't override newer selections
@@ -1850,7 +1987,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                 }
 
                 startSizeLoading.run();
-
                 // Compute EXACT size for the currently selected quality (single yt-dlp call),
                 // and cache it so future switches are instant.
                 final String qLabel = (qV == null || qV.isBlank()) ? QUALITY_BEST : qV;
@@ -1899,18 +2035,14 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                     });
                 }
                 return;
-
             }
-
             // PLAYLIST / UNSUPPORTED
             setSizeText.accept("Estimated size: —");
         };
 
         // When mode changes, swap the Quality dropdown contents accordingly.
         modeCombo.valueProperty().addListener((obsM, oldM, newM) -> {
-
             if (newM == null) return;
-
             if (MODE_AUDIO.equals(newM)) {
                 qualityCombo.getItems().setAll(buildAudioOptions());
                 // Default audio format in UI
@@ -2003,33 +2135,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
             lastType[0] = analyzeUrlType(url);
             System.out.println("After analyze:  " + url+"\n");
 
-
-            // If it's a single video, probe available heights and rebuild the quality list accordingly
-//            if (lastType[0] == ContentType.VIDEO) {
-//                info.setText("Analyzing formats...");
-//                info.setTextFill(Color.web("#9aa4b2"));
-//
-//                new Thread(() -> {
-//                    // BACKGROUND ONLY
-//                    VideoInfo vi = probeOnceFast(url);
-//
-//                    Platform.runLater(() -> {
-//                        if (vi == null || vi.heights.isEmpty()) {
-//                            fillQualityCombo(qualityCombo);
-//                        } else {
-//                            fillQualityComboFromHeights(qualityCombo, vi.heights);
-//                            lastProbedHeights[0] = vi.heights;
-//                        }
-//
-//                        applyTypeToUi.run();
-//                        okBtn.setDisable(false);
-//                    });
-//
-//                }, "probe-fast").start();
-//
-//                return;
-//            }
-
             if (lastType[0] == ContentType.VIDEO) {
                 info.setText("Analyzing formats...");
                 info.setTextFill(Color.web("#9aa4b2"));
@@ -2047,15 +2152,11 @@ private static Set<Integer> probeHeightsFastJson(String url) {
 
                         applyTypeToUi.run();
                         okBtn.setDisable(false);
-
-                        // OPTIONAL: خلي size estimation يصير بعدين
-                        // updateSizeAsync.run();
                     });
                 }, "probe-fast").start();
 
                 return;
             }
-
             // ✅ Playlist: open playlist screen immediately
             if (lastType[0] == ContentType.PLAYLIST) {
                 applyTypeToUi.run();
@@ -2088,7 +2189,7 @@ private static Set<Integer> probeHeightsFastJson(String url) {
             }
             info.setText("Paste a link then click Get.");
             info.setTextFill(Color.web("#9aa4b2"));
-            setSizeText.accept("Estimated size: —");
+            setSizeText.accept("Estimated size: — ");
         });
 
         pane.setContent(grid);
@@ -2118,24 +2219,16 @@ private static Set<Integer> probeHeightsFastJson(String url) {
             activeAddLinkDialog = null;
         });
 
-        // ===== IMPORTANT =====
-        // Do NOT use showAndWait(): it blocks the JavaFX Application Thread.
-        // Blocking prevents our clipboard poll/focus listeners from running,
-        // so the URL field cannot live-update while the dialog is open.
         dialog.setResultConverter(btn -> btn);
-
         dialog.resultProperty().addListener((obs, oldRes, res) -> {
             if (res != addStartBtn) return;
-
             String url = urlField.getText() == null ? "" : urlField.getText().trim();
             ContentType t = lastType[0];
             saveLastDownloadFolder(folderField.getText());
-
             // Temporary behavior until we wire the real downloader engine:
             if (t == ContentType.VIDEO) {
                 addDownloadItemToList(url, folderField.getText(), modeCombo.getValue(), qualityCombo.getValue());
                 saveDownloadHistoryAsync();
-
             } else if (t == ContentType.DIRECT_FILE) {
                 addDownloadItemToList(url, folderField.getText(), "Direct", "Auto");
                 saveDownloadHistoryAsync();
@@ -2145,50 +2238,8 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                 if (statusText != null) statusText.setText("Unsupported: " + shorten(url));
             }
         });
-
-        // Show modelessly so FX thread keeps running (clipboard auto-paste keeps working)
         dialog.show();
     }
-
-    // ========= Main downloads list (center) =========
-
-    // Helper: parse yt-dlp human-readable size token (e.g. 77.59MiB) to bytes
-    private static long parseHumanSizeToBytes(String tok) {
-        if (tok == null) return -1;
-        String s = tok.trim();
-        if (s.isEmpty()) return -1;
-
-        // yt-dlp tokens are typically like: 77.59MiB, 1.06GiB, 563.11MiB, 12.3KiB
-        double num;
-        String unit;
-        int cut = -1;
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (!(Character.isDigit(c) || c == '.')) { cut = i; break; }
-        }
-        if (cut <= 0) return -1;
-        try { num = Double.parseDouble(s.substring(0, cut)); } catch (Exception e) { return -1; }
-        unit = s.substring(cut).trim();
-
-        long mul;
-        String u = unit.toLowerCase(java.util.Locale.ROOT);
-        if (u.startsWith("kib")) mul = 1024L;
-        else if (u.startsWith("mib")) mul = 1024L * 1024L;
-        else if (u.startsWith("gib")) mul = 1024L * 1024L * 1024L;
-        else if (u.startsWith("tib")) mul = 1024L * 1024L * 1024L * 1024L;
-        else if (u.startsWith("kb")) mul = 1000L;
-        else if (u.startsWith("mb")) mul = 1000L * 1000L;
-        else if (u.startsWith("gb")) mul = 1000L * 1000L * 1000L;
-        else if (u.startsWith("b")) mul = 1L;
-        else return -1;
-
-        return (long) Math.max(0, num * mul);
-    }
-
-    // --- Size probing helpers ---
-    // ========= Start Download Row (single video/file) =========
-
-    // Starts a download for a single DownloadRow (not playlist).
 
     private Long probeContentLength(String url) {
         if (url == null || url.isBlank()) return null;
@@ -2210,6 +2261,49 @@ private static Set<Integer> probeHeightsFastJson(String url) {
         }
     }
 
+    private void updateMissingSidebarItem() {
+        Platform.runLater(() -> {
+            boolean hasMissing = false;
+            try {
+                for (DownloadRow r : downloadItems) {
+                    if (r == null) continue;
+                    if (r.state != null && r.state.get() == DownloadRow.State.MISSING) {
+                        hasMissing = true;
+                        break;
+                    }
+                }
+            } catch (Exception ignored) {}
+
+            int idx = -1;
+            try {
+                for (int i = 0; i < sidebarList.getItems().size(); i++) {
+                    SidebarItem si = sidebarList.getItems().get(i);
+                    if (si != null && "MISSING".equalsIgnoreCase(si.key)) { // <-- غيّر key إذا اسمها مختلف عندك
+                        idx = i;
+                        break;
+                    }
+                }
+            } catch (Exception ignored) {}
+
+            if (hasMissing) {
+                if (idx < 0) {
+                    sidebarList.getItems().add(SIDEBAR_MISSING_ITEM);
+                }
+            } else {
+                if (idx >= 0) {
+                    SidebarItem selected = null;
+                    try { selected = sidebarList.getSelectionModel().getSelectedItem(); } catch (Exception ignored) {}
+                    boolean selectedIsMissing = selected != null && "MISSING".equalsIgnoreCase(selected.key);
+
+                    sidebarList.getItems().remove(idx);
+
+                    if (selectedIsMissing) {
+                        try { sidebarList.getSelectionModel().selectFirst(); } catch (Exception ignored) {}
+                    }
+                }
+            }
+        });
+    }
 
     private Long fetchSizeWithYtDlp(String url, String mode, String quality) {
         if (url == null || url.isBlank()) return null;
@@ -2238,12 +2332,9 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                     else selector = "bv*+ba/best";
                 }
             }
-
-            // ✅ CACHE HERE (THIS is where your snippet belongs)
             String key = u + "||" + selector;
             Long cached = SIZE_CACHE.get(key);
             if (cached != null && cached > 0) return cached;
-
             java.util.List<String> cmd = new java.util.ArrayList<>();
             cmd.add(yt.toAbsolutePath().toString());
             cmd.add("-J");
@@ -2257,9 +2348,7 @@ private static Set<Integer> probeHeightsFastJson(String url) {
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.redirectErrorStream(true);
             pb.environment().putIfAbsent("PYTHONIOENCODING", "utf-8");
-
             Process p = pb.start();
-
             StringBuilder sb = new StringBuilder(256 * 1024);
             try (java.io.BufferedReader br = new java.io.BufferedReader(
                     new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
@@ -2282,22 +2371,18 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                     int arrEnd = findMatchingBracket(json, arrStart, '[', ']');
                     if (arrEnd > arrStart) {
                         String arr = json.substring(arrStart, arrEnd + 1);
-
                         java.util.regex.Matcher objM = java.util.regex.Pattern
                                 .compile("\\{[^\\{\\}]*\\}")
                                 .matcher(arr);
 
                         while (objM.find()) {
                             String obj = objM.group();
-
                             long part = extractLongFieldFast(obj, "filesize");
                             if (part <= 0) part = extractLongFieldFast(obj, "filesize_approx");
-
                             if (part <= 0 && duration > 0) {
                                 long tbr = extractLongFieldFast(obj, "tbr"); // Kbps
                                 if (tbr > 0) part = (long) ((tbr * 1000.0 / 8.0) * duration);
                             }
-
                             if (part > 0) total += part;
                         }
                     }
@@ -2317,7 +2402,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
             }
 
             return null;
-
         } catch (Exception ignored) {
             return null;
         }
@@ -2358,52 +2442,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
         }
         return -1;
     }
-
-    private static Long parseLongSafeObj(String s) {
-        try {
-            if (s == null) return null;
-            s = s.trim();
-            if (s.isEmpty() || "NA".equalsIgnoreCase(s) || "None".equalsIgnoreCase(s)) return null;
-            return Long.parseLong(s);
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private static final String ICON_PLUS =
-            "M19 11H13V5h-2v6H5v2h6v6h2v-6h6v-2z";
-
-    private static final String ICON_FOLDER_OPEN =
-            "M3 6.5C3 5.12 4.12 4 5.5 4H10L12 6H18.5C19.88 6 21 7.12 21 8.5V17.5C21 18.88 19.88 20 18.5 20H5.5C4.12 20 3 18.88 3 17.5V6.5Z";
-
-    private static final String ICON_PAUSE =
-            "M6 5h4v14H6V5zm8 0h4v14h-4V5z";
-
-    private static final String ICON_PLAY =
-            "M8 5v14l11-7L8 5z";
-
-    private static final String ICON_CANCEL =
-            "M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.29 9.17 12 2.89 5.71 4.3 4.29 10.59 10.6 16.89 4.29z";
-
-    private static final String ICON_RETRY =
-            "M12 5a7 7 0 1 1-6.32 4H3l3.5-3.5L10 9H7.76A5.5 5.5 0 1 0 12 6.5V5z";
-
-    private static final String ICON_CLEAR =
-            "M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z";
-
-    private static final String ICON_SETTINGS =
-            "M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58" +
-                    "c.18-.14.23-.41.12-.61l-1.92-3.32c-.11-.2-.36-.28-.57-.2l-2.39.96" +
-                    "c-.5-.38-1.04-.69-1.64-.92l-.36-2.54c-.03-.22-.22-.38-.45-.38h-3.84" +
-                    "c-.23 0-.42.16-.45.38l-.36 2.54c-.6.23-1.14.54-1.64.92l-2.39-.96" +
-                    "c-.21-.08-.46 0-.57.2L2.71 8.89c-.11.2-.06.47.12.61l2.03 1.58" +
-                    "c-.04.31-.06.63-.06.94s.02.63.06.94L2.83 14.54c-.18.14-.23.41-.12.61" +
-                    "l1.92 3.32c.11.2.36.28.57.2l2.39-.96c.5.38 1.04.69 1.64.92l.36 2.54" +
-                    "c.03.22.22.38.45.38h3.84c.23 0 .42-.16.45-.38l.36-2.54" +
-                    "c.6-.23 1.14-.54 1.64-.92l2.39.96c.21.08.46 0 .57-.2l1.92-3.32" +
-                    "c.11-.2.06-.47-.12-.61l-2.03-1.58z" +
-                    "M12 15.5c-1.93 0-3.5-1.57-3.5-3.5S10.07 8.5 12 8.5" +
-                    "s3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z";
 
     private static Node svgIcon(String path, double boxSize) {
         javafx.scene.shape.SVGPath svg = new javafx.scene.shape.SVGPath();
@@ -2494,6 +2532,7 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                 boolean isDownloading = st == DownloadRow.State.DOWNLOADING;
                 boolean isPaused      = st == DownloadRow.State.PAUSED;
                 boolean isCompleted   = st == DownloadRow.State.COMPLETED;
+                boolean isMissing     = st == DownloadRow.State.MISSING;
                 boolean isFailed      = st == DownloadRow.State.FAILED || st == DownloadRow.State.CANCELLED;
 
                 java.util.function.BiConsumer<Button, Boolean> showBtn = (btn, show) -> {
@@ -2505,21 +2544,27 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                 showBtn.accept(pauseBtn, false);
                 showBtn.accept(resumeBtn, false);
                 showBtn.accept(cancelBtn, false);
-//                showBtn.accept(folderBtn, true);
-
+                showBtn.accept(openLinkBtn, false);
+                showBtn.accept(retryBtn, false);
                 showBtn.accept(folderBtn, true);
                 // default: enabled فقط لما يكون COMPLETED+file exists
                 folderBtn.setDisable(true);
-                showBtn.accept(retryBtn, false);
+
 
                 if (isDownloading) {
                     showBtn.accept(pauseBtn, true);
                     showBtn.accept(cancelBtn, true);
+                    showBtn.accept(retryBtn, false);
+                    showBtn.accept(openLinkBtn, false);
                 } else if (isPaused) {
                     showBtn.accept(resumeBtn, true);
                     showBtn.accept(cancelBtn, true);
                 } else if (isQueued) {
                     showBtn.accept(cancelBtn, true);
+                } else if (isMissing) {
+                    showBtn.accept(openLinkBtn, true);
+                    showBtn.accept(retryBtn, true);
+                    folderBtn.setDisable(true);
                 } else if (isFailed) {
                     showBtn.accept(retryBtn, true);
                 } else if (isCompleted) {
@@ -2814,6 +2859,7 @@ private static Set<Integer> probeHeightsFastJson(String url) {
             private final Button pauseBtn = new Button();
             private final Button resumeBtn = new Button();
             private final Button cancelBtn = new Button();
+            private final Button openLinkBtn = new Button();
             private final Button folderBtn = new Button();
             private final Button retryBtn = new Button();
             private final Button clearBtn = new Button();
@@ -2825,6 +2871,8 @@ private static Set<Integer> probeHeightsFastJson(String url) {
             private final VBox card = new VBox(10);
 
             private final Label sizeLabel = new Label();
+
+
 
             {
                 setStyle("-fx-background-color: transparent;");
@@ -2887,6 +2935,7 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                 setupSvgButton(cancelBtn, ICON_CANCEL);
                 cancelBtn.getStyleClass().add("cancel");
                 cancelBtn.setGraphic(svgIcon(ICON_CANCEL, 30));
+                setupSvgButton(openLinkBtn, ICON_LINK);
                 setupSvgButton(folderBtn, ICON_FOLDER_OPEN);
                 setupSvgButton(retryBtn, ICON_RETRY);
                 // Clear button (remove row) - SVG like other action buttons
@@ -2898,6 +2947,7 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                 MainController.this.installTooltip(pauseBtn, "Pause download");
                 MainController.this.installTooltip(resumeBtn, "Resume download");
                 MainController.this.installTooltip(cancelBtn, "Cancel download");
+                MainController.this.installTooltip(openLinkBtn, "Open link");
                 MainController.this.installTooltip(retryBtn, "Retry download");
                 MainController.this.installTooltip(folderBtn, "Open folder");
 
@@ -2905,7 +2955,7 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                 actions.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
                 actions.setFillHeight(true);
                 actions.setMinHeight(40);
-                actions.getChildren().addAll(pauseBtn, resumeBtn, cancelBtn, retryBtn, folderBtn, clearBtn);
+                actions.getChildren().addAll(pauseBtn, resumeBtn, cancelBtn , openLinkBtn, retryBtn, folderBtn, clearBtn);
 
                 textBox.getChildren().addAll(title, meta);
                 HBox.setHgrow(textBox, Priority.ALWAYS);
@@ -2941,20 +2991,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                 speedDot.setStyle(metricStyle);
                 etaDot.setStyle(metricStyle);
 
-
-                // Fixed widths so the layout stays stable while values change
-//                sizeLabel.setMinWidth(170);
-//                sizeLabel.setPrefWidth(170);
-//                sizeLabel.setMaxWidth(170);
-//
-//                speed.setMinWidth(120);
-//                speed.setPrefWidth(120);
-//                speed.setMaxWidth(120);
-//
-//                eta.setMinWidth(70);
-//                eta.setPrefWidth(70);
-//                eta.setMaxWidth(70);
-
                 sizeLabel.setMinWidth(155);
                 sizeLabel.setPrefWidth(155);
                 sizeLabel.setMaxWidth(155);
@@ -2988,7 +3024,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                         speed,
                         footerSpacer,
                         sizeLabel,
-//                        etaDot,
                         eta
                 );
                 card.getStyleClass().add("gx-task-card");
@@ -3122,7 +3157,10 @@ private static Set<Integer> probeHeightsFastJson(String url) {
 
                     // ---- Remove card + save history ----
                     Platform.runLater(() -> {
-                        try { downloadItems.remove(it); } catch (Exception ignored) {}
+                        try {
+                            downloadItems.remove(it);
+                            updateMissingSidebarItem();
+                        } catch (Exception ignored) {}
                         try { scheduleHistorySave(); } catch (Exception ignored) {}
                     });
                 });
@@ -3162,6 +3200,20 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                             try { name = it.title == null ? null : it.title.get(); } catch (Exception ignored) {}
                             if (name == null || name.isBlank()) name = "This file";
                             statusText.setText(name + " was moved or deleted.");
+
+                            // Mark as missing (file was removed from disk)
+                            try {
+                                it.setState(DownloadRow.State.MISSING);
+                                if (filteredDownloadItems != null) {
+                                    filteredDownloadItems.setPredicate(filteredDownloadItems.getPredicate());
+                                }
+                            } catch (Exception ignored) {}
+
+                            Platform.runLater(() -> {
+                                try { updateMissingSidebarItem(); } catch (Exception ignored) {}
+                                try { scheduleHistorySave(); } catch (Exception ignored) {}
+                                try { forceRefilterAndRefresh(); } catch (Exception ignored) {}
+                            });
                         }
 
                     } catch (Exception ignored) {}
@@ -3184,6 +3236,15 @@ private static Set<Integer> probeHeightsFastJson(String url) {
 
                     // ابدأ من جديد (وخليها --continue عشان لو في جزء نازل يكمل)
                     startDownloadRow(it, true);
+                    updateMissingSidebarItem();
+                });
+
+                openLinkBtn.setOnAction(e -> {
+                    DownloadRow it = getItem();
+                    if (it == null || it.url == null || it.url.isBlank()) return;
+                    try {
+                        java.awt.Desktop.getDesktop().browse(new java.net.URI(it.url.trim()));
+                    } catch (Exception ignored) {}
                 });
             }
 
@@ -3413,58 +3474,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
         downloadsList.setSelectionModel(new NoSelectionModel<>());
     }
 
-    private String fetchTitleWithYtDlp(String url) {
-        if (url == null || url.isBlank()) return null;
-
-        try {
-            // Ensure bundled yt-dlp is extracted and runnable
-            java.nio.file.Path yt = com.grabx.app.grabx.util.YtDlpManager.ensureAvailable();
-            if (yt == null) return null;
-
-            ProcessBuilder pb = new ProcessBuilder(
-                    yt.toAbsolutePath().toString(),
-                    "--no-warnings",
-                    "--no-playlist",
-                    "--skip-download",
-                    "--encoding", "utf-8",
-                    "--print", "title",
-                    url.trim()
-            );
-
-            pb.redirectErrorStream(true);
-            Process p = pb.start();
-
-            String best = null;
-            try (var br = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8)
-            )) {
-                String line;
-                while ((line = br.readLine()) != null) {
-                    String s = line.trim();
-                    if (s.isEmpty()) continue;
-
-                    String sl = s.toLowerCase();
-                    if (sl.startsWith("warning:")) continue;
-                    if (sl.startsWith("error:")) return null;
-
-                    best = s;
-                }
-            }
-
-            int code = p.waitFor();
-            if (code != 0) return null;
-            if (best == null || best.isBlank()) return null;
-
-            return best;
-
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
-
-
-    // Lightweight title fetch without running yt-dlp (reduces "Preparing" delay)
-    // Works for YouTube oEmbed.
     private String fetchTitleWithOEmbed(String url) {
         if (url == null || url.isBlank()) return null;
         try {
@@ -3514,155 +3523,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
         } catch (Exception ignored) {
             return null;
         }
-    }
-
-
-    // ========= Add download item to list (single) =========
-    // This method is called from Add Link dialog with:
-    // addDownloadItemToList(url, folderField.getText(), modeCombo.getValue(), qualityCombo.getValue());
-
-    // ========== Level-1 URL support probing (Media -> Direct file -> Unsupported) ==========
-
-    private static final class DirectFileProbe {
-        final boolean isFile;
-        final String contentType;
-        final String fileName;
-
-        DirectFileProbe(boolean isFile, String contentType, String fileName) {
-            this.isFile = isFile;
-            this.contentType = contentType;
-            this.fileName = fileName;
-        }
-    }
-
-    /**
-     * Direct file probe:
-     * - HEAD first
-     * - Treat as file if Content-Disposition contains attachment/filename OR Content-Type is not text/html.
-     */
-    private DirectFileProbe probeDirectFile(String url) {
-        if (url == null || url.isBlank()) return new DirectFileProbe(false, null, null);
-
-        java.net.HttpURLConnection conn = null;
-        try {
-            java.net.URL u = new java.net.URL(url);
-            conn = (java.net.HttpURLConnection) u.openConnection();
-            conn.setInstanceFollowRedirects(true);
-            conn.setConnectTimeout(6500);
-            conn.setReadTimeout(6500);
-            conn.setRequestMethod("HEAD");
-            conn.connect();
-
-            String ct = conn.getContentType();
-            String cd = conn.getHeaderField("Content-Disposition");
-
-            boolean hasAttachment = false;
-            String fileName = null;
-
-            if (cd != null) {
-                String lcd = cd.toLowerCase();
-                hasAttachment = lcd.contains("attachment") || lcd.contains("filename=");
-                fileName = extractFilenameFromContentDisposition(cd);
-            }
-
-            boolean notHtml = (ct != null) && !ct.toLowerCase().startsWith("text/html");
-
-            if (fileName == null || fileName.isBlank()) {
-                fileName = extractFilenameFromUrlPath(url);
-            }
-
-            boolean isFile = hasAttachment || notHtml;
-            return new DirectFileProbe(isFile, ct, fileName);
-
-        } catch (Exception ignored) {
-            return new DirectFileProbe(false, null, null);
-        } finally {
-            try { if (conn != null) conn.disconnect(); } catch (Exception ignored) {}
-        }
-    }
-
-    private static String extractFilenameFromContentDisposition(String cd) {
-        if (cd == null) return null;
-        try {
-            String[] parts = cd.split(";");
-            for (String p : parts) {
-                String s = p.trim();
-                if (s.toLowerCase().startsWith("filename=")) {
-                    String v = s.substring("filename=".length()).trim();
-                    if (v.startsWith("\"") && v.endsWith("\"") && v.length() >= 2) {
-                        v = v.substring(1, v.length() - 1);
-                    }
-                    return v;
-                }
-            }
-        } catch (Exception ignored) {}
-        return null;
-    }
-
-    private static String extractFilenameFromUrlPath(String url) {
-        if (url == null) return null;
-        try {
-            java.net.URL u = new java.net.URL(url);
-            String path = u.getPath();
-            if (path == null || path.isBlank()) return null;
-            int slash = path.lastIndexOf('/');
-            String name = (slash >= 0) ? path.substring(slash + 1) : path;
-            if (name == null) return null;
-            name = name.trim();
-            if (name.isBlank()) return null;
-            return name;
-        } catch (Exception ignored) {}
-        return null;
-    }
-
-
-    private void setupIconButton(Button b, String fallbackText, String tooltipText) {
-        b.getStyleClass().addAll("gx-btn", "gx-btn-ghost", "gx-task-action");
-        b.setFocusTraversable(false);
-        b.setText(fallbackText);
-        if (tooltipText != null && !tooltipText.isBlank()) {
-            this.installTooltip(b, tooltipText);
-        }
-    }
-
-    private void applyGrabXDialogStyles(javafx.scene.control.DialogPane dp) {
-        if (dp == null) return;
-
-        // Apply our dialog skin class
-        try {
-            if (!dp.getStyleClass().contains("gx-dialog")) {
-                dp.getStyleClass().add("gx-dialog");
-            }
-        } catch (Exception ignored) {}
-
-        // Always attach app stylesheets to the dialog
-        try {
-            dp.getStylesheets().clear();
-
-            // Prefer current scene stylesheets (same look as the app)
-            javafx.scene.Scene sc = (root == null) ? null : root.getScene();
-            if (sc != null && sc.getStylesheets() != null && !sc.getStylesheets().isEmpty()) {
-                dp.getStylesheets().addAll(sc.getStylesheets());
-            }
-
-            // Ensure the key CSS files are present (fallback / safety)
-            try {
-                String theme = getClass().getResource("/com/grabx/app/grabx/styles/theme-base.css").toExternalForm();
-                if (!dp.getStylesheets().contains(theme)) dp.getStylesheets().add(theme);
-            } catch (Exception ignored) {}
-            try {
-                String layout = getClass().getResource("/com/grabx/app/grabx/styles/layout.css").toExternalForm();
-                if (!dp.getStylesheets().contains(layout)) dp.getStylesheets().add(layout);
-            } catch (Exception ignored) {}
-            try {
-                String buttons = getClass().getResource("/com/grabx/app/grabx/styles/buttons.css").toExternalForm();
-                if (!dp.getStylesheets().contains(buttons)) dp.getStylesheets().add(buttons);
-            } catch (Exception ignored) {}
-
-        } catch (Exception ignored) {}
-
-        // Prevent Modena white background bleed
-        try { dp.setStyle("-fx-background-color: transparent;"); } catch (Exception ignored) {}
     }
 
 
@@ -3735,12 +3595,14 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                 String realTitle = fetchTitleWithOEmbed(url);
                 Platform.runLater(() -> {
                     if (realTitle != null && !realTitle.isBlank()) {
-                        row.setTitleOnce(realTitle);
+//                        row.setTitleOnce(realTitle);
+                        row.setTitleOnce(makeUniqueUiTitle(realTitle, row));
                         if (statusText != null) statusText.setText("Queued: " + realTitle);
                     } else {
                         String fallback = shorten(url);
                         if (fallback == null || fallback.isBlank()) fallback = "Unknown title";
-                        row.setTitleOnce(fallback);
+//                        row.setTitleOnce(fallback);
+                        row.setTitleOnce(makeUniqueUiTitle(fallback, row));
                         if (statusText != null) statusText.setText("Queued: " + fallback);
                     }
                     scheduleHistorySave();
@@ -3749,136 +3611,8 @@ private static Set<Integer> probeHeightsFastJson(String url) {
         }
     }
 
-
-//    -------
-
-    private void markHistoryDirtyAndSaveSoon() {
-        // Debounce: لا تكتب على الديسك 100 مرة بالثانية
-        if (!historySaveScheduled.compareAndSet(false, true)) return;
-
-        Platform.runLater(() -> {
-            try {
-                saveDownloadHistoryToDisk();
-            } finally {
-                historySaveScheduled.set(false);
-            }
-        });
-    }
-
-    private void saveDownloadHistoryToDisk() {
-        try {
-            Files.createDirectories(HISTORY_DIR);
-
-            // snapshot
-            java.util.List<DownloadRow> snapshot = new java.util.ArrayList<>(downloadItems);
-
-            StringBuilder sb = new StringBuilder();
-            sb.append("[\n");
-
-            int count = 0;
-            for (DownloadRow r : snapshot) {
-                if (r == null) continue;
-                if (count >= HISTORY_MAX_ITEMS) break;
-
-                String title = safeGet(r.title);
-                if (title == null || title.isBlank()) title = "New item";
-
-                String state = "QUEUED";
-                try { state = (r.state.get() == null ? "QUEUED" : r.state.get().name()); } catch (Exception ignored) {}
-
-                String outFile = null;
-                try {
-                    if (r.outputFile != null && r.outputFile.get() != null) outFile = r.outputFile.get().toString();
-                } catch (Exception ignored) {}
-
-                long ts = System.currentTimeMillis();
-
-                String obj = "{"
-                        + "\"url\":" + j(r.url) + ","
-                        + "\"title\":" + j(title) + ","
-                        + "\"folder\":" + j(r.folder) + ","
-                        + "\"mode\":" + j(r.mode) + ","
-                        + "\"quality\":" + j(r.quality) + ","
-                        + "\"state\":" + j(state) + ","
-                        + "\"outputFile\":" + j(outFile) + ","
-                        + "\"ts\":" + ts
-                        + "}";
-
-                sb.append("  ").append(obj);
-                count++;
-                if (count < snapshot.size() && count < HISTORY_MAX_ITEMS) sb.append(",");
-                sb.append("\n");
-            }
-
-            sb.append("]\n");
-            Files.writeString(HISTORY_FILE, sb.toString(), StandardCharsets.UTF_8);
-
-        } catch (Exception ignored) {}
-    }
-
-    private void loadDownloadHistoryFromDisk() {
-        try {
-            if (!Files.exists(HISTORY_FILE)) return;
-            String json = Files.readString(HISTORY_FILE, StandardCharsets.UTF_8);
-            if (json == null || json.isBlank()) return;
-
-            java.util.regex.Matcher m = java.util.regex.Pattern
-                    .compile("\\{[^\\{\\}]*\\}")
-                    .matcher(json);
-
-            java.util.List<DownloadRow> loaded = new java.util.ArrayList<>();
-
-            while (m.find()) {
-                String obj = m.group();
-
-                String url = unj(extractJsonString(obj, "url"));
-                if (url == null || url.isBlank()) continue;
-
-                String title = unj(extractJsonString(obj, "title"));
-                if (title == null || title.isBlank()) title = shorten(url);
-                if (title == null || title.isBlank()) title = "New item";
-
-                String folder = unj(extractJsonString(obj, "folder"));
-                String mode = unj(extractJsonString(obj, "mode"));
-                String quality = unj(extractJsonString(obj, "quality"));
-                String state = unj(extractJsonString(obj, "state"));
-                String outFile = unj(extractJsonString(obj, "outputFile"));
-
-                DownloadRow row = new DownloadRow(url, title, safeStr(folder), safeStr(mode), safeStr(quality));
-                row.setTitleOnce(title);
-
-                // restore state
-                try {
-                    DownloadRow.State st = DownloadRow.State.valueOf(safeStr(state, "QUEUED"));
-                    row.setState(st);
-                } catch (Exception ignored) {
-                    row.setState(DownloadRow.State.QUEUED);
-                }
-
-                // restore outputFile
-                try {
-                    if (outFile != null && !outFile.isBlank()) row.outputFile.set(Paths.get(outFile));
-                } catch (Exception ignored) {}
-
-                loaded.add(row);
-            }
-
-            if (!loaded.isEmpty()) {
-                Platform.runLater(() -> downloadItems.setAll(loaded));
-            }
-
-        } catch (Exception ignored) {}
-    }
-
     private static String safeGet(javafx.beans.property.StringProperty p) {
         try { return p == null ? null : p.get(); } catch (Exception e) { return null; }
-    }
-
-    private static String safeStr(String s) { return safeStr(s, ""); }
-    private static String safeStr(String s, String def) {
-        if (s == null) return def;
-        String v = s.trim();
-        return v.isEmpty() ? def : v;
     }
 
     // --- tiny JSON helpers (no external libs) ---
@@ -3891,31 +3625,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                 .replace("\t", "\\t");
         return "\"" + v + "\"";
     }
-
-    private static String unj(String s) {
-        if (s == null) return null;
-        return s.replace("\\n", "\n")
-                .replace("\\r", "\r")
-                .replace("\\t", "\t")
-                .replace("\\\"", "\"")
-                .replace("\\\\", "\\");
-    }
-
-    private static String extractJsonString(String obj, String key) {
-        try {
-            java.util.regex.Matcher m = java.util.regex.Pattern
-                    .compile("\"" + java.util.regex.Pattern.quote(key) + "\"\\s*:\\s*(\"(.*?)\"|null)", java.util.regex.Pattern.DOTALL)
-                    .matcher(obj);
-            if (!m.find()) return null;
-            if ("null".equals(m.group(1))) return null;
-            return m.group(2);
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
-
-
-//    ------
 
     // Only keep the version with yt-dlp --progress-template and regex patterns DEST1, DEST2, MERGE, PROG, etc.
 
@@ -3990,11 +3699,97 @@ private static Set<Integer> probeHeightsFastJson(String url) {
 
                 // allow resume / pause-resume
                 cmd.add("--continue");
+
+                cmd.add("--user-agent");
+                cmd.add("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36");
+                cmd.add("--referer");
+                cmd.add("https://www.youtube.com/");
+                cmd.add("--extractor-args");
+                cmd.add("youtube:player_client=android");
+
+                // Do NOT overwrite existing files (we will decide the naming strategy below)
                 cmd.add("--no-overwrites");
 
-                cmd.add("--encoding"); cmd.add("utf-8");
-                cmd.add("-P"); cmd.add(outDir.toAbsolutePath().toString());
-                cmd.add("-o"); cmd.add(YTDLP_OUT_TMPL);
+                // UTF-8 output
+                cmd.add("--encoding");
+                cmd.add("utf-8");
+
+                // Build format selector first (we also need it to probe the final output filename)
+                String selector;
+                int requestedHeight = -1; // used for stable filenames by selected quality
+
+                if (audioOnly) {
+                    selector = "bestaudio/best";
+                } else {
+                    String q = (quality == null) ? QUALITY_BEST : quality;
+
+                    if (QUALITY_BEST.equals(q) || QUALITY_SEPARATOR.equals(q)) {
+                        // Best: selector can yield varying heights, so filename can use real %(height)s
+                        selector = "bv*+ba/best";
+                        requestedHeight = -1;
+                    } else {
+                        requestedHeight = parseHeightFromLabel(q);
+                        if (requestedHeight > 0) {
+                            selector = "bv*[height<=" + requestedHeight + "]+ba/b[height<=" + requestedHeight + "]/best";
+                        } else {
+                            selector = "bv*+ba/best";
+                            requestedHeight = -1;
+                        }
+                    }
+                }
+
+                // Decide output template:
+                // - First download: NO (1)
+                // - If the exact same filename already exists: use autonumber => (1), (2), ...
+                String baseTpl;
+                if (audioOnly) {
+                    baseTpl = "%(title)s [audio].%(ext)s";
+                } else {
+                    // IMPORTANT: use the *selected* quality in the filename when the user chose a specific height,
+                    // so downloading 240p and 360p for the same video produces different filenames even if yt-dlp
+                    // ends up selecting the same actual height.
+                    if (requestedHeight > 0) {
+                        baseTpl = "%(title)s [" + requestedHeight + "p].%(ext)s";
+                    } else {
+                        baseTpl = "%(title)s [%(height)sp].%(ext)s";
+                    }
+                }
+
+                boolean needsAutonumber = false;
+                try {
+                    // Probe the would-be output filename with the SAME format selector.
+                    // If it already exists on disk, we switch to autonumber template.
+                    String probed = probeOutputFilename(yt, url, selector, outDir, baseTpl);
+                    if (probed != null && !probed.isBlank()) {
+                        java.nio.file.Path probedPath = java.nio.file.Paths.get(probed.trim());
+                        if (!probedPath.isAbsolute()) probedPath = outDir.resolve(probedPath).normalize();
+                        needsAutonumber = java.nio.file.Files.exists(probedPath);
+                    }
+                } catch (Exception ignored) {
+                    needsAutonumber = false;
+                }
+
+                String outTpl;
+                if (needsAutonumber) {
+                    // Auto-number duplicates: (1), (2), ... (no leading zeros)
+                    cmd.add("--autonumber-start");
+                    cmd.add("1");
+                    if (audioOnly) {
+                        outTpl = "%(title)s [audio] (%(autonumber)d).%(ext)s";
+                    } else {
+                        if (requestedHeight > 0) {
+                            outTpl = "%(title)s [" + requestedHeight + "p] (%(autonumber)d).%(ext)s";
+                        } else {
+                            outTpl = "%(title)s [%(height)sp] (%(autonumber)d).%(ext)s";
+                        }
+                    }
+                } else {
+                    outTpl = baseTpl;
+                }
+
+                cmd.add("-o");
+                cmd.add(outDir.resolve(outTpl).toString());
+
 
                 // progress template
                 cmd.add("--progress-template");
@@ -4007,6 +3802,7 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                                 + "|%(progress.total_bytes_estimate)s"
                 );
 
+                // Apply format selection
                 if (audioOnly) {
                     cmd.add("-x");
                     cmd.add("--audio-quality"); cmd.add("0");
@@ -4016,21 +3812,12 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                         fmt = AUDIO_DEFAULT_FORMAT; // mp3
                     }
                     cmd.add("--audio-format"); cmd.add(fmt);
-                    cmd.add("-f"); cmd.add("bestaudio/best");
+                    cmd.add("-f"); cmd.add(selector);
+
                 } else {
-                    String q = (quality == null) ? QUALITY_BEST : quality;
-                    String selector;
-
-                    if (QUALITY_BEST.equals(q) || QUALITY_SEPARATOR.equals(q)) {
-                        selector = "bv*+ba/best";
-                    } else {
-                        int h = parseHeightFromLabel(q);
-                        if (h > 0) selector = "bv*[height<=" + h + "]+ba/b[height<=" + h + "]/best";
-                        else selector = "bv*+ba/best";
-                    }
-
                     cmd.add("-f"); cmd.add(selector);
                 }
+
 
                 cmd.add(url);
 
@@ -4054,10 +3841,10 @@ private static Set<Integer> probeHeightsFastJson(String url) {
 
                             final String phaseLabel;
                             if (audioOnly || MODE_AUDIO.equals(mode) || "Audio".equalsIgnoreCase(mode) || "Audio only".equalsIgnoreCase(mode)) {
-                                phaseLabel = "Downloading audio . . . ";
+                                phaseLabel = "Downloading audio ";
                             } else {
                                 final boolean isAudioStream = isAudioStreamFromDestinationLine(s);
-                                phaseLabel = isAudioStream ? "Downloading audio . . . " : "Downloading video . . . ";
+                                phaseLabel = isAudioStream ? "Downloading audio " : "Downloading video ";
                             }
 
                             lastProgressMap.remove(row);
@@ -4140,7 +3927,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                                     if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
                                         row.status.set("Downloading");
                                     }
-        // أو ببساطة احذفها إذا أنت أصلاً بتضبط status من NEWFILE
                                     row.size.set("");
                                     if (row.progress.get() < 0) row.progress.set(0);
                                 });
@@ -4277,6 +4063,7 @@ private static Set<Integer> probeHeightsFastJson(String url) {
 
                     if ("CANCEL".equals(reason)) {
                         row.setState(DownloadRow.State.CANCELLED);
+                        updateMissingSidebarItem();
                         row.status.set("Cancelled");
                         lastProgressMap.remove(row);
                         row.size.set("");
@@ -4317,7 +4104,16 @@ private static Set<Integer> probeHeightsFastJson(String url) {
                         row.eta.set("");
                     } else {
                         row.setState(DownloadRow.State.FAILED);
-                        row.status.set("Failed");
+                        String err = lastError[0];
+                        if (err != null && !err.isBlank()) {
+                            // keep it short on the card
+                            String msg = err;
+                            if (msg.startsWith("ERROR:")) msg = msg.substring("ERROR:".length()).trim();
+                            if (msg.length() > 90) msg = msg.substring(0, 90) + "…";
+                            row.status.set("Failed: " + msg);
+                        } else {
+                            row.status.set("Failed (exit " + code + ")");
+                        }
                         row.size.set("");
                         row.speed.set("");
                         row.eta.set("");
@@ -4338,6 +4134,97 @@ private static Set<Integer> probeHeightsFastJson(String url) {
             }
         }, "yt-dlp-download").start();
     }
+
+    // Probe the exact output filename yt-dlp would use for the given selector + template.
+    // Returns a single line (may be absolute or relative depending on yt-dlp/platform).
+    private static String probeOutputFilename(java.nio.file.Path yt,
+                                              String url,
+                                              String selector,
+                                              java.nio.file.Path outDir,
+                                              String outTpl) {
+        if (yt == null || url == null || url.isBlank() || selector == null || outDir == null || outTpl == null) return null;
+
+        try {
+            java.util.List<String> probe = new java.util.ArrayList<>();
+            probe.add(yt.toAbsolutePath().toString());
+            probe.add("--no-warnings");
+            probe.add("--no-playlist");
+            probe.add("--skip-download");
+            probe.add("--encoding"); probe.add("utf-8");
+
+            // keep the same anti-403 args as the real download
+            probe.add("--user-agent");
+            probe.add("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36");
+            probe.add("--referer");
+            probe.add("https://www.youtube.com/");
+            probe.add("--extractor-args");
+            probe.add("youtube:player_client=android");
+
+            probe.add("-f");
+            probe.add(selector);
+
+            probe.add("-o");
+            probe.add(outDir.resolve(outTpl).toString());
+
+            // Print the final filename chosen by yt-dlp
+            probe.add("--print");
+            probe.add("filename");
+
+            probe.add(url.trim());
+
+            Process p = new ProcessBuilder(probe)
+                    .redirectErrorStream(true)
+                    .start();
+
+            String line;
+            try (java.io.BufferedReader br = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+                line = br.readLine();
+            }
+            try { p.waitFor(); } catch (Exception ignored) {}
+
+            if (line == null) return null;
+            line = line.trim();
+            return line.isBlank() ? null : line;
+
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String makeUniqueUiTitle(String base, DownloadRow self) {
+        if (base == null) base = "";
+        base = base.trim();
+        if (base.isEmpty()) return base;
+
+        int max = 0;
+
+        for (DownloadRow r : downloadItems) {
+            if (r == null || r == self) continue;
+
+            String t = null;
+            try { t = r.title.get(); } catch (Exception ignored) {}
+            if (t == null) continue;
+            t = t.trim();
+
+            if (t.equals(base)) {
+                max = Math.max(max, 1);
+                continue;
+            }
+
+            // match: "base (N)"
+            if (t.startsWith(base + " (") && t.endsWith(")")) {
+                String inside = t.substring((base + " (").length(), t.length() - 1).trim();
+                try {
+                    int n = Integer.parseInt(inside);
+                    max = Math.max(max, n + 1);
+                } catch (Exception ignored) {}
+            }
+        }
+
+        return (max == 0) ? base : (base + " (" + max + ")");
+    }
+
     private static boolean isAudioExtension(String ext) {
         if (ext == null) return false;
         ext = ext.toLowerCase(java.util.Locale.ROOT).trim();
@@ -4351,9 +4238,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
         // ExtractAudio lines are always audio
         if (s.startsWith("[ExtractAudio]")) return true;
 
-        // Accept both:
-        // [download] Destination: ...
-        // [download] Destination ...
         int idx = s.indexOf("Destination");
         if (idx < 0) return false;
 
@@ -4369,12 +4253,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
             path = path.substring(1, path.length() - 1).trim();
         }
         if (path.isEmpty()) return false;
-
-        // Strong signal: YouTube format-id embedded in filename: ".f140." / ".f251." etc.
-        // Examples:
-        //   title.f251.webm  (audio opus)
-        //   title.f140.m4a   (audio m4a)
-        //   title.f137.mp4   (video)
         try {
             java.util.regex.Matcher mid = java.util.regex.Pattern
                     .compile("\\.f(\\d{2,4})\\.", java.util.regex.Pattern.CASE_INSENSITIVE)
@@ -4507,20 +4385,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
         return String.format(java.util.Locale.US, "%.1f %s", value, unit);
     }
 
-//    private void pauseDownloadRow(DownloadRow row) {
-//        if (row == null) return;
-//        Process p = activeProcesses.get(row);
-//        if (p == null || !p.isAlive()) {
-//            row.setState(DownloadRow.State.PAUSED);
-//            return;
-//        }
-//        stopReasons.put(row, "PAUSE");
-//        try { p.destroy(); } catch (Exception ignored) {}
-//        try { p.destroyForcibly(); } catch (Exception ignored) {}
-//        row.setState(DownloadRow.State.PAUSED);
-//    }
-
-
     private void pauseDownloadRow(DownloadRow row) {
         if (row == null) return;
 
@@ -4561,6 +4425,7 @@ private static Set<Integer> probeHeightsFastJson(String url) {
         // حدّث UI فورًا
         Platform.runLater(() -> {
             row.setState(DownloadRow.State.CANCELLED);
+            updateMissingSidebarItem();
             row.status.set("Cancelled");
             row.speed.set("");
             row.eta.set("");
@@ -6016,71 +5881,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
             return (System.currentTimeMillis() - createdAtMs) <= VIDEO_INFO_TTL_MS;
         }
     }
-    // Split a JSON array like [ {...}, {...}, ... ] into top-level object strings (no external JSON lib)
-    private static java.util.List<String> splitTopLevelJsonObjects(String jsonArray) {
-        java.util.ArrayList<String> out = new java.util.ArrayList<>();
-        if (jsonArray == null || jsonArray.isBlank()) return out;
-
-        int i = 0;
-        // find first '{'
-        while (i < jsonArray.length() && jsonArray.charAt(i) != '{') i++;
-        if (i >= jsonArray.length()) return out;
-
-        boolean inStr = false;
-        char prev = 0;
-        int depth = 0;
-        int start = -1;
-
-        for (; i < jsonArray.length(); i++) {
-            char c = jsonArray.charAt(i);
-
-            if (c == '"' && prev != '\\') inStr = !inStr;
-
-            if (!inStr) {
-                if (c == '{') {
-                    if (depth == 0) start = i;
-                    depth++;
-                } else if (c == '}') {
-                    depth--;
-                    if (depth == 0 && start >= 0) {
-                        out.add(jsonArray.substring(start, i + 1));
-                        start = -1;
-                    }
-                }
-            }
-
-            prev = c;
-        }
-
-        return out;
-    }
-
-    private static String extractStringFieldFast(String jsonChunk, String field) {
-        if (jsonChunk == null || jsonChunk.isBlank() || field == null || field.isBlank()) return null;
-        try {
-            java.util.regex.Matcher m = java.util.regex.Pattern
-                    .compile("\\\"" + java.util.regex.Pattern.quote(field) + "\\\"\\s*:\\s*\\\"([^\\\"]*)\\\"")
-                    .matcher(jsonChunk);
-            if (!m.find()) return null;
-            String v = m.group(1);
-            return (v == null) ? null : v.trim();
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
-
-    private static double extractDoubleFieldFast(String jsonChunk, String field) {
-        if (jsonChunk == null || jsonChunk.isBlank() || field == null || field.isBlank()) return 0.0;
-        try {
-            java.util.regex.Matcher m = java.util.regex.Pattern
-                    .compile("\\\"" + java.util.regex.Pattern.quote(field) + "\\\"\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)")
-                    .matcher(jsonChunk);
-            if (!m.find()) return 0.0;
-            return Double.parseDouble(m.group(1));
-        } catch (Exception ignored) {
-            return 0.0;
-        }
-    }
 
     // Open a folder in the OS file manager
     private static void openInFileManager(java.nio.file.Path folder) {
@@ -6116,137 +5916,6 @@ private static Set<Integer> probeHeightsFastJson(String url) {
         }
     }
 
-    private RemoveConfirmResult showRemoveDownloadConfirmDialog(String fileName, boolean canDeleteFiles) {
-        try {
-            final javafx.stage.Stage owner;
-            try {
-                owner = (root != null && root.getScene() != null && root.getScene().getWindow() instanceof javafx.stage.Stage st)
-                        ? st : null;
-            } catch (Exception ignored) {
-                return null;
-            }
-
-            final javafx.stage.Stage stage = new javafx.stage.Stage();
-            stage.initStyle(javafx.stage.StageStyle.TRANSPARENT);
-            stage.setResizable(false);
-            stage.setAlwaysOnTop(true);
-            if (owner != null) {
-                stage.initOwner(owner);
-                stage.initModality(javafx.stage.Modality.WINDOW_MODAL);
-            }
-
-            // Root card
-            javafx.scene.layout.VBox card = new javafx.scene.layout.VBox(16);
-            card.getStyleClass().add("gx-remove-card");
-            card.setMinWidth(420);
-            card.setMaxWidth(420);
-
-            // Top row: icon + text
-            javafx.scene.layout.HBox top = new javafx.scene.layout.HBox(14);
-            top.setAlignment(javafx.geometry.Pos.TOP_LEFT);
-
-            javafx.scene.layout.StackPane iconWrap = new javafx.scene.layout.StackPane();
-            iconWrap.getStyleClass().add("gx-remove-icon");
-            javafx.scene.control.Label warn = new javafx.scene.control.Label("!");
-            warn.getStyleClass().add("gx-remove-icon-text");
-            iconWrap.getChildren().add(warn);
-
-            javafx.scene.layout.VBox text = new javafx.scene.layout.VBox(8);
-            javafx.scene.control.Label title = new javafx.scene.control.Label("Are you sure you want to remove");
-            title.getStyleClass().add("gx-remove-title");
-
-            String safe = (fileName == null) ? "this download" : fileName;
-            javafx.scene.control.Label msg = new javafx.scene.control.Label("\"" + safe + "\"?");
-            msg.getStyleClass().add("gx-remove-filename");
-            msg.setWrapText(true);
-            msg.setMaxWidth(300);
-            msg.setTextAlignment(javafx.scene.text.TextAlignment.LEFT);
-            // keep file name readable even if it contains mixed RTL/LTR
-            msg.setNodeOrientation(javafx.geometry.NodeOrientation.LEFT_TO_RIGHT);
-
-            text.getChildren().addAll(title, msg);
-            top.getChildren().addAll(iconWrap, text);
-
-            // Checkbox row
-            javafx.scene.control.CheckBox deleteChk = new javafx.scene.control.CheckBox("Delete with Files");
-            deleteChk.getStyleClass().add("gx-remove-check");
-            deleteChk.setSelected(true);
-            deleteChk.setDisable(!canDeleteFiles);
-            if (!canDeleteFiles) deleteChk.setSelected(false);
-
-            // Buttons row
-            javafx.scene.control.Button noBtn = new javafx.scene.control.Button("No");
-            javafx.scene.control.Button yesBtn = new javafx.scene.control.Button("Yes");
-            noBtn.getStyleClass().add("gx-remove-no");
-            yesBtn.getStyleClass().add("gx-remove-yes");
-            noBtn.setDefaultButton(false);
-            yesBtn.setDefaultButton(true);
-
-            javafx.scene.layout.HBox btns = new javafx.scene.layout.HBox(12);
-            btns.setAlignment(javafx.geometry.Pos.CENTER);
-            btns.getChildren().addAll(noBtn, yesBtn);
-
-            card.getChildren().addAll(top, deleteChk, btns);
-
-            // Scene (transparent) + click-outside to close
-            javafx.scene.layout.StackPane overlay = new javafx.scene.layout.StackPane(card);
-            overlay.getStyleClass().add("gx-remove-overlay");
-            overlay.setPadding(new javafx.geometry.Insets(18));
-            overlay.setPickOnBounds(true);
-
-            javafx.scene.Scene sc = new javafx.scene.Scene(overlay);
-            sc.setFill(javafx.scene.paint.Color.TRANSPARENT);
-
-            // attach app stylesheets so our CSS classes apply
-            try {
-                if (owner != null && owner.getScene() != null && owner.getScene().getStylesheets() != null) {
-                    sc.getStylesheets().addAll(owner.getScene().getStylesheets());
-                }
-            } catch (Exception ignored) {}
-
-            stage.setScene(sc);
-
-            // Center on owner
-            if (owner != null) {
-                stage.setX(owner.getX() + (owner.getWidth() - 460) / 2.0);
-                stage.setY(owner.getY() + (owner.getHeight() - 260) / 2.0);
-            }
-
-            final java.util.concurrent.atomic.AtomicReference<RemoveConfirmResult> out =
-                    new java.util.concurrent.atomic.AtomicReference<>(null);
-
-            noBtn.setOnAction(e -> {
-                out.set(new RemoveConfirmResult(false, false));
-                stage.close();
-            });
-
-            yesBtn.setOnAction(e -> {
-                out.set(new RemoveConfirmResult(true, deleteChk.isSelected()));
-                stage.close();
-            });
-
-            // ESC closes
-            sc.setOnKeyPressed(ev -> {
-                if (ev.getCode() == javafx.scene.input.KeyCode.ESCAPE) {
-                    out.set(new RemoveConfirmResult(false, false));
-                    stage.close();
-                }
-            });
-
-            // Click outside closes
-            overlay.setOnMouseClicked(ev -> {
-                if (ev.getTarget() == overlay) {
-                    out.set(new RemoveConfirmResult(false, false));
-                    stage.close();
-                }
-            });
-
-            stage.showAndWait();
-            return out.get();
-
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
 }
+
 
