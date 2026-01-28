@@ -228,6 +228,8 @@ public class MainController {
 
     private final ObservableList<DownloadRow> downloadItems = FXCollections.observableArrayList();
     private FilteredList<DownloadRow> filteredDownloadItems;
+    // Current sidebar filter key (combined with searchField filter)
+    private volatile String currentSidebarFilterKey = "ALL";
 
     // ========= In-scene hover tooltip (no jitter) =========
     private Pane hoverLayer;
@@ -756,6 +758,7 @@ public class MainController {
         // Main downloads list (center)
         ensureDownloadsListView();
         applyFilter("ALL");
+        setupSearchFilter();
         loadDownloadHistoryOnce();
         updateMissingSidebarItem();
         startMissingFileWatcher();
@@ -820,29 +823,101 @@ public class MainController {
 
     }
     private void applyFilter(String key) {
+        // sidebar filter changed
+        String k = (key == null) ? "ALL" : key.trim().toUpperCase(java.util.Locale.ROOT);
+        currentSidebarFilterKey = k;
+        applyCombinedFilters();
+    }
+
+    private void setupSearchFilter() {
+        if (searchField == null) return;
+
+        // As-you-type filtering (auto-complete feel)
+        searchField.textProperty().addListener((obs, oldV, newV) -> applyCombinedFilters());
+
+        // Optional: ESC clears search quickly
+        searchField.setOnKeyPressed(e -> {
+            try {
+                switch (e.getCode()) {
+                    case ESCAPE -> {
+                        searchField.clear();
+                        e.consume();
+                    }
+                }
+            } catch (Exception ignored) {}
+        });
+    }
+
+    private void applyCombinedFilters() {
         if (filteredDownloadItems == null) return;
 
-        String k = (key == null) ? "ALL" : key.trim().toUpperCase(java.util.Locale.ROOT);
+        final String sidebarKey = (currentSidebarFilterKey == null)
+                ? "ALL"
+                : currentSidebarFilterKey.trim().toUpperCase(java.util.Locale.ROOT);
+
+        final String q = (searchField == null || searchField.getText() == null)
+                ? ""
+                : searchField.getText().trim().toLowerCase(java.util.Locale.ROOT);
 
         filteredDownloadItems.setPredicate(row -> {
             if (row == null) return false;
 
+            // 1) sidebar filter (state)
             DownloadRow.State st = null;
             try { st = row.state.get(); } catch (Exception ignored) {}
 
-            if ("ALL".equals(k)) return st != DownloadRow.State.MISSING;
+            boolean passSidebar;
+            if ("ALL".equals(sidebarKey)) {
+                // In your UI you hide Missing from ALL
+                passSidebar = st != DownloadRow.State.MISSING;
+            } else if ("DOWNLOADING".equals(sidebarKey)) {
+                passSidebar = st == DownloadRow.State.DOWNLOADING;
+            } else if ("PAUSED".equals(sidebarKey)) {
+                passSidebar = st == DownloadRow.State.PAUSED;
+            } else if ("COMPLETED".equals(sidebarKey)) {
+                passSidebar = st == DownloadRow.State.COMPLETED;
+            } else if ("CANCELLED".equals(sidebarKey)) {
+                // Cancelled + Failed together (as agreed)
+                passSidebar = st == DownloadRow.State.CANCELLED || st == DownloadRow.State.FAILED;
+            } else if ("MISSING".equals(sidebarKey)) {
+                passSidebar = st == DownloadRow.State.MISSING;
+            } else {
+                passSidebar = true;
+            }
 
-            if ("DOWNLOADING".equals(k)) return st == DownloadRow.State.DOWNLOADING;
-            if ("PAUSED".equals(k))      return st == DownloadRow.State.PAUSED;
-            if ("COMPLETED".equals(k))   return st == DownloadRow.State.COMPLETED;
+            if (!passSidebar) return false;
 
-            // بدك دمج Cancelled + Failed مع بعض (زي ما اتفقنا)
-            if ("CANCELLED".equals(k))   return st == DownloadRow.State.CANCELLED || st == DownloadRow.State.FAILED;
-            if ("MISSING".equals(k))     return st == DownloadRow.State.MISSING;
+            // 2) search filter (title / quality / url / mode)
+            if (q.isEmpty()) return true;
 
-            return true;
+            String title = safeLower(safeGet(row.title));
+            String quality = safeLower(row.quality);
+            String url = safeLower(row.url);
+            String mode = safeLower(row.mode);
+
+            // Also allow searching by state text (optional)
+            String stateTxt = (st == null) ? "" : st.name().toLowerCase(java.util.Locale.ROOT);
+
+            return containsAny(title, q)
+                    || containsAny(quality, q)
+                    || containsAny(url, q)
+                    || containsAny(mode, q)
+                    || containsAny(stateTxt, q);
         });
     }
+
+    private static boolean containsAny(String haystack, String needle) {
+        if (haystack == null || haystack.isEmpty()) return false;
+        if (needle == null || needle.isEmpty()) return true;
+        return haystack.contains(needle);
+    }
+
+    private static String safeLower(String s) {
+        if (s == null) return "";
+        return s.trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+
 //    private void updateMissingSidebarItem() {
 //        boolean hasMissing = downloadItems.stream()
 //                .anyMatch(r -> r != null && r.state.get() == DownloadRow.State.MISSING);
@@ -908,9 +983,8 @@ public class MainController {
             }
         }
 
-        if (anyChanged && filteredDownloadItems != null) {
-            // خلي الفلاتر تتحرك فوراً
-            filteredDownloadItems.setPredicate(filteredDownloadItems.getPredicate());
+        if (anyChanged) {
+            applyCombinedFilters();
         }
         if (anyChanged) {
             Platform.runLater(this::updateMissingSidebarItem);
@@ -2867,9 +2941,6 @@ public class MainController {
                 return v;
             }
 
-
-
-
             private final Button pauseBtn = new Button();
             private final Button resumeBtn = new Button();
             private final Button cancelBtn = new Button();
@@ -3628,7 +3699,13 @@ public class MainController {
     }
 
     private static String safeGet(javafx.beans.property.StringProperty p) {
-        try { return p == null ? null : p.get(); } catch (Exception e) { return null; }
+        try {
+            if (p == null) return "";
+            String v = p.get();
+            return v == null ? "" : v;
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     // --- tiny JSON helpers (no external libs) ---
@@ -3817,35 +3894,6 @@ public class MainController {
                                 + "|%(progress.total_bytes)s"
                                 + "|%(progress.total_bytes_estimate)s"
                 );
-
-                // Apply format selection
-//                if (audioOnly) {
-//                    cmd.add("-x");
-//                    cmd.add("--audio-quality");
-//                    cmd.add("0");
-//
-//                    String fmt = quality;
-//                    if (fmt == null || fmt.isBlank() || AUDIO_BEST.equals(fmt) || QUALITY_SEPARATOR.equals(fmt)) {
-//                        fmt = AUDIO_DEFAULT_FORMAT; // مثلا "mp3"
-//                    }
-//
-//                    cmd.add("--audio-format");
-//                    cmd.add(fmt);
-//
-//                    cmd.add("--add-metadata");
-//                    cmd.add("--embed-thumbnail");
-//                    cmd.add("--convert-thumbnails");
-//                    cmd.add("jpg");
-//                    cmd.add("--postprocessor-args");
-//                    cmd.add("ffmpeg:-id3v2_version 3");
-//
-//                    cmd.add("-f");
-//                    cmd.add(selector);
-//                } else {
-//                    cmd.add("-f");
-//                    cmd.add(selector);
-//                }
-
 
                 if (audioOnly) {
                     cmd.add("-x");
@@ -6081,16 +6129,4 @@ private static java.util.List<PlaylistEntry> probePlaylistFlat(String playlistUr
         } catch (Exception ignored) {}
     }
 
-    // ===== Remove download confirm (mac-like custom dialog) =====
-    private static final class RemoveConfirmResult {
-        final boolean confirmed;
-        final boolean deleteFiles;
-        RemoveConfirmResult(boolean confirmed, boolean deleteFiles) {
-            this.confirmed = confirmed;
-            this.deleteFiles = deleteFiles;
-        }
-    }
-
 }
-
-
