@@ -92,25 +92,7 @@ public class MainController {
     private ListView<DownloadRow> downloadsList;
 
 
-    // ========= Playlist probing (IMPORTANT: limit concurrency to avoid freezing on large playlists) =========
-    private static final int PLAYLIST_PROBE_THREADS = Math.max(1, Math.min(2, Runtime.getRuntime().availableProcessors() / 2));
-    private final java.util.Map<String, Long> sizeCache = new java.util.concurrent.ConcurrentHashMap<>();
 
-    private static final ExecutorService PLAYLIST_PROBE_EXEC = new ThreadPoolExecutor(
-            PLAYLIST_PROBE_THREADS,
-            PLAYLIST_PROBE_THREADS,
-            30L,
-            TimeUnit.SECONDS,
-            // bounded queue so we don't enqueue unlimited yt-dlp jobs
-            new LinkedBlockingQueue<>(64),
-            r -> {
-                Thread t = new Thread(r, "playlist-probe");
-                t.setDaemon(true);
-                return t;
-            },
-
-            new ThreadPoolExecutor.AbortPolicy()
-    );
 
     private static final String ICON_PLUS =
             "M19 11H13V5h-2v6H5v2h6v6h2v-6h6v-2z";
@@ -177,7 +159,194 @@ public class MainController {
     private static final Path HISTORY_FILE = HISTORY_DIR.resolve("download_history.json");
     private static final int HISTORY_MAX_ITEMS = 500; // لاحقاً: user setting
 
+    // ========== Add Link dialog state tracking for clipboard auto-paste ==========
+    private boolean addLinkDialogOpen = false;
+    private TextField activeAddLinkUrlField = null;
+    private String pendingAddLinkPrefillUrl = null;
+
+    // Keep a strong reference so the poll Timeline doesn't get GC'ed
+    private javafx.animation.Timeline clipboardPollTimeline;
+
+    // Persist last selected download folder
+    private static final Preferences PREFS = Preferences.userNodeForPackage(MainController.class);
+
+    // ===== Persist downloads list (history) =====
+    private static final String PREF_HISTORY_DAYS = "grabx.history.days"; // later from settings
+    private static final int DEFAULT_HISTORY_DAYS = 30;
+
+    private static final java.nio.file.Path DOWNLOAD_HISTORY_FILE =
+            java.nio.file.Paths.get(System.getProperty("user.home"), ".grabx", "download-history.tsv");
+
+    private volatile boolean downloadHistoryLoaded = false;
+    private static final String PREF_LAST_FOLDER = "last_download_folder";
+
+
     private final AtomicBoolean historySaveScheduled = new AtomicBoolean(false);
+
+    private final ObservableList<DownloadRow> downloadItems = FXCollections.observableArrayList();
+    private FilteredList<DownloadRow> filteredDownloadItems;
+    // Current sidebar filter key (combined with searchField filter)
+    private volatile String currentSidebarFilterKey = "ALL";
+
+    // ========= In-scene hover tooltip (no jitter) =========
+    private Pane hoverLayer;
+    private HoverBubble hoverBubble;
+    // Pending tooltips until hoverBubble is ready (scene/root not ready during initialize)
+    private final java.util.List<javafx.util.Pair<Button, String>> pendingTooltips = new java.util.ArrayList<>();
+    private volatile boolean hoverBubbleReady = false;
+
+    private static final String QUALITY_BEST = "Best quality (Recommended)";
+    private static final String QUALITY_SEPARATOR = "──────────────";
+    private static final String QUALITY_CUSTOM = "Custom (Mixed)";
+    private static final String MODE_VIDEO = "Video";
+    private static final String MODE_AUDIO = "Audio only";
+
+    private static final String AUDIO_BEST = "Best audio (Recommended)";
+    private static final String AUDIO_DEFAULT_FORMAT = "mp3";
+    private static final java.util.List<String> AUDIO_FORMATS = java.util.List.of(
+            "m4a", "mp3", "opus", "aac", "wav", "flac"
+    );
+
+    // ========= Playlist probing (IMPORTANT: limit concurrency to avoid freezing on large playlists) =========
+    private static final int PLAYLIST_PROBE_THREADS = Math.max(1, Math.min(2, Runtime.getRuntime().availableProcessors() / 2));
+
+    private static final ExecutorService PLAYLIST_PROBE_EXEC = new ThreadPoolExecutor(
+            PLAYLIST_PROBE_THREADS,
+            PLAYLIST_PROBE_THREADS,
+            30L,
+            TimeUnit.SECONDS,
+            // bounded queue so we don't enqueue unlimited yt-dlp jobs
+            new LinkedBlockingQueue<>(64),
+            r -> {
+                Thread t = new Thread(r, "playlist-probe");
+                t.setDaemon(true);
+                return t;
+            },
+
+            new ThreadPoolExecutor.AbortPolicy()
+    );
+
+    // ========= Analyze URL (backend logic - v1) =========
+    private enum ContentType {
+        DIRECT_FILE,
+        VIDEO,
+        PLAYLIST,
+        UNSUPPORTED
+    }
+
+    private static final String[] DIRECT_EXT = {
+            ".zip", ".rar", ".7z", ".tar", ".gz",
+            ".pdf", ".epub",
+            ".exe", ".dmg", ".pkg",
+            ".iso",
+            ".mp3", ".wav", ".m4a", ".flac",
+            ".mp4", ".mkv", ".mov", ".webm",
+            ".jpg", ".jpeg", ".png", ".gif", ".webp"
+    };
+
+
+    // ========= Initialize =========
+
+    @FXML
+    public void initialize() {
+
+        // Global modern scrollbar auto-hide
+        Platform.runLater(() -> ScrollbarAutoHide.enableGlobalAutoHide(root));
+
+        // remove initial focus from topbar buttons
+        Platform.runLater(() -> {
+            if (root != null) root.requestFocus();
+        });
+
+        installClickToDefocus(root);
+
+        installTooltips();
+        setupHoverBubbleLayer();
+
+
+        setupSvgButton(addLinkButton, ICON_PLUS);
+        setupSvgButton(pauseAllButton, ICON_PAUSE);
+        setupSvgButton(resumeAllButton, ICON_PLAY);
+        setupSvgButton(cancelAllBtn, ICON_CANCEL);
+        setupSvgButton(clearAllButton, ICON_CLEAR);
+        setupSvgButton(settingsButton, ICON_SETTINGS);
+
+        // ✅ Make hover/press work on the whole Button (not only the icon node)
+
+        normalizeIconButton(pauseAllButton);
+        normalizeIconButton(resumeAllButton);
+        normalizeIconButton(clearAllButton);
+        normalizeIconButton(addLinkButton);
+        normalizeIconButton(settingsButton);
+
+        // Main downloads list (center)
+        ensureDownloadsListView();
+        applyFilter("ALL");
+        setupSearchFilter();
+        loadDownloadHistoryOnce();
+        updateMissingSidebarItem();
+        startMissingFileWatcher();
+
+        setupClipboardAutoPaste();
+
+        // + button: open Add Link and prefill from clipboard if URL
+        if (addLinkButton != null) {
+            addLinkButton.setOnAction(ev -> openAddLinkFromClipboardOrEmpty());
+        }
+
+
+
+        // Sidebar
+        sidebarList.getItems().setAll(
+                new SidebarItem("ALL", "All"),
+                new SidebarItem("DOWNLOADING", "Downloading"),
+                new SidebarItem("PAUSED", "Paused"),
+                new SidebarItem("COMPLETED", "Completed"),
+                new SidebarItem("CANCELLED", "Cancelled")
+        );
+
+
+
+
+        sidebarList.setFixedCellSize(44);
+        sidebarList.setPrefHeight(javafx.scene.layout.Region.USE_COMPUTED_SIZE);
+        sidebarList.setMaxHeight(Double.MAX_VALUE);
+
+        sidebarList.setCellFactory(lv -> new ListCell<>() {
+            @Override
+            protected void updateItem(SidebarItem item, boolean empty) {
+                super.updateItem(item, empty);
+                setText((empty || item == null) ? null : item.getTitle());
+            }
+        });
+
+        sidebarList.getSelectionModel().selectFirst();
+
+        SidebarItem first = sidebarList.getSelectionModel().getSelectedItem();
+        if (contentTitle != null && first != null) contentTitle.setText(first.getTitle());
+
+        sidebarList.getSelectionModel().selectedItemProperty().addListener((obs, oldV, newV) -> {
+            if (newV == null) return;
+
+            if (contentTitle != null) contentTitle.setText(newV.getTitle());
+            if (statusText != null) statusText.setText("Filter: " + newV.getTitle());
+
+            applyFilter(newV.getKey());
+        });
+
+        Platform.runLater(() -> {
+            String clip = readClipboardTextSafe();
+            if (!isHttpUrl(clip)) return;
+
+            lastClipboardText = clip;
+
+            UI_DELAY_EXEC.schedule(() -> Platform.runLater(() -> openAddLinkDialogDeferred(clip)),
+                    350, TimeUnit.MILLISECONDS);
+        });
+
+
+    }
+
     private void scheduleHistorySave() {
         // debounce: لو صار 50 تحديث بسرعة ما نحفظ 50 مرة
         if (!historySaveScheduled.compareAndSet(false, true)) return;
@@ -226,20 +395,8 @@ public class MainController {
         }
     }
 
-    private final ObservableList<DownloadRow> downloadItems = FXCollections.observableArrayList();
-    private FilteredList<DownloadRow> filteredDownloadItems;
-    // Current sidebar filter key (combined with searchField filter)
-    private volatile String currentSidebarFilterKey = "ALL";
-
-    // ========= In-scene hover tooltip (no jitter) =========
-    private Pane hoverLayer;
-    private HoverBubble hoverBubble;
-    // Pending tooltips until hoverBubble is ready (scene/root not ready during initialize)
-    private final java.util.List<javafx.util.Pair<Button, String>> pendingTooltips = new java.util.ArrayList<>();
-    private volatile boolean hoverBubbleReady = false;
 
     // ========= Actions =========
-
     @FXML
     public void onAddLink(ActionEvent event) {
         String clip = readClipboardTextSafe();
@@ -721,107 +878,6 @@ public class MainController {
         }
     }
 
-    // ========= Initialize =========
-
-    @FXML
-    public void initialize() {
-
-        // Global modern scrollbar auto-hide
-        Platform.runLater(() -> ScrollbarAutoHide.enableGlobalAutoHide(root));
-
-        // remove initial focus from topbar buttons
-        Platform.runLater(() -> {
-            if (root != null) root.requestFocus();
-        });
-
-        installClickToDefocus(root);
-
-        installTooltips();
-        setupHoverBubbleLayer();
-
-
-        setupSvgButton(addLinkButton, ICON_PLUS);
-        setupSvgButton(pauseAllButton, ICON_PAUSE);
-        setupSvgButton(resumeAllButton, ICON_PLAY);
-        setupSvgButton(cancelAllBtn, ICON_CANCEL);
-        setupSvgButton(clearAllButton, ICON_CLEAR);
-        setupSvgButton(settingsButton, ICON_SETTINGS);
-
-        // ✅ Make hover/press work on the whole Button (not only the icon node)
-
-        normalizeIconButton(pauseAllButton);
-        normalizeIconButton(resumeAllButton);
-        normalizeIconButton(clearAllButton);
-        normalizeIconButton(addLinkButton);
-        normalizeIconButton(settingsButton);
-
-        // Main downloads list (center)
-        ensureDownloadsListView();
-        applyFilter("ALL");
-        setupSearchFilter();
-        loadDownloadHistoryOnce();
-        updateMissingSidebarItem();
-        startMissingFileWatcher();
-
-        setupClipboardAutoPaste();
-
-        // + button: open Add Link and prefill from clipboard if URL
-        if (addLinkButton != null) {
-            addLinkButton.setOnAction(ev -> openAddLinkFromClipboardOrEmpty());
-        }
-
-
-
-        // Sidebar
-        sidebarList.getItems().setAll(
-                new SidebarItem("ALL", "All"),
-                new SidebarItem("DOWNLOADING", "Downloading"),
-                new SidebarItem("PAUSED", "Paused"),
-                new SidebarItem("COMPLETED", "Completed"),
-                new SidebarItem("CANCELLED", "Cancelled")
-        );
-
-
-
-
-        sidebarList.setFixedCellSize(44);
-        sidebarList.setPrefHeight(javafx.scene.layout.Region.USE_COMPUTED_SIZE);
-        sidebarList.setMaxHeight(Double.MAX_VALUE);
-
-        sidebarList.setCellFactory(lv -> new ListCell<>() {
-            @Override
-            protected void updateItem(SidebarItem item, boolean empty) {
-                super.updateItem(item, empty);
-                setText((empty || item == null) ? null : item.getTitle());
-            }
-        });
-
-        sidebarList.getSelectionModel().selectFirst();
-
-        SidebarItem first = sidebarList.getSelectionModel().getSelectedItem();
-        if (contentTitle != null && first != null) contentTitle.setText(first.getTitle());
-
-        sidebarList.getSelectionModel().selectedItemProperty().addListener((obs, oldV, newV) -> {
-            if (newV == null) return;
-
-            if (contentTitle != null) contentTitle.setText(newV.getTitle());
-            if (statusText != null) statusText.setText("Filter: " + newV.getTitle());
-
-            applyFilter(newV.getKey());
-        });
-
-        Platform.runLater(() -> {
-            String clip = readClipboardTextSafe();
-            if (!isHttpUrl(clip)) return;
-
-            lastClipboardText = clip;
-
-            UI_DELAY_EXEC.schedule(() -> Platform.runLater(() -> openAddLinkDialogDeferred(clip)),
-                    350, TimeUnit.MILLISECONDS);
-        });
-
-
-    }
     private void applyFilter(String key) {
         // sidebar filter changed
         String k = (key == null) ? "ALL" : key.trim().toUpperCase(java.util.Locale.ROOT);
@@ -917,25 +973,6 @@ public class MainController {
         return s.trim().toLowerCase(java.util.Locale.ROOT);
     }
 
-
-//    private void updateMissingSidebarItem() {
-//        boolean hasMissing = downloadItems.stream()
-//                .anyMatch(r -> r != null && r.state.get() == DownloadRow.State.MISSING);
-//
-//        boolean alreadyExists = sidebarList.getItems().stream()
-//                .anyMatch(it -> "MISSING".equals(it.getKey()));
-//
-//        if (hasMissing && !alreadyExists) {
-//            sidebarList.getItems().add(
-//                    new SidebarItem("MISSING", "Missing")
-//            );
-//        }
-//
-//        if (!hasMissing && alreadyExists) {
-//            sidebarList.getItems().removeIf(it -> "MISSING".equals(it.getKey()));
-//        }
-//    }
-
     private void startMissingFileWatcher() {
         try {
             if (missingWatcherTl != null) return;
@@ -990,7 +1027,6 @@ public class MainController {
             Platform.runLater(this::updateMissingSidebarItem);
         }
     }
-
 
     // ========= AddLink open helpers (safe showAndWait) =========
 
@@ -1217,24 +1253,6 @@ public class MainController {
         });
     }
 
-    // ========= Analyze URL (backend logic - v1) =========
-    private enum ContentType {
-        DIRECT_FILE,
-        VIDEO,
-        PLAYLIST,
-        UNSUPPORTED
-    }
-
-    private static final String[] DIRECT_EXT = {
-            ".zip", ".rar", ".7z", ".tar", ".gz",
-            ".pdf", ".epub",
-            ".exe", ".dmg", ".pkg",
-            ".iso",
-            ".mp3", ".wav", ".m4a", ".flac",
-            ".mp4", ".mkv", ".mov", ".webm",
-            ".jpg", ".jpeg", ".png", ".gif", ".webp"
-    };
-
     private static ContentType analyzeUrlType(String url) {
         if (url == null) return ContentType.UNSUPPORTED;
         String u = url.trim();
@@ -1281,17 +1299,7 @@ public class MainController {
         n.setManaged(visible);
     }
 
-    private static final String QUALITY_BEST = "Best quality (Recommended)";
-    private static final String QUALITY_SEPARATOR = "──────────────";
-    private static final String QUALITY_CUSTOM = "Custom (Mixed)";
-    private static final String MODE_VIDEO = "Video";
-    private static final String MODE_AUDIO = "Audio only";
 
-    private static final String AUDIO_BEST = "Best audio (Recommended)";
-    private static final String AUDIO_DEFAULT_FORMAT = "mp3";
-    private static final java.util.List<String> AUDIO_FORMATS = java.util.List.of(
-            "m4a", "mp3", "opus", "aac", "wav", "flac"
-    );
 
     private static java.util.List<String> buildAudioOptions() {
         java.util.ArrayList<String> out = new java.util.ArrayList<>();
@@ -1386,26 +1394,6 @@ public class MainController {
         }
         return out;
     }
-
-    // ========== Add Link dialog state tracking for clipboard auto-paste ==========
-    private boolean addLinkDialogOpen = false;
-    private TextField activeAddLinkUrlField = null;
-    private String pendingAddLinkPrefillUrl = null;
-
-    // Keep a strong reference so the poll Timeline doesn't get GC'ed
-    private javafx.animation.Timeline clipboardPollTimeline;
-
-    // Persist last selected download folder
-    private static final Preferences PREFS = Preferences.userNodeForPackage(MainController.class);
-    // ===== Persist downloads list (history) =====
-    private static final String PREF_HISTORY_DAYS = "grabx.history.days"; // later from settings
-    private static final int DEFAULT_HISTORY_DAYS = 30;
-
-    private static final java.nio.file.Path DOWNLOAD_HISTORY_FILE =
-            java.nio.file.Paths.get(System.getProperty("user.home"), ".grabx", "download-history.tsv");
-
-    private volatile boolean downloadHistoryLoaded = false;
-    private static final String PREF_LAST_FOLDER = "last_download_folder";
 
     // هذه الدوال عشان يعرض المجلد الأخير أو مجلد التنزيلات الافتراضي
     private String getLastDownloadFolderOrDefault() {
@@ -1986,10 +1974,8 @@ public class MainController {
         grid.add(folderField, 1, r);
         grid.add(browseBtn, 2, r);
         GridPane.setHgrow(folderField, Priority.ALWAYS);
-
         r++;
         grid.add(info, 1, r, 2, 1);
-
         r++;
         grid.add(sizeInfo, 1, r, 2, 1);
 
