@@ -79,4 +79,9 @@ public class PlaylistEntry {
     public void setAvailableQualities(List<String> qualities) {
         this.availableQualities = (qualities == null) ? new ArrayList<>() : qualities;
     }
+
+    public Map<String, String> getSizeByQuality() {
+        return sizeByQuality;
+    }
+
 }

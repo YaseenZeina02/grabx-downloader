@@ -307,25 +307,106 @@
     -fx-background-color: transparent;
 }
 
-/* Combo popup */
-.combo-box-popup .list-view {
+/* Combo popup (rounded + consistent hover/selected) */
+.combo-box-popup > .list-view {
     -fx-background-color: #121826;
-    -fx-background-radius: 12;
+    -fx-background-radius: 10;
     -fx-border-color: rgba(255,255,255,0.10);
-    -fx-border-radius: 12;
+    -fx-border-radius: 10;
     -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.55), 18, 0.18, 0, 10);
+
+    /* important so the inner cells don't draw square corners */
+    -fx-background-insets: 0;
+    -fx-padding: 6;
+
+    /* keep popup width stable */
+    -fx-pref-width: 240px;
 }
+
+/* Make the popup interior transparent so the rounded container shows cleanly */
+.combo-box-popup > .list-view > .virtual-flow {
+    -fx-background-color: transparent;
+}
+
 .combo-box-popup .list-cell {
     -fx-text-fill: rgba(255,255,255,0.90);
     -fx-background-color: transparent;
+
+    /* This is what gives hover/selected a rounded pill instead of a rectangle */
+    -fx-background-radius: 10;
+    -fx-background-insets: 2 6;
+
     -fx-padding: 10 12;
 }
+
 .combo-box-popup .list-cell:hover {
     -fx-background-color: rgba(46,91,255,0.18);
+    -fx-background-radius: 10;
+    -fx-background-insets: 2 6;
 }
+
 .combo-box-popup .list-cell:selected {
     -fx-background-color: rgba(46,91,255,0.28);
+    -fx-background-radius: 10;
+    -fx-background-insets: 2 6;
 }
+
+/* remove default focus glow inside popup */
+.combo-box-popup > .list-view:focused {
+    -fx-focus-color: transparent;
+    -fx-faint-focus-color: transparent;
+}
+
+
+/* Popup container */
+.combo-box-popup > .list-view {
+    -fx-background-color: #121826;
+    -fx-background-radius: 14;
+    -fx-border-color: rgba(255,255,255,0.10);
+    -fx-border-radius: 14;
+    -fx-background-insets: 0;
+    -fx-border-insets: 0;
+    -fx-padding: 8;
+}
+
+/* Make internal layers transparent (prevents square clipping) */
+.combo-box-popup > .list-view > .virtual-flow,
+.combo-box-popup > .list-view > .virtual-flow > .clipped-container,
+.combo-box-popup > .list-view > .virtual-flow > .clipped-container > .sheet {
+    -fx-background-color: transparent;
+}
+
+/* Cells (use :filled to override Modena defaults) */
+.combo-box-popup > .list-view .list-cell:filled {
+    -fx-background-color: transparent;
+    -fx-text-fill: rgba(255,255,255,0.90);
+
+    -fx-background-radius: 12;
+    -fx-background-insets: 2 6 2 6;
+    -fx-padding: 10 12;
+}
+
+.combo-box-popup > .list-view .list-cell:filled:hover {
+    -fx-background-color: rgba(46,91,255,0.18);
+    -fx-background-radius: 12;
+    -fx-background-insets: 2 6 2 6;
+}
+
+.combo-box-popup > .list-view .list-cell:filled:selected {
+    -fx-background-color: rgba(46,91,255,0.28);
+    -fx-background-radius: 12;
+    -fx-background-insets: 2 6 2 6;
+}
+
+.combo-box-popup > .list-view:focused {
+    -fx-focus-color: transparent;
+    -fx-faint-focus-color: transparent;
+}
+
+
+
+
+
 
 /* checkbox */
 .gx-check {
@@ -399,48 +480,54 @@
     -fx-background-color: #121826;
 }
 
-/*.gx-playlist-list {*/
-/*    -fx-background-color: transparent;*/
-/*    -fx-control-inner-background: transparent;*/
-/*    -fx-padding: 0;*/
-/*}*/
-
-.gx-playlist-list {
-    -fx-selection-bar: transparent;
-    -fx-selection-bar-non-focused: transparent;
-}
 
 .gx-playlist-list .virtual-flow {
     -fx-background-color: transparent;
 }
 
-.gx-playlist-list .list-cell {
-    -fx-background-color: transparent;
-    -fx-padding: 0 0 10 0;
-}
 
-.gx-playlist-card {
-    -fx-background-color: rgba(255,255,255,0.05);
-    -fx-background-radius: 14;
-    -fx-border-color: rgba(255,255,255,0.10);
-    -fx-border-radius: 14;
-    -fx-border-width: 1;
-    -fx-padding: 14 16;
-}
-
-.gx-playlist-list .list-cell:hover .gx-playlist-card {
-    -fx-background-color: rgba(255,255,255,0.07);
-    -fx-border-color: rgba(255,255,255,0.14);
-}
 
 /* selected state (built-in) */
 .gx-playlist-list .list-cell:selected {
-    -fx-background-color: transparent; /* مهم عشان ما يرجع اللون الأزرق/الأبيض الافتراضي */
+    -fx-background-color: transparent;
+    -fx-padding: 5;
+
 }
 
 .gx-playlist-list .list-cell:selected .gx-playlist-card {
     -fx-border-color: rgba(46,91,255,0.70);
     -fx-effect: dropshadow(gaussian, rgba(46,91,255,0.18), 16, 0.22, 0, 6);
+}
+
+.gx-playlist-card.gx-selected {
+    -fx-border-color: rgba(46,91,255,0.70);
+    -fx-border-width: 1.5;
+    -fx-effect: dropshadow(gaussian, rgba(46,91,255,0.18), 16, 0.22, 0, 6);
+}
+/* Hover (applies to all cards) */
+.gx-playlist-list .list-cell:hover .gx-playlist-card {
+    -fx-background-color: rgba(255,255,255,0.07);
+    -fx-border-color: rgba(255,255,255,0.14);
+}
+
+/* Hover + Selected: override hover so selected keeps its styling */
+.gx-playlist-list .list-cell:hover .gx-playlist-card.gx-selected {
+    -fx-background-color: rgba(255,255,255,0.05); /* أو خليها نفس الخلفية الأساسية */
+    -fx-border-color: rgba(46,91,255,0.70);
+    -fx-border-width: 1.5;
+    -fx-effect: dropshadow(gaussian, rgba(46,91,255,0.18), 16, 0.22, 0, 6);
+}
+
+.gx-playlist-list .list-cell:selected .gx-playlist-card {
+    -fx-border-color: rgba(46,91,255,0.70);
+    -fx-effect: dropshadow(
+            gaussian,
+            rgba(46,91,255,0.18),
+            16,
+            0.22,
+            0,
+            6
+    );
 }
 
 .gx-playlist-title {
@@ -489,60 +576,58 @@
 /* كل الخلايا */
 .gx-playlist-list .list-cell {
     -fx-background-color: transparent;
+    /*-fx-padding: 10;*/
     -fx-padding: 0 0 10 0;
-}
-
-/* إزالة أي focus/selection افتراضي */
-.gx-playlist-list:focused {
-    -fx-focus-color: transparent;
-    -fx-faint-focus-color: transparent;
 }
 
 /* ===============================
    Playlist Card
    =============================== */
-
 .gx-playlist-card {
     -fx-background-color: rgba(255,255,255,0.05);
     -fx-background-radius: 14;
-
     -fx-border-color: rgba(255,255,255,0.10);
     -fx-border-radius: 14;
     -fx-border-width: 1;
-
     -fx-padding: 14 16;
 }
-
 /* Hover */
 .gx-playlist-list .list-cell:hover .gx-playlist-card {
     -fx-background-color: rgba(255,255,255,0.07);
     -fx-border-color: rgba(255,255,255,0.14);
+
 }
 
-/* Selected (نستخدم :selected الافتراضي – بدون gx-selected) */
-.gx-playlist-list .list-cell:selected {
-    -fx-background-color: transparent;
-}
 
-.gx-playlist-list .list-cell:selected .gx-playlist-card {
-    -fx-border-color: rgba(46,91,255,0.70);
-    -fx-effect: dropshadow(
-            gaussian,
-            rgba(46,91,255,0.18),
-            16,
-            0.22,
-            0,
-            6
-    );
-}
+/* Start Playlist Card */
 
 .gx-playlist-quality {
     -fx-font-size: 12px;
     -fx-font-weight: 800;
-    -fx-background-radius: 10;
-    -fx-border-radius: 10;
+    -fx-pref-width: 160px;
+    -fx-min-width: 160px;
+    -fx-max-width: 240px;
+
+    -fx-background-radius: 12;
+    -fx-border-radius: 12;
+    -fx-padding: 3 10 3 10;
 }
 
+/*!* Popup width stable across skins *!*/
+/*.combo-box-popup .list-view {*/
+/*    -fx-pref-width: 240px;*/
+/*}*/
+
+/* ComboBox inside playlist rows */
+.combo-box.gx-playlist-item-combo {
+    -fx-background-radius: 12;
+    /*-fx-padding: 2 6;*/
+    -fx-background-color: #1b2233;
+    -fx-border-color: rgba(255,255,255,0.08);
+    -fx-border-radius: 12;
+}
+
+/*End Playlist Card*/
 .gx-task-action.cancel:hover .gx-svg-icon {
     -fx-fill: #FF6B6B;
 }

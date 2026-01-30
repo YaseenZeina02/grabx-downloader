@@ -21,6 +21,7 @@ public class DownloadRow {
 
     public enum State {
         QUEUED,
+        PENDING,
         DOWNLOADING,
         PAUSED,
         COMPLETED,
@@ -44,6 +45,14 @@ public class DownloadRow {
     public final StringProperty size = new SimpleStringProperty(""); // e.g. "Downloaded: 6.52 MB" or "Final size: 674.3 MB"
 
     public final ObjectProperty<State> state = new SimpleObjectProperty<>(State.QUEUED);
+
+    public ObjectProperty<State> stateProperty() {
+        return state;
+    }
+
+    public State getState() {
+        return state.get();
+    }
 
     public final LongProperty totalBytes = new SimpleLongProperty(-1);
     public final LongProperty downloadedBytes = new SimpleLongProperty(0);
@@ -75,6 +84,7 @@ public class DownloadRow {
 
         switch (s) {
             case QUEUED -> status.set("Queued");
+            case PENDING -> status.set("Pending");
             case DOWNLOADING -> status.set("Downloading");
             case PAUSED -> {
                 status.set("Paused");
@@ -82,7 +92,6 @@ public class DownloadRow {
                 speed.set("");
                 eta.set("");
             }
-//            case COMPLETED -> status.set("Completed");
             case COMPLETED -> {
                 status.set("Completed");
                 if (completedAt <= 0) {
