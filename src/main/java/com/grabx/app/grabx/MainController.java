@@ -139,6 +139,13 @@ public class MainController {
             "M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3z";
 
 
+
+    private static String pKey(String vid, String mode, String q) {
+        String m = (mode == null || mode.isBlank()) ? MODE_VIDEO : mode;
+        String qq = (q == null || q.isBlank()) ? QUALITY_BEST : q;
+        return vid + "|" + m + "|" + qq;
+    }
+
     private static final Map<String, ProbeQualitiesResult> PLAYLIST_PROBE_CACHE = new ConcurrentHashMap<>();
     // Cache thumbnails to avoid re-downloading when cells are recycled
     private static final Map<String, Image> PLAYLIST_THUMB_CACHE = new ConcurrentHashMap<>();
@@ -212,6 +219,9 @@ public class MainController {
     private static final java.util.List<String> AUDIO_FORMATS = java.util.List.of(
             "m4a", "mp3", "opus", "aac", "wav", "flac"
     );
+
+    private volatile boolean reopenAddLinkAfterPlaylist = false;
+    private volatile String reopenAddLinkPrefillUrl = null;
 
     // ========= Playlist probing (IMPORTANT: limit concurrency to avoid freezing on large playlists) =========
     private static final int PLAYLIST_PROBE_THREADS = Math.max(1, Math.min(2, Runtime.getRuntime().availableProcessors() / 2));
@@ -438,7 +448,7 @@ public class MainController {
             try { st = row.state.get(); } catch (Exception ignored) { continue; }
 
             // Pause only active ones
-            if (st == DownloadRow.State.DOWNLOADING || st == DownloadRow.State.QUEUED) {
+            if (st == DownloadRow.State.DOWNLOADING || st == DownloadRow.State.QUEUED ) {
                 Process p = activeProcesses.get(row);
                 try {
                     if (p != null && p.isAlive()) {
@@ -912,7 +922,10 @@ public class MainController {
                 // In your UI you hide Missing from ALL
                 passSidebar = st != DownloadRow.State.MISSING;
             } else if ("DOWNLOADING".equals(sidebarKey)) {
-                passSidebar = st == DownloadRow.State.DOWNLOADING;
+                // Treat queued/pending as part of "Downloading"
+                passSidebar = st == DownloadRow.State.DOWNLOADING
+                        || st == DownloadRow.State.QUEUED
+                        || st == DownloadRow.State.PENDING;
             } else if ("PAUSED".equals(sidebarKey)) {
                 passSidebar = st == DownloadRow.State.PAUSED;
             } else if ("COMPLETED".equals(sidebarKey)) {
@@ -1380,34 +1393,75 @@ public class MainController {
         return out;
     }
 
-    // هذه الدوال عشان يعرض المجلد الأخير أو مجلد التنزيلات الافتراضي
+
+    // ================== Last download folder (persisted) ==================
+    private static final String PREF_KEY_LAST_FOLDER = "gx_last_download_folder";
+
     private String getLastDownloadFolderOrDefault() {
         try {
-            String v = PREFS.get(PREF_LAST_FOLDER, null);
-            if (v != null && !v.isBlank()) {
-                java.nio.file.Path p = java.nio.file.Paths.get(v);
-                if (java.nio.file.Files.exists(p) && java.nio.file.Files.isDirectory(p)) {
-                    return p.toAbsolutePath().toString();
+            java.util.prefs.Preferences prefs =
+                    java.util.prefs.Preferences.userNodeForPackage(MainController.class);
+
+            String v = prefs.get(PREF_KEY_LAST_FOLDER, null);
+            if (v != null) {
+                v = v.trim();
+                if (!v.isEmpty()) {
+                    java.nio.file.Path p = java.nio.file.Path.of(v).toAbsolutePath().normalize();
+                    return p.toString();
                 }
             }
         } catch (Exception ignored) {}
-        return System.getProperty("user.home") + java.io.File.separator + "Downloads";
+
+        // Default
+        try {
+            return java.nio.file.Path.of(System.getProperty("user.home"), "Downloads").toString();
+        } catch (Exception ignored) {
+            return System.getProperty("user.home");
+        }
     }
 
     private void saveLastDownloadFolder(String folder) {
+        if (folder == null) return;
+        String v = folder.trim();
+        if (v.isEmpty()) return;
+
         try {
-            if (folder == null) return;
-            String v = folder.trim();
-            if (v.isEmpty()) return;
+            java.util.prefs.Preferences prefs =
+                    java.util.prefs.Preferences.userNodeForPackage(MainController.class);
 
-            java.nio.file.Path p = java.nio.file.Paths.get(v);
-
-            // لو موجود وملف (مش فولدر) لا تحفظه
-            if (java.nio.file.Files.exists(p) && !java.nio.file.Files.isDirectory(p)) return;
-
-            PREFS.put(PREF_LAST_FOLDER, p.toAbsolutePath().toString());
+            prefs.put(PREF_KEY_LAST_FOLDER, v);
+            try { prefs.flush(); } catch (Exception ignored) {}
         } catch (Exception ignored) {}
     }
+
+//    // هذه الدوال عشان يعرض المجلد الأخير أو مجلد التنزيلات الافتراضي
+//    private String getLastDownloadFolderOrDefault() {
+//        try {
+//            String v = PREFS.get(PREF_LAST_FOLDER, null);
+//            if (v != null && !v.isBlank()) {
+//                java.nio.file.Path p = java.nio.file.Paths.get(v);
+//                if (java.nio.file.Files.exists(p) && java.nio.file.Files.isDirectory(p)) {
+//                    return p.toAbsolutePath().toString();
+//                }
+//            }
+//        } catch (Exception ignored) {}
+//        return System.getProperty("user.home") + java.io.File.separator + "Downloads";
+//    }
+
+//    private void saveLastDownloadFolder(String folder) {
+//        try {
+//            if (folder == null) return;
+//            String v = folder.trim();
+//            if (v.isEmpty()) return;
+//
+//            java.nio.file.Path p = java.nio.file.Paths.get(v);
+//
+//            // لو موجود وملف (مش فولدر) لا تحفظه
+//            if (java.nio.file.Files.exists(p) && !java.nio.file.Files.isDirectory(p)) return;
+//
+//            PREFS.put(PREF_LAST_FOLDER, p.toAbsolutePath().toString());
+//        } catch (Exception ignored) {}
+//    }
 
     private static String esc(String s) {
         if (s == null) return "";
@@ -1659,6 +1713,10 @@ public class MainController {
                     try {
                         // نخلي العناصر الجديدة تضل فوق (add 0) … والقديمة تحت
                         downloadItems.addAll(restored);
+
+                        // ✅ IMPORTANT: reconcile persisted states with actual disk files after restore
+                        reconcileLoadedRowsWithDisk();
+
                         if (filteredDownloadItems != null) {
                             filteredDownloadItems.setPredicate(filteredDownloadItems.getPredicate());
                         }
@@ -1754,6 +1812,184 @@ public class MainController {
     private static final java.util.Set<String> VIDEO_SIZE_INFLIGHT =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+    /**
+     * Ensures that the size for the given playlist entry is computed and updated once.
+     * This method avoids blocking the UI and uses caching and async probing.
+     */
+    private void ensurePlaylistSizeOnce(PlaylistEntry it, String mode, String qLabel, Runnable refresh) {
+        if (it == null || it.isUnavailable()) return;
+
+        String vid = null;
+        try { vid = it.getId(); } catch (Exception ignored) {}
+        if (vid == null || vid.isBlank()) return;
+
+        String m = (mode == null || mode.isBlank()) ? MODE_VIDEO : mode;
+        if (MODE_AUDIO.equals(m)) return;
+
+        String q = (qLabel == null || qLabel.isBlank()) ? QUALITY_BEST : qLabel;
+        if (QUALITY_SEPARATOR.equals(q) || QUALITY_CUSTOM.equals(q)) return;
+
+        // ---------- helpers ----------
+        final String videoUrl = youtubeWatchUrl(vid);
+        if (videoUrl == null || videoUrl.isBlank()) return;
+
+        // Keep SIZE_CACHE keys consistent with the rest of the app
+        final String sizeCacheKey = videoUrl + "|" + MODE_VIDEO + "|" + q;
+
+        // Update the PlaylistEntry size map + refresh UI
+        final java.util.function.Consumer<Long> applyBytesToEntry = (bytes) -> {
+            if (bytes == null || bytes <= 0) return;
+            try {
+                var map = new HashMap<String, String>();
+                var cur = it.getSizeByQuality();
+                if (cur != null) map.putAll(cur);
+                map.put(q, formatBytesDecimal(bytes));
+                it.setSizeByQuality(map);
+            } catch (Exception ignored) {}
+            try { if (refresh != null) refresh.run(); } catch (Exception ignored) {}
+        };
+
+        // 1) If we already computed exact bytes for (url|video|quality) -> show instantly
+        try {
+            Long cachedBytes = SIZE_CACHE.get(sizeCacheKey);
+            if (cachedBytes != null && cachedBytes > 0) {
+                applyBytesToEntry.accept(cachedBytes);
+                return;
+            }
+        } catch (Exception ignored) {}
+
+        // 2) If we have a cached ProbeQualitiesResult for this video -> use it
+        //    (Best bytes OR any height bytes already known)
+        try {
+            ProbeQualitiesResult pr = PLAYLIST_PROBE_CACHE.get(vid);
+            if (pr != null) {
+                Long bytesFromProbe = null;
+
+                if (QUALITY_BEST.equals(q)) {
+                    try {
+                        long bb = pr.bestBytes;
+                        if (bb > 0) bytesFromProbe = bb;
+                    } catch (Exception ignored) {}
+
+                    // fallback: if bestBytes not present, try highest known height in pr
+                    if (bytesFromProbe == null) {
+                        try {
+                            Integer bestH = null;
+                            if (pr.heights != null) {
+                                for (Integer h : pr.heights) {
+                                    if (h == null || h <= 0) continue;
+                                    if (bestH == null || h > bestH) bestH = h;
+                                }
+                            }
+                            if (bestH != null && pr.bytesByHeight != null) {
+                                Long b = pr.bytesByHeight.get(bestH);
+                                if (b != null && b > 0) bytesFromProbe = b;
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                } else {
+                    // Try exact bytes for the selected height if already available
+                    int h = parseHeightFromLabel(q);
+                    if (h > 0) {
+                        try {
+                            if (pr.bytesByHeight != null) {
+                                Long b = pr.bytesByHeight.get(h);
+                                if (b != null && b > 0) bytesFromProbe = b;
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }
+
+                if (bytesFromProbe != null && bytesFromProbe > 0) {
+                    // seed global size cache so future UI is instant
+                    try { SIZE_CACHE.put(sizeCacheKey, bytesFromProbe); } catch (Exception ignored) {}
+                    applyBytesToEntry.accept(bytesFromProbe);
+                    return;
+                }
+            }
+        } catch (Exception ignored) {}
+
+        // 3) If best-quality size is requested but no probe is cached yet:
+        //    run ONE probe for this videoId (heights + bestBytes) and cache it.
+        //    IMPORTANT: do NOT block UI.
+        if (QUALITY_BEST.equals(q)) {
+            // NOTE: probeVideoQualitiesAsync uses PLAYLIST_PROBE_CACHE (videoId -> ProbeQualitiesResult)
+            // and PLAYLIST_PROBE_INFLIGHT (videoId) already.
+            boolean scheduled = probeVideoQualitiesAsync(videoUrl, vid, (pr) -> {
+                if (pr == null) return;
+
+                Long bb = null;
+                try {
+                    if (pr.bestBytes > 0) bb = pr.bestBytes;
+                } catch (Exception ignored) {}
+
+                if (bb == null) {
+                    try {
+                        Integer bestH = null;
+                        if (pr.heights != null) {
+                            for (Integer hh : pr.heights) {
+                                if (hh == null || hh <= 0) continue;
+                                if (bestH == null || hh > bestH) bestH = hh;
+                            }
+                        }
+                        if (bestH != null && pr.bytesByHeight != null) {
+                            Long b = pr.bytesByHeight.get(bestH);
+                            if (b != null && b > 0) bb = b;
+                        }
+                    } catch (Exception ignored) {}
+                }
+
+                if (bb != null && bb > 0) {
+                    try { SIZE_CACHE.put(sizeCacheKey, bb); } catch (Exception ignored) {}
+                    applyBytesToEntry.accept(bb);
+                }
+            });
+
+            // If the probe queue is full, just skip for now; next refresh will try again.
+            if (!scheduled) {
+                try { if (refresh != null) refresh.run(); } catch (Exception ignored) {}
+            }
+            return;
+        }
+
+        // 4) For non-best quality: compute exact bytes ON-DEMAND, once per (videoUrl|quality).
+        //    We reuse PLAYLIST_PROBE_INFLIGHT but with a different key prefix so it NEVER
+        //    collides with videoId in-flight used by probeVideoQualitiesAsync.
+        final String inflightKey = "SIZE|" + pKey(vid, MODE_VIDEO, q);
+        if (!PLAYLIST_PROBE_INFLIGHT.add(inflightKey)) return;
+
+        Runnable job = () -> {
+            Long bytes = null;
+            try {
+                String selector;
+                int h = parseHeightFromLabel(q);
+                if (h > 0) {
+                    selector = buildFormatSelectorForHeight(h);
+                } else {
+                    selector = "bv*+ba/b";
+                }
+
+                bytes = fetchCombinedSizeBytesWithYtDlpPrint(videoUrl, selector);
+                if (bytes != null && bytes > 0) {
+                    try { SIZE_CACHE.put(sizeCacheKey, bytes); } catch (Exception ignored) {}
+                }
+            } catch (Exception ignored) {
+            } finally {
+                PLAYLIST_PROBE_INFLIGHT.remove(inflightKey);
+            }
+
+            final Long f = bytes;
+            Platform.runLater(() -> {
+                applyBytesToEntry.accept(f);
+            });
+        };
+
+        try {
+            VIDEO_SIZE_EXEC.execute(job);
+        } catch (Exception ex) {
+            new Thread(job, "playlist-size-probe").start();
+        }
+    }
 
     private void showAddLinkDialog(String prefillUrl) {
         if (addLinkDialogOpen) {
@@ -1907,6 +2143,7 @@ public class MainController {
 
         // Size loading animation (dots) + request token to ignore late results
         final long[] sizeReqId = {0};
+        final boolean[] dialogAlive = { true };
         final int[] sizeDots = {0};
 
         javafx.animation.Timeline sizeLoadingTl = new javafx.animation.Timeline(
@@ -1984,6 +2221,7 @@ public class MainController {
 
         // Outer updateSizeAsync runnable (for use in listeners)
         Runnable updateSizeAsync = () -> {
+            if (!dialogAlive[0]) return;
             String u = urlField.getText() == null ? "" : urlField.getText().trim();
             if (u.isBlank()) {
                 setSizeText.accept("Estimated size: —");
@@ -2013,7 +2251,10 @@ public class MainController {
                     Platform.runLater(() -> {
                         if (rid != sizeReqId[0]) return;
                         if (bytes != null && bytes > 0) setSizeText.accept("Estimated size: " + formatBytesDecimal(bytes));
-                        else setSizeText.accept("Estimated size: — ");
+                        else{
+                            if (!dialogAlive[0]) return;
+                            setSizeText.accept("Estimated size: — ");
+                        }
                     });
                 }, "probe-size-head").start();
                 return;
@@ -2074,7 +2315,11 @@ public class MainController {
                         Platform.runLater(() -> {
                             if (rid != sizeReqId[0]) return;
                             if (fbytes != null && fbytes > 0) setSizeText.accept("Estimated size: " + formatBytesDecimal(fbytes));
-                            else setSizeText.accept("Estimated size: —");
+                            else {
+                                if (!dialogAlive[0]) return;
+                                setSizeText.accept("Estimated size: —");
+
+                            }
                         });
                     });
                 } catch (RejectedExecutionException rex) {
@@ -2208,13 +2453,23 @@ public class MainController {
 
                 return;
             }
-            // ✅ Playlist: open playlist screen immediately
+
+
             if (lastType[0] == ContentType.PLAYLIST) {
-                applyTypeToUi.run();
-                updateSizeAsync.run();
+
+                // We are jumping to Playlist UI from Add Link
+                reopenAddLinkAfterPlaylist = true;
+                reopenAddLinkPrefillUrl = url; // restore same playlist URL when coming back
+
                 saveLastDownloadFolder(folderField.getText());
-                try { dialog.hide(); } catch (Exception ignored) {}
+
+
+                try {
+                    if (activeAddLinkDialog != null) activeAddLinkDialog.hide();
+                } catch (Exception ignored) {}
+
                 openPlaylistWindow(url, folderField.getText());
+
                 return;
             }
 
@@ -2266,6 +2521,8 @@ public class MainController {
         }));
 
         dialog.setOnHidden(ev -> {
+            dialogAlive[0] = false;
+            sizeReqId[0]++;
             addLinkDialogOpen = false;
             activeAddLinkUrlField = null;
             activeAddLinkDialog = null;
@@ -2291,6 +2548,17 @@ public class MainController {
             }
         });
         dialog.show();
+    }
+    private void closeActiveAddLinkDialogIfOpen() {
+        try {
+            if (activeAddLinkDialog != null) {
+                activeAddLinkDialog.close();
+            }
+        } catch (Exception ignored) {}
+
+        addLinkDialogOpen = false;
+        activeAddLinkUrlField = null;
+        activeAddLinkDialog = null;
     }
 
     private DownloadRow createDownloadRow(String url, String mode, String quality, String title) {
@@ -3555,6 +3823,8 @@ public class MainController {
         downloadsList.setSelectionModel(new NoSelectionModel<>());
     }
 
+
+
     private String fetchTitleWithOEmbed(String url) {
         if (url == null || url.isBlank()) return null;
         try {
@@ -3827,7 +4097,7 @@ public class MainController {
                             requestedHeight = -1;
                         }
                     }
-                    
+
                 }
 
                 // Decide output template:
@@ -4200,6 +4470,7 @@ public class MainController {
 
                     if (code == 0) {
                         row.setState(DownloadRow.State.COMPLETED);
+                        try { scheduleHistorySave(); } catch (Exception ignored) {}
                         // CHANGED: set final size from disk if possible
                         try {
                             java.nio.file.Path out = null;
@@ -4207,7 +4478,6 @@ public class MainController {
                             if (out != null && java.nio.file.Files.exists(out)) {
                                 long sz = java.nio.file.Files.size(out);
                                 row.size.set(formatBytesDecimal(sz));
-//                                row.size.set("Final size: " + formatBytesDecimal(sz));
                             } else {
                                 row.size.set("");
                             }
@@ -4810,485 +5080,1769 @@ public class MainController {
         region.setClip(clip);
     }
 
+    // --- Reconcile persisted state with actual files on disk (fixes: completed restored as PAUSED) ---
+    private void reconcileLoadedRowsWithDisk() {
+        Platform.runLater(() -> {
+            try {
+                if (downloadItems == null) return;
+                for (DownloadRow r : downloadItems) {
+                    if (r == null) continue;
+                    reconcileOneRowWithDisk(r);
+                }
+            } catch (Exception ignored) {}
+
+            // refresh view + sidebar
+            try { forceRefilterAndRefresh(); } catch (Exception ignored) {}
+            try { updateMissingSidebarItem(); } catch (Exception ignored) {}
+            try { scheduleHistorySave(); } catch (Exception ignored) {}
+        });
+    }
+
+    private void reconcileOneRowWithDisk(DownloadRow r) {
+        if (r == null) return;
+
+        // 1) If output file exists -> must be COMPLETED
+        try {
+            java.nio.file.Path out = (r.outputFile != null) ? r.outputFile.get() : null;
+            if (out != null) {
+                java.nio.file.Path abs = out.toAbsolutePath().normalize();
+                if (java.nio.file.Files.exists(abs)) {
+                    r.setState(DownloadRow.State.COMPLETED);
+                    try { r.progress.set(1.0); } catch (Exception ignored) {}
+                    try { r.speed.set(""); } catch (Exception ignored) {}
+                    try { r.eta.set(""); } catch (Exception ignored) {}
+
+                    // fill size if empty
+                    try {
+                        if (r.size != null) {
+                            String cur = r.size.get();
+                            if (cur == null || cur.isBlank()) {
+                                long bytes = java.nio.file.Files.size(abs);
+                                r.size.set(formatBytesDecimal(bytes));
+                            }
+                        }
+                    } catch (Exception ignored) {}
+
+                    return;
+                }
+            }
+        } catch (Exception ignored) {}
+
+        // 2) If history says COMPLETED but file missing -> MISSING
+        try {
+            if (r.state != null && r.state.get() == DownloadRow.State.COMPLETED) {
+                r.setState(DownloadRow.State.MISSING);
+            }
+        } catch (Exception ignored) {}
+
+        // 3) If app restarts and row was DOWNLOADING but no process is running -> revert to QUEUED
+        // (prevents stuck states after restart)
+        try {
+            DownloadRow.State st = (r.state != null) ? r.state.get() : null;
+            if (st == DownloadRow.State.DOWNLOADING) {
+                r.setState(DownloadRow.State.QUEUED);
+                try { r.progress.set(0); } catch (Exception ignored) {}
+                try { r.speed.set(""); } catch (Exception ignored) {}
+                try { r.eta.set(""); } catch (Exception ignored) {}
+            }
+        } catch (Exception ignored) {}
+    }
+
 
     // ========= Playlist Screen (v1 - lightweight) =========
 
+//    private void openPlaylistWindow(String playlistUrl, String folder) {
+//        final String playlistFolder = (folder == null || folder.isBlank())
+//                ? getLastDownloadFolderOrDefault()
+//                : folder;
+//
+//
+//        Stage stage = new Stage();
+//        stage.setTitle("Playlist");
+////        stage.initModality(Modality.APPLICATION_MODAL);
+//        final double PLAYLIST_Q_COMBO_W = 160;
+//
+//        final int PLAYLIST_MAX_SELECTED = 200; // hard cap to avoid UI/native crashes on huge playlists
+//
+//        ObservableList<PlaylistEntry> items = FXCollections.observableArrayList();
+//
+//
+//        java.util.function.IntSupplier selectedCount = () -> {
+//            try {
+//                int c = 0;
+//                for (PlaylistEntry it : items) {
+//                    if (it != null && it.isSelected() && !it.isUnavailable()) c++;
+//                }
+//                return c;
+//            } catch (Exception ex) {
+//                return 0;
+//            }
+//        };
+//
+//        try {
+//            if (root != null && root.getScene() != null && root.getScene().getWindow() != null) {
+//                stage.initOwner(root.getScene().getWindow());
+//                stage.initModality(javafx.stage.Modality.WINDOW_MODAL);
+//            } else {
+//                stage.initModality(javafx.stage.Modality.APPLICATION_MODAL);
+//            }
+//        } catch (Exception ignored) {
+//            stage.initModality(javafx.stage.Modality.APPLICATION_MODAL);
+//        }
+//
+//// لما تنعرض، خلّيها Key فورًا
+//        stage.setOnShown(ev -> Platform.runLater(() -> bringWindowToFront(stage)));
+//
+//        VBox rootBox = new VBox(12);
+//        installClickToDefocus(rootBox);
+//        rootBox.getStyleClass().addAll("gx-panel", "gx-playlist-root");
+//        rootBox.setPadding(new Insets(16));
+//        rootBox.setFillWidth(true);
+//
+//        // ✅ يمنع أي وميض/أبيض في بداية إظهار النافذة
+//        rootBox.setStyle("-fx-background-color: #121826;");
+//
+//        Label header = new Label("Playlist items");
+//        header.getStyleClass().add("gx-section-title");
+//
+//        Label sub = new Label("Select what you want to download, then Add & Start.");
+//        sub.getStyleClass().add("gx-text-muted");
+//
+//        // Global quality selector (applies to selected items, keeps per-item override possible)
+//        Label globalQLabel = new Label("Quality for all");
+//        globalQLabel.getStyleClass().add("gx-text-muted");
+//
+//        Label globalModeLabel = new Label("Mode for all");
+//        globalModeLabel.getStyleClass().add("gx-text-muted");
+//
+//        ComboBox<String> globalModeCombo = new ComboBox<>();
+//        globalModeCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality");
+//
+//        globalModeCombo.getItems().setAll(MODE_VIDEO, MODE_AUDIO);
+//
+//        ComboBox<String> globalQualityCombo = new ComboBox<>();
+//        globalQualityCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality");
+//        globalModeCombo.setPrefWidth(PLAYLIST_Q_COMBO_W);
+//        globalModeCombo.setMinWidth(PLAYLIST_Q_COMBO_W);
+//
+//        globalQualityCombo.setPrefWidth(PLAYLIST_Q_COMBO_W);
+//        globalQualityCombo.setMinWidth(PLAYLIST_Q_COMBO_W);
+//
+//
+//        // standard list; we will map to closest supported per item
+//        fillQualityCombo(globalQualityCombo);
+//
+//        // separator behavior
+//        globalQualityCombo.setCellFactory(lv -> new ListCell<>() {
+//            @Override
+//            protected void updateItem(String item, boolean empty) {
+//                super.updateItem(item, empty);
+//                setText(empty ? null : item);
+////                setDisable(QUALITY_SEPARATOR.equals(item));
+////                setOpacity(QUALITY_SEPARATOR.equals(item) ? 0.55 : 1.0);
+//                boolean disabled = QUALITY_SEPARATOR.equals(item) || QUALITY_CUSTOM.equals(item);
+//                setDisable(disabled);
+//                setOpacity(disabled ? 0.55 : 1.0);
+//
+//            }
+//        });
+//        globalQualityCombo.setButtonCell(new ListCell<>() {
+//            @Override
+//            protected void updateItem(String item, boolean empty) {
+//                super.updateItem(item, empty);
+//                setText(empty ? null : item);
+//            }
+//        });
+//
+//        // store desired global mode/quality (used as default for items that are not manual)
+//        StringProperty globalDesiredMode = new SimpleStringProperty(MODE_VIDEO);
+//        StringProperty globalDesiredQuality = new SimpleStringProperty(QUALITY_BEST);
+//
+//        globalModeCombo.getSelectionModel().select(MODE_VIDEO);
+//        globalQualityCombo.getSelectionModel().select(QUALITY_BEST);
+//        globalDesiredMode.set(MODE_VIDEO);
+//        globalDesiredQuality.set(QUALITY_BEST);
+//
+//        // NOTE: we DO NOT bind; we only update these on USER changes to the global combos.
+//
+//        HBox globalRow = new HBox(10);
+//        globalRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+////        globalRow.getChildren().addAll(globalQLabel, globalQualityCombo);
+//        globalRow.getChildren().addAll(globalModeLabel, globalModeCombo, globalQLabel, globalQualityCombo);
+//
+//
+//        Label status = new Label("Loading playlist...");
+//
+//        status.getStyleClass().add("gx-text-muted");
+//
+//        ListView<PlaylistEntry> list = new ListView<>();
+//        list.getStyleClass().add("gx-playlist-list");   // لا تضيف gx-list
+//        list.setStyle("-fx-background-color: transparent;");
+//
+//        Button download = new Button("Download");
+//        download.getStyleClass().addAll("gx-btn", "gx-btn-primary");
+//        download.setDisable(true);
+//
+//        Runnable refreshAddState = () -> {
+//            try {
+//                boolean any = items.stream().anyMatch(it -> it != null && it.isSelected() && !it.isUnavailable());
+//                download.setDisable(!any);
+//            } catch (Exception ignored) {}
+//        };
+//
+//        list.setItems(items);
+//
+//        list.setPrefHeight(420);
+//        list.setFocusTraversable(false);
+//        // Prevent default ListView selection highlight (blue outlines)
+//        list.setSelectionModel(new NoSelectionModel<>());
+//
+//        // Throttle refreshes (so 100 callbacks won't spam list.refresh())
+//        PauseTransition refreshThrottle = new PauseTransition(Duration.millis(140));
+//        Runnable requestRefresh = () -> {
+//            refreshThrottle.stop();
+//            refreshThrottle.setOnFinished(ev -> list.refresh());
+//            refreshThrottle.playFromStart();
+//        };
+//
+//        javafx.beans.property.BooleanProperty anyQualityPopupOpen =
+//                new javafx.beans.property.SimpleBooleanProperty(false);
+//        java.util.concurrent.atomic.AtomicBoolean pendingRefresh =
+//                new java.util.concurrent.atomic.AtomicBoolean(false);
+//
+//        java.util.concurrent.atomic.AtomicBoolean pendingMixedUpdate =
+//                new java.util.concurrent.atomic.AtomicBoolean(false);
+//        final java.util.concurrent.atomic.AtomicReference<Runnable> updateGlobalMixedStateRef = new java.util.concurrent.atomic.AtomicReference<>();
+//
+//        Runnable requestRefreshSafe = () -> {
+//            if (anyQualityPopupOpen.get()) {
+//                pendingRefresh.set(true);
+//                return;
+//            }
+//            refreshThrottle.stop();
+//            refreshThrottle.setOnFinished(ev -> list.refresh());
+//            refreshThrottle.playFromStart();
+//        };
+//
+//        // Track popup state (so list.refresh() doesn't close an open ComboBox)
+//        globalQualityCombo.showingProperty().addListener((obs, was, isNow) -> anyQualityPopupOpen.set(isNow));
+//        // Run pending UI refresh/mixed update after any quality popup closes
+//        anyQualityPopupOpen.addListener((o, was, isNow) -> {
+//            if (!isNow) {
+//                if (pendingRefresh.getAndSet(false)) {
+//                    refreshThrottle.stop();
+//                    refreshThrottle.setOnFinished(ev -> list.refresh());
+//                    refreshThrottle.playFromStart();
+//                }
+//                if (pendingMixedUpdate.getAndSet(false)) {
+//                    Platform.runLater(() -> {
+//                        Runnable r = updateGlobalMixedStateRef.get();
+//                        if (r != null) r.run();
+//                    });
+//                }
+//            }
+//        });
+//
+//// Stop background prefetch when window closes
+//        java.util.concurrent.atomic.AtomicBoolean stopPrefetch = new java.util.concurrent.atomic.AtomicBoolean(false);
+//        stage.setOnHidden(ev -> stopPrefetch.set(true));
+//
+//        // ===== Lazy size calculation (VIDEO only) =====
+//        java.util.Set<String> playlistSizeInflight = java.util.concurrent.ConcurrentHashMap.newKeySet();
+//
+//        java.util.function.BiConsumer<PlaylistEntry, String> ensureSizeFor = (it, qLabel) -> {
+//            if (it == null || it.isUnavailable()) return;
+//            if (qLabel == null || qLabel.isBlank() || QUALITY_SEPARATOR.equals(qLabel) || QUALITY_CUSTOM.equals(qLabel)) return;
+//
+//            // only in VIDEO mode
+//            String modeNow = globalDesiredMode.get();
+//            if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
+//            if (MODE_AUDIO.equals(modeNow)) return;
+//
+//            String vid = it.getId();
+//            if (vid == null || vid.isBlank()) return;
+//
+//            String videoUrl = youtubeWatchUrl(vid);
+//
+//            // 0) Global size cache hit (avoid re-running yt-dlp)
+//            try {
+//                String cacheKey = videoUrl + "|" + MODE_VIDEO + "|" + qLabel;
+//                Long cachedBytes = SIZE_CACHE.get(cacheKey);
+//                if (cachedBytes != null && cachedBytes > 0) {
+//                    // update UI map if missing
+//                    var cur = it.getSizeByQuality();
+//                    String exist = (cur == null) ? null : cur.get(qLabel);
+//                    if (exist == null || exist.isBlank()) {
+//                        var next = new java.util.HashMap<String, String>();
+//                        if (cur != null) next.putAll(cur);
+//                        next.put(qLabel, formatBytesDecimal(cachedBytes));
+//                        it.setSizeByQuality(next);
+//                        requestRefreshSafe.run();
+//                    }
+//                    return;
+//                }
+//            } catch (Exception ignored) {}
+//
+//            // 1) If already have it in the item map, stop.
+//            try {
+//                var cur = it.getSizeByQuality();
+//                if (cur != null) {
+//                    String exist = cur.get(qLabel);
+//                    if (exist != null && !exist.isBlank()) return;
+//                }
+//            } catch (Exception ignored) {}
+//
+//            // 2) de-dupe inflight
+//            String inflightKey = vid + "||" + qLabel;
+//            if (!playlistSizeInflight.add(inflightKey)) return;
+//
+//            Runnable job = () -> {
+//                Long bytes = null;
+//                try {
+//                    String selector;
+//                    if (QUALITY_BEST.equals(qLabel)) {
+//                        selector = "bv*+ba/b";
+//                    } else {
+//                        int h = parseHeightFromLabel(qLabel);
+//                        selector = (h > 0) ? buildFormatSelectorForHeight(h) : "bv*+ba/b";
+//                    }
+//
+//                    bytes = fetchCombinedSizeBytesWithYtDlpPrint(videoUrl, selector);
+//
+//                    if (bytes != null && bytes > 0) {
+//                        // persist to shared cache so we never re-probe this quality again
+//                        try {
+//                            String cacheKey = videoUrl + "|" + MODE_VIDEO + "|" + qLabel;
+//                            SIZE_CACHE.put(cacheKey, bytes);
+//                        } catch (Exception ignored) {}
+//                    }
+//                } catch (Exception ignored) {
+//                } finally {
+//                    playlistSizeInflight.remove(inflightKey);
+//                }
+//
+//                Long fbytes = bytes;
+//                Platform.runLater(() -> {
+//                    if (fbytes != null && fbytes > 0) {
+//                        var next = new java.util.HashMap<String, String>();
+//                        var cur = it.getSizeByQuality();
+//                        if (cur != null) next.putAll(cur);
+//                        next.put(qLabel, formatBytesDecimal(fbytes));
+//                        it.setSizeByQuality(next);
+//                        requestRefreshSafe.run();
+//                    }
+//                });
+//            };
+//
+//            try {
+//                VIDEO_SIZE_EXEC.execute(job);
+//            } catch (java.util.concurrent.RejectedExecutionException rex) {
+//                // VERY IMPORTANT: if executor rejects, clear inflight so future attempts can retry
+//                playlistSizeInflight.remove(inflightKey);
+//            } catch (Exception ex) {
+//                playlistSizeInflight.remove(inflightKey);
+//                new Thread(job, "playlist-size-probe").start();
+//            }
+//        };
+//
+//        // Prefer quick low-quality size first (improves perceived speed)
+//        java.util.function.Consumer<PlaylistEntry> kickFastInitialSize = (it) -> {
+//            if (it == null || it.isUnavailable()) return;
+//
+//            // VIDEO only
+//            String modeNow = globalDesiredMode.get();
+//            if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
+//            if (MODE_AUDIO.equals(modeNow)) return;
+//
+//            var q = it.getAvailableQualities();
+//            if (q == null || q.isEmpty()) return;
+//
+//            String fast = null;
+//            if (q.contains("480p")) fast = "480p";
+//            else if (q.contains("360p")) fast = "360p";
+//            else if (q.contains("240p")) fast = "240p";
+//            else if (q.contains("144p")) fast = "144p";
+//
+//            if (fast != null) {
+//                ensureSizeFor.accept(it, fast);
+//            }
+//        };
+//
+//        // ===== Union of discovered heights across playlist for the GLOBAL combo =====
+//        java.util.Set<Integer> globalHeightsUnion = new java.util.concurrent.ConcurrentSkipListSet<>();
+//
+//        // Guards so programmatic combo changes don't trigger applying qualities
+//        final javafx.beans.property.BooleanProperty updatingGlobalCombo =
+//                new javafx.beans.property.SimpleBooleanProperty(false);
+//
+//        // Once the user touches any quality control, we allow mixed-state logic to drive the global combo.
+//        final java.util.concurrent.atomic.AtomicBoolean userQualityInteracted =
+//                new java.util.concurrent.atomic.AtomicBoolean(false);
+//
+//        // Guards so programmatic selection/check changes don't count as "user interaction"
+//        final javafx.beans.property.BooleanProperty updatingSelection =
+//                new javafx.beans.property.SimpleBooleanProperty(false);
+//
+//        // Mixed state rule (matches UX requirement):
+//        // - Default shows the CURRENT global desired quality (Best by default)
+//        // - If ANY selected item is manually overridden -> show CUSTOM
+//        // - When manual overrides are cleared (back to global), global returns to the global desired value
+//        final Runnable updateGlobalMixedState = () -> {
+//            if (anyQualityPopupOpen.get() || updatingGlobalCombo.get()) {
+//                pendingMixedUpdate.set(true);
+//                return;
+//            }
+//
+//            // If user never interacted, keep the global combo stable (Best by default)
+//            if (!userQualityInteracted.get()) return;
+//
+//            boolean anyManual = false;
+//            boolean anySelected = false;
+//
+//            for (PlaylistEntry it : items) {
+//                if (it == null) continue;
+//                if (!it.isSelected()) continue;
+//                if (it.isUnavailable()) continue;
+//                anySelected = true;
+//                if (it.isManualQuality()) {
+//                    anyManual = true;
+//                    break;
+//                }
+//            }
+//
+//            if (!anySelected) return;
+//
+//            String desired = globalDesiredQuality.get();
+//            if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
+//
+//            updatingGlobalCombo.set(true);
+//            try {
+//                if (anyManual) {
+//                    if (!globalQualityCombo.getItems().contains(QUALITY_CUSTOM)) {
+//                        globalQualityCombo.getItems().add(0, QUALITY_CUSTOM);
+//                    }
+//                    globalQualityCombo.getSelectionModel().select(QUALITY_CUSTOM);
+//                } else {
+//                    // no manual overrides -> show desired global quality
+//                    if (globalQualityCombo.getItems().contains(QUALITY_CUSTOM)) {
+//                        globalQualityCombo.getItems().remove(QUALITY_CUSTOM);
+//                    }
+//
+//                    if (globalQualityCombo.getItems().contains(desired)) {
+//                        globalQualityCombo.getSelectionModel().select(desired);
+//                    } else {
+//                        String mapped = pickClosestSupportedQuality(desired, new java.util.ArrayList<>(globalQualityCombo.getItems()));
+//                        globalQualityCombo.getSelectionModel().select(mapped);
+//                    }
+//                }
+//            } finally {
+//                updatingGlobalCombo.set(false);
+//            }
+//        };
+//        updateGlobalMixedStateRef.set(updateGlobalMixedState);
+//
+//
+//        PauseTransition globalComboUpdateThrottle = new PauseTransition(Duration.millis(220));
+//        Runnable updateGlobalQualityCombo = () -> {
+//            globalComboUpdateThrottle.stop();
+//            globalComboUpdateThrottle.setOnFinished(ev -> {
+//                // If we're in AUDIO mode, never rebuild the global quality list from video heights.
+//                if (MODE_AUDIO.equals(globalDesiredMode.get())) {
+//                    return;
+//                }
+//
+//                // Preserve selection across rebuilds (especially CUSTOM)
+//                String prev = globalQualityCombo.getValue();
+//                if (prev == null || prev.isBlank()) prev = QUALITY_BEST;
+//
+//                boolean keepCustom = QUALITY_CUSTOM.equals(prev);
+//
+//                updatingGlobalCombo.set(true);
+//                try {
+//                    globalQualityCombo.getItems().clear();
+//
+//                    if (keepCustom) {
+//                        globalQualityCombo.getItems().add(QUALITY_CUSTOM);
+//                    }
+//
+//                    if (globalHeightsUnion.isEmpty()) {
+//                        // Safe fallback list
+//                        globalQualityCombo.getItems().addAll(
+//                                QUALITY_BEST,
+//                                QUALITY_SEPARATOR,
+//                                "1080p",
+//                                "720p",
+//                                "480p",
+//                                "360p",
+//                                "240p",
+//                                "144p"
+//                        );
+//                    } else {
+//                        // Only normalized ladder values
+//                        java.util.Set<Integer> normalized = normalizeHeights(new java.util.HashSet<>(globalHeightsUnion));
+//                        java.util.List<Integer> sorted = new java.util.ArrayList<>(normalized);
+//                        sorted.sort(java.util.Comparator.reverseOrder());
+//
+//                        globalQualityCombo.getItems().add(QUALITY_BEST);
+//                        globalQualityCombo.getItems().add(QUALITY_SEPARATOR);
+//                        for (Integer h : sorted) {
+//                            globalQualityCombo.getItems().add(formatHeightLabel(h));
+//                        }
+//                    }
+//
+//                    // Restore selection without fighting CUSTOM
+//                    if (QUALITY_CUSTOM.equals(prev) && keepCustom) {
+//                        globalQualityCombo.getSelectionModel().select(QUALITY_CUSTOM);
+//                    } else if (globalQualityCombo.getItems().contains(prev)) {
+//                        globalQualityCombo.getSelectionModel().select(prev);
+//                    } else {
+//                        String mapped = pickClosestSupportedQuality(prev, new java.util.ArrayList<>(globalQualityCombo.getItems()));
+//                        globalQualityCombo.getSelectionModel().select(mapped);
+//                    }
+//
+//                } finally {
+//                    updatingGlobalCombo.set(false);
+//                }
+//
+//                // If the user already interacted, re-evaluate mixed state once after rebuild.
+//                Platform.runLater(() -> {
+//                    Runnable r = updateGlobalMixedStateRef.get();
+//                    if (r != null) r.run();
+//                });
+//            });
+//            globalComboUpdateThrottle.playFromStart();
+//        };
+//
+//        // =============================
+//        // Global mode listener (put here so items/requestRefreshSafe/updateGlobalMixedState/updateGlobalQualityCombo are in-scope)
+//        // =============================
+//        globalModeCombo.valueProperty().addListener((obs, old, val) -> {
+//            if (val == null) return;
+//
+//            globalDesiredMode.set(val);
+//
+//            // Switch the global quality list based on mode (guard to avoid triggering globalQuality listener)
+//            updatingGlobalCombo.set(true);
+//            try {
+//                if (MODE_AUDIO.equals(val)) {
+//                    globalQualityCombo.getItems().setAll(buildAudioOptions());
+//                    globalQualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
+//                    globalDesiredQuality.set(AUDIO_DEFAULT_FORMAT);
+//                } else {
+//                    // rebuild video list from union (keeps best default)
+//                    updateGlobalQualityCombo.run();
+//                    globalQualityCombo.getSelectionModel().select(QUALITY_BEST);
+//                    globalDesiredQuality.set(QUALITY_BEST);
+//                }
+//            } finally {
+//                updatingGlobalCombo.set(false);
+//            }
+//
+//            // Priority to global: apply to ALL items
+//            for (PlaylistEntry it : items) {
+//                if (it == null || it.isUnavailable()) continue;
+//                it.setManualQuality(false);
+//                it.setQuality(MODE_AUDIO.equals(val) ? globalDesiredQuality.get() : QUALITY_BEST);
+//            }
+//
+//            requestRefreshSafe.run();
+//            Platform.runLater(updateGlobalMixedState);
+//            if (!MODE_AUDIO.equals(globalDesiredMode.get())) {
+//                for (PlaylistEntry it : items) {
+//                    if (it == null || it.isUnavailable()) continue;
+//                    if (!it.isSelected()) continue;
+//                    String qNow = it.getQuality();
+//                    if (qNow == null || qNow.isBlank()) qNow = QUALITY_BEST;
+//                    ensureSizeFor.accept(it, qNow);
+//                }
+//            }
+//            // Now that the user explicitly changed mode, allow mixed-state logic (for quality) later.
+//            userQualityInteracted.set(true);
+//        });
+//
+//        // Background prefetch a limited number of items so sizes/qualities appear without requiring scroll-to-touch.
+//        java.util.function.Consumer<PlaylistEntry> ensureProbed = (PlaylistEntry it) -> {
+//            if (it == null) return;
+//            if (it.isUnavailable()) return;
+//            if (it.isQualitiesLoaded()) return;
+//
+//            it.setQualitiesLoaded(true);
+//
+//            String videoId = it.getId();
+//            String videoUrl = youtubeWatchUrl(videoId);
+//
+//            boolean queued = probeVideoQualitiesAsync(videoUrl, videoId, pr -> {
+//                java.util.Set<Integer> heights = (pr == null) ? java.util.Set.of() : pr.heights;
+//
+//                java.util.Set<Integer> norm = normalizeHeights(heights);
+//                if (norm != null && !norm.isEmpty()) {
+//                    globalHeightsUnion.addAll(norm);
+//                }
+//                Platform.runLater(updateGlobalQualityCombo);
+//
+//                // labels: Best + separator + ONLY actual heights
+//                java.util.ArrayList<String> labels = new java.util.ArrayList<>();
+//                labels.add(QUALITY_BEST);
+//                labels.add(QUALITY_SEPARATOR);
+//
+//                java.util.Set<Integer> norm2 = normalizeHeights(heights);
+//                java.util.List<Integer> sorted = new java.util.ArrayList<>(norm2);
+//                sorted.sort(java.util.Comparator.reverseOrder());
+//
+//                for (Integer h : sorted) labels.add(formatHeightLabel(h));
+//                it.setAvailableQualities(labels);
+//                kickFastInitialSize.accept(it);
+//
+//
+//                // size map: label -> "~xxx MB"
+//                it.setSizeByQuality(new java.util.HashMap<>());
+//
+//                // pick desired + apply ONLY in VIDEO mode (do not overwrite AUDIO format selection)
+//                if (!MODE_AUDIO.equals(globalDesiredMode.get())) {
+//                    String desired = it.getQuality();
+//                    if (!it.isManualQuality()) {
+//                        desired = globalDesiredQuality.get();
+//                        if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
+//                    }
+//
+//                    String supported = pickClosestSupportedQuality(desired, it.getAvailableQualities());
+//                    kickFastInitialSize.accept(it);
+//                    it.setQuality(supported);
+//                }
+//                // Platform.runLater(updateGlobalMixedState); // REMOVE: do not update mixed state during probing
+//
+//                requestRefreshSafe.run();
+//            });
+//
+//            if (!queued) {
+//                // queue full -> allow retry later
+//                it.setQualitiesLoaded(false);
+//            }
+//        };
+//
+//
+//        list.setCellFactory(lv -> new ListCell<>() {
+//
+//            private final CheckBox cb = new CheckBox();
+//            private final Label title = new Label();
+//            private final Label meta = new Label();
+//
+//            private final VBox textBox = new VBox(4);
+//
+//            private final StackPane thumbBox = new StackPane();
+//            private final ImageView thumb = new ImageView();
+//            private final Label placeholder = new Label("NO PREVIEW");
+//
+//            private final ComboBox<String> qualityCombo = new ComboBox<>();
+//            private boolean updatingRowCombo = false;
+//            private boolean suppressQualityListener = false;
+//
+//            private final HBox card = new HBox(12);
+//
+//            // Helper to check if node is a child (or self) of parent
+//            private boolean isChildOf(javafx.scene.Node n, javafx.scene.Node parent) {
+//                if (n == null || parent == null) return false;
+//                javafx.scene.Node cur = n;
+//                while (cur != null) {
+//                    if (cur == parent) return true;
+//                    cur = cur.getParent();
+//                }
+//                return false;
+//            }
+//
+//            {
+//                setStyle("-fx-background-color: transparent;");
+//
+//                // Checkbox
+//                cb.getStyleClass().addAll("gx-check", "gx-playlist-check");
+//                cb.setFocusTraversable(false);
+//
+//                // Thumbnail
+//                thumb.setFitWidth(96);
+//                thumb.setFitHeight(54);
+//                thumb.setPreserveRatio(true);
+//                thumb.setSmooth(true);
+//
+//                placeholder.getStyleClass().add("gx-playlist-thumb-placeholder");
+//
+//                thumbBox.getStyleClass().add("gx-playlist-thumb");
+//                thumbBox.getChildren().addAll(thumb, placeholder);
+//
+//                // Text
+//                title.getStyleClass().add("gx-playlist-title");
+//                title.setWrapText(false);
+//
+//                meta.getStyleClass().add("gx-playlist-meta");
+//
+//                textBox.getChildren().addAll(title, meta);
+//                HBox.setHgrow(textBox, Priority.ALWAYS);
+//
+//                // Quality Combo (right side)
+//                qualityCombo.getStyleClass().addAll(
+//                        "gx-combo",
+//                        "gx-playlist-quality",
+//                        "gx-playlist-item-combo"
+//                );
+//                qualityCombo.setPrefWidth(PLAYLIST_Q_COMBO_W);
+//                qualityCombo.setMinWidth(PLAYLIST_Q_COMBO_W);
+//                qualityCombo.setMaxWidth(240);
+//                qualityCombo.setDisable(true);
+//
+//                qualityCombo.setCellFactory(x -> new ListCell<>() {
+//                    @Override
+//                    protected void updateItem(String item, boolean empty) {
+//                        super.updateItem(item, empty);
+//                        setText(empty ? null : item);
+//                        setDisable(QUALITY_SEPARATOR.equals(item));
+//                        setOpacity(QUALITY_SEPARATOR.equals(item) ? 0.55 : 1.0);
+//                    }
+//                });
+//                qualityCombo.setButtonCell(new ListCell<>() {
+//                    @Override
+//                    protected void updateItem(String item, boolean empty) {
+//                        super.updateItem(item, empty);
+//                        setText(empty ? null : item);
+//                    }
+//                });
+//
+//                // Prevent refresh from closing the popup while user is choosing a quality
+//                qualityCombo.showingProperty().addListener((obs, was, isNow) -> anyQualityPopupOpen.set(isNow));
+//
+//                qualityCombo.valueProperty().addListener((obs, old, val) -> {
+//                    // ✅ لا تشغل المنطق أثناء تعبئة الكومبو/اختيار برمجي
+//                    if (updatingRowCombo || suppressQualityListener) return;
+//
+//                    if (val == null) return;
+//                    if (QUALITY_SEPARATOR.equals(val) || QUALITY_CUSTOM.equals(val)) return;
+//
+//                    PlaylistEntry it = getItem();
+//                    if (it == null || it.isUnavailable()) return;
+//
+//                    // USER interaction
+//                    userQualityInteracted.set(true);
+//
+//                    // Apply selected value to THIS item only
+//                    it.setQuality(val);
+//
+//                    String modeNow = globalDesiredMode.get();
+//                    if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
+//
+//                    // ✅ اعمل حساب الحجم فقط لهذا العنصر وللجودة المختارة (فيديو فقط)
+//                    if (!MODE_AUDIO.equals(modeNow)) {
+//                        ensureSizeFor.accept(it, val);
+//                    }
+//
+//                    // manual override logic (نفس فكرتك)
+//                    String desired = globalDesiredQuality.get();
+//                    if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
+//
+//                    String globalMapped;
+//                    if (MODE_AUDIO.equals(modeNow)) {
+//                        globalMapped = desired; // audio format
+//                    } else {
+//                        java.util.List<String> avail = it.getAvailableQualities();
+//                        globalMapped = (avail == null || avail.isEmpty())
+//                                ? desired
+//                                : pickClosestSupportedQuality(desired, avail);
+//                    }
+//
+//                    boolean manual = !val.equals(globalMapped);
+//                    it.setManualQuality(manual);
+//
+//                    meta.setText(buildMetaLine(it));
+//                    Platform.runLater(updateGlobalMixedState);
+//                });
+//
+//                // Card
+//                card.getStyleClass().add("gx-playlist-card");
+//                card.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+//                card.getChildren().addAll(cb, thumbBox, textBox, qualityCombo);
+//
+//                // Toggle selection on card click
+//                card.setOnMouseClicked(e -> {
+//                    if (isEmpty() || getItem() == null) return;
+//
+//                    // Do not toggle selection when interacting with controls inside the card
+//                    javafx.scene.Node target = (e.getTarget() instanceof javafx.scene.Node)
+//                            ? (javafx.scene.Node) e.getTarget()
+//                            : null;
+//                    if (isChildOf(target, qualityCombo) || isChildOf(target, cb)) {
+//                        return;
+//                    }
+//
+//                    cb.setSelected(!cb.isSelected());
+//                });
+//
+//                cb.selectedProperty().addListener((obs, was, isNow) -> {
+//                    PlaylistEntry it = getItem();
+//                    if (it == null) return;
+//
+//                    if (it.isUnavailable()) {
+//                        // force it off
+//                        cb.setSelected(false);
+//                        it.setSelected(false);
+//                        return;
+//                    }
+//
+//                    // Enforce max selected (only on user action)
+//                    if (isNow && !updatingSelection.get()) {
+//                        int cur = selectedCount.getAsInt();
+//                        if (cur >= PLAYLIST_MAX_SELECTED) {
+//                            // revert
+//                            cb.setSelected(false);
+//                            it.setSelected(false);
+//                            syncCardSelectedStyle(it, card);
+//                            try { if (status != null) status.setText("Selection limit: " + PLAYLIST_MAX_SELECTED + " items"); } catch (Exception ignored) {}
+//                            return;
+//                        }
+//                    }
+//
+//                    it.setSelected(isNow);
+//                    syncCardSelectedStyle(it, card);
+//
+//                    // When user selects an item -> probe ONLY this item (qualities + initial size)
+//                    if (isNow && !updatingSelection.get()) {
+//                        try {
+//                            ensureProbed.accept(it);
+//                        } catch (Exception ignored) {}
+//                        try {
+//                            String modeNow = globalDesiredMode.get();
+//                            if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
+//                            if (!MODE_AUDIO.equals(modeNow)) {
+//                                String qNow = it.getQuality();
+//                                if (qNow == null || qNow.isBlank()) qNow = QUALITY_BEST;
+//                                ensureSizeFor.accept(it, qNow);
+//                            }
+//                        } catch (Exception ignored) {}
+//                    }
+//
+//                    // Only count as a user interaction when it wasn't a programmatic bulk change
+//                    if (!updatingSelection.get()) {
+//                        userQualityInteracted.set(true);
+//                        Platform.runLater(updateGlobalMixedState);
+//                    }
+//
+//                    // update Download button enabled state
+//                    try {
+//                        refreshAddState.run();
+//                    } catch (Exception ignored) {}
+//                });
+//            }
+//
+//            @Override
+//            protected void updateItem(PlaylistEntry item, boolean empty) {
+//                super.updateItem(item, empty);
+//
+//                if (empty || item == null) {
+//                    setText(null);
+//                    setGraphic(null);
+//                    return;
+//                }
+//
+//                title.setText(item.displayTitle());
+//                meta.setText(buildMetaLine(item));
+//
+//                cb.setSelected(item.isSelected());
+//                syncCardSelectedStyle(item, card);
+//                // Defensive reset for recycled cells
+//                cb.setDisable(false);
+//                qualityCombo.setDisable(false);
+//
+//                // Unavailable (private/deleted/etc.)
+//                if (item.isUnavailable()) {
+//                    cb.setDisable(true);
+//                    qualityCombo.setDisable(true);
+//                    placeholder.setText("UNAVAILABLE");
+//                    placeholder.setVisible(true);
+//                    thumb.setImage(null);
+//
+//                    // keep meta simple and clear
+//                    meta.setText("Unavailable");
+//
+//                    // dim the whole card
+//                    card.setOpacity(0.55);
+//
+//                    setGraphic(card);
+//                    return; // IMPORTANT: skip probing
+//                } else {
+//                    cb.setDisable(false);
+//                    card.setOpacity(1.0);
+//                }
+//
+//                // Set placeholder text for normal items
+//                placeholder.setText("NO PREVIEW");
+//
+//                // Thumbnail load (cached + inflight guard) — must run for BOTH Video and Audio
+//                String tid = item.getId();
+//                Image cachedThumb = (tid == null) ? null : PLAYLIST_THUMB_CACHE.get(tid);
+//
+//                if (cachedThumb != null) {
+//                    thumb.setImage(cachedThumb);
+//                    placeholder.setVisible(false);
+//
+//                } else if (item.getThumbUrl() != null && !item.getThumbUrl().isBlank()) {
+//                    placeholder.setVisible(true);
+//
+//                    // Create the Image ONCE per video id, cache it immediately so recycled cells reuse it
+//                    if (tid != null && PLAYLIST_THUMB_INFLIGHT.add(tid)) {
+//
+//                        Image img = new Image(item.getThumbUrl(), true);
+//                        PLAYLIST_THUMB_CACHE.put(tid, img);
+//
+//                        img.progressProperty().addListener((o, oldP, newP) -> {
+//                            if (newP != null && newP.doubleValue() >= 1.0) {
+//                                PLAYLIST_THUMB_INFLIGHT.remove(tid);
+//                                // If this cell is still showing same item, hide placeholder
+//                                Platform.runLater(() -> {
+//                                    PlaylistEntry now = getItem();
+//                                    if (now != null && tid.equals(now.getId()) && img.getException() == null) {
+//                                        placeholder.setVisible(false);
+//                                    }
+//                                });
+//                            }
+//                        });
+//
+//                        img.exceptionProperty().addListener((o, oldEx, ex) -> {
+//                            PLAYLIST_THUMB_INFLIGHT.remove(tid);
+//                        });
+//                    }
+//
+//                    Image reuse = (tid == null) ? null : PLAYLIST_THUMB_CACHE.get(tid);
+//                    thumb.setImage(reuse);
+//                    if (reuse != null && reuse.getProgress() >= 1.0 && reuse.getException() == null) {
+//                        placeholder.setVisible(false);
+//                    } else {
+//                        placeholder.setVisible(true);
+//                    }
+//
+//                } else {
+//                    thumb.setImage(null);
+//                    placeholder.setVisible(true);
+//                }
+//
+//                // ===== AUDIO MODE: show audio formats in each row and skip video probing/quality lists =====
+//                String modeNow = globalDesiredMode.get();
+//                if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
+//
+//                if (MODE_AUDIO.equals(modeNow)) {
+//                    updatingRowCombo = true;
+//                    try {
+//                        qualityCombo.getItems().setAll(buildAudioOptions());
+//                        qualityCombo.setDisable(false);
+//
+//                        String cur = item.getQuality();
+//                        if (cur == null || cur.isBlank() || QUALITY_BEST.equals(cur)) {
+//                            cur = globalDesiredQuality.get();
+//                        }
+//                        if (cur == null || cur.isBlank()) cur = AUDIO_DEFAULT_FORMAT;
+//                        if (!qualityCombo.getItems().contains(cur)) cur = AUDIO_DEFAULT_FORMAT;
+//
+//                        // ✅ prevent listener side-effects
+//                        suppressQualityListener = true;
+//                        try {
+//                            qualityCombo.getSelectionModel().select(cur);
+//                        } finally {
+//                            suppressQualityListener = false;
+//                        }
+//                    } finally {
+//                        updatingRowCombo = false;
+//                    }
+//
+//                    meta.setText(buildMetaLine(item));
+//                    setGraphic(card);
+//                    return;
+//                }
+//
+//                // If qualities not loaded yet → probe in background once
+//                if (!item.isQualitiesLoaded()) {
+//                    item.setQualitiesLoaded(true); // mark immediately to prevent multi-threads from multiple cells
+//
+//                    // ✅ Show a usable list immediately (standard list), while probing the real supported heights in background.
+//                    updatingRowCombo = true;
+//                    try {
+//                        fillQualityCombo(qualityCombo);
+//                        qualityCombo.setDisable(false);
+//
+//                        // Prefer the item's current value; otherwise fall back to the global desired quality
+//                        String cur = item.getQuality();
+//                        if (cur == null || cur.isBlank()) {
+//                            cur = globalDesiredQuality.get();
+//                        }
+//                        if (cur == null || cur.isBlank()) cur = QUALITY_BEST;
+//
+//                        if (!qualityCombo.getItems().contains(cur)) {
+//                            String mapped = pickClosestSupportedQuality(cur, new java.util.ArrayList<>(qualityCombo.getItems()));
+//                            item.setQuality(mapped);
+//                            cur = mapped;
+//                        }
+//                        // ✅ prevent listener side-effects
+//                        suppressQualityListener = true;
+//                        try {
+//                            qualityCombo.getSelectionModel().select(cur);
+//                        } finally {
+//                            suppressQualityListener = false;
+//                        }
+//                    } finally {
+//                        updatingRowCombo = false;
+//                    }
+//
+//                    String videoId = item.getId();
+//                    String videoUrl = youtubeWatchUrl(videoId);
+//
+//                    boolean queued = probeVideoQualitiesAsync(videoUrl, videoId, pr -> {
+//
+//                        // raw heights from probe
+//                        java.util.Set<Integer> heights = (pr == null) ? java.util.Set.of() : pr.heights;
+//
+//                        // ✅ normalize + keep only ladder
+//                        java.util.Set<Integer> norm = normalizeHeights(heights);
+//
+//                        // ✅ update global union from NORMALIZED heights only
+//                        if (norm != null && !norm.isEmpty()) {
+//                            globalHeightsUnion.addAll(norm);
+//                        }
+//                        Platform.runLater(updateGlobalQualityCombo);
+//
+//                        // ✅ labels: Best + separator + ONLY normalized heights
+//                        java.util.ArrayList<String> labels = new java.util.ArrayList<>();
+//                        labels.add(QUALITY_BEST);
+//                        labels.add(QUALITY_SEPARATOR);
+//
+//                        java.util.List<Integer> sorted = (norm == null)
+//                                ? new java.util.ArrayList<>()
+//                                : new java.util.ArrayList<>(norm);
+//
+//                        sorted.sort(java.util.Comparator.reverseOrder());
+//
+//                        for (Integer h : sorted) {
+//                            labels.add(formatHeightLabel(h));
+//                        }
+//                        item.setAvailableQualities(labels);
+//                        kickFastInitialSize.accept(item);
+//
+//                        item.setSizeByQuality(new java.util.HashMap<>());
+//
+//                        // ✅ pick desired + apply ONLY in VIDEO mode
+//                        if (!MODE_AUDIO.equals(globalDesiredMode.get())) {
+//                            String desired = item.getQuality();
+//                            if (!item.isManualQuality()) {
+//                                desired = globalDesiredQuality.get();
+//                                if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
+//                            }
+//
+//                            String supported = pickClosestSupportedQuality(desired, item.getAvailableQualities());
+//                            kickFastInitialSize.accept(item);
+//                            item.setQuality(supported);
+//                        }
+//
+//                        // ✅ refresh without closing popups
+//                        requestRefreshSafe.run();
+//                    });
+//
+//                    if (!queued) {
+//                        // queue full -> allow retry later (VERY IMPORTANT)
+//                        item.setQualitiesLoaded(false);
+//                    }
+//
+//                } else {
+//                    // already probed (or attempted). Always render from the item's cached qualities.
+//                    java.util.List<String> q = item.getAvailableQualities();
+//                    kickFastInitialSize.accept(item);
+//
+//                    if (q != null && q.size() >= 2) { // Best + separator at minimum
+//                        updatingRowCombo = true;
+//                        try {
+//                            qualityCombo.getItems().setAll(q);
+//                            qualityCombo.setDisable(false);
+//
+//                            String cur = item.getQuality();
+//                            if (cur == null || cur.isBlank()) cur = QUALITY_BEST;
+//
+//                            if (!qualityCombo.getItems().contains(cur)) {
+//                                String mapped = pickClosestSupportedQuality(cur, q);
+//                                item.setQuality(mapped);
+//                                cur = mapped;
+//                            }
+//
+//                            // ✅ prevent listener side-effects
+//                            suppressQualityListener = true;
+//                            try {
+//                                qualityCombo.getSelectionModel().select(cur);
+//                            } finally {
+//                                suppressQualityListener = false;
+//                            }
+//
+//                        } finally {
+//                            updatingRowCombo = false;
+//                        }
+//
+//                    } else {
+//                        // Probe failed/rejected -> allow retry later instead of getting stuck disabled forever
+//                        item.setQualitiesLoaded(false);
+//
+//                        updatingRowCombo = true;
+//                        try {
+//                            qualityCombo.getItems().setAll(QUALITY_BEST, QUALITY_SEPARATOR);
+//
+//                            // ✅ prevent listener side-effects
+//                            suppressQualityListener = true;
+//                            try {
+//                                qualityCombo.getSelectionModel().select(QUALITY_BEST);
+//                            } finally {
+//                                suppressQualityListener = false;
+//                            }
+//
+//                            qualityCombo.setDisable(true);
+//                        } finally {
+//                            updatingRowCombo = false;
+//                        }
+//                    }
+//                }
+//
+//                setGraphic(card);
+//            }
+//        });
+//
+//        HBox actions = new HBox(10);
+//        actions.setPadding(new Insets(10, 0, 0, 0));
+//
+//        Button selectAll = new Button("Select all");
+//        selectAll.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
+//
+//        Button clearSel = new Button("Clear");
+//        clearSel.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
+//
+//        Region spacer = new Region();
+//        HBox.setHgrow(spacer, Priority.ALWAYS);
+//
+//        Button cancel = new Button("Back");
+//        cancel.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
+//            // "Add & Start" .  / download
+//
+//        final java.util.concurrent.atomic.AtomicBoolean didDownload =
+//                new java.util.concurrent.atomic.AtomicBoolean(false);
+//
+//        actions.getChildren().addAll(selectAll, clearSel, spacer, cancel, download);
+//
+////        rootBox.getChildren().addAll(header, sub, list, status, actions);
+//        rootBox.getChildren().addAll(header, sub, globalRow, list, status, actions);
+//
+//        Scene scene = new Scene(rootBox, 820, 560);
+//
+//        // ✅ مهم جداً: يلوّن خلفية الـ Stage نفسها
+//        scene.setFill(Color.web("#121826"));
+//        scene.getRoot().setStyle("-fx-background-color: #121826;");
+//
+//        // Apply same app styles
+//        scene.getStylesheets().addAll(
+//                getClass().getResource("/com/grabx/app/grabx/styles/theme-base.css").toExternalForm(),
+//                getClass().getResource("/com/grabx/app/grabx/styles/layout.css").toExternalForm(),
+//                getClass().getResource("/com/grabx/app/grabx/styles/buttons.css").toExternalForm(),
+//                getClass().getResource("/com/grabx/app/grabx/styles/sidebar.css").toExternalForm()
+//        );
+//
+//
+//        // ✅ خلي CSS يتطبق قبل ما تبان النافذة (تقليل الوميض)
+//        rootBox.applyCss();
+//        rootBox.layout();
+//
+//        stage.setScene(scene);
+//
+//
+//
+//        globalQualityCombo.valueProperty().addListener((obs, old, val) -> {
+//            if (val == null) return;
+//            if (QUALITY_SEPARATOR.equals(val)) return;
+//            if (QUALITY_CUSTOM.equals(val)) return;
+//            if (updatingGlobalCombo.get()) return;
+//
+//            userQualityInteracted.set(true);
+//            globalDesiredQuality.set(val);
+//
+//            String modeNow = globalDesiredMode.get();
+//            if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
+//
+//            for (PlaylistEntry it : items) {
+//                if (it == null || it.isUnavailable()) continue;
+//
+//                it.setManualQuality(false);
+//
+//                if (MODE_AUDIO.equals(modeNow)) {
+//                    it.setQuality(val); // format
+//                } else {
+//                    java.util.List<String> avail = it.getAvailableQualities();
+//                    kickFastInitialSize.accept(it);
+//                    String mapped = (avail == null || avail.isEmpty())
+//                            ? val
+//                            : pickClosestSupportedQuality(val, avail);
+//                    it.setQuality(mapped);
+//                    ensureSizeFor.accept(it, mapped);
+//                }
+//            }
+//
+//            requestRefreshSafe.run();
+//            Platform.runLater(updateGlobalMixedState);
+//        });
+//
+//        selectAll.setOnAction(e -> {
+//            updatingSelection.set(true);
+//            try {
+//                int c = 0;
+//                for (PlaylistEntry it : items) {
+//                    if (it == null || it.isUnavailable()) continue;
+//                    if (c >= PLAYLIST_MAX_SELECTED) {
+//                        it.setSelected(false);
+//                        continue;
+//                    }
+//                    it.setSelected(true);
+//                    c++;
+//                }
+//            } finally {
+//                updatingSelection.set(false);
+//            }
+//            try { if (status != null) status.setText("Selected up to " + PLAYLIST_MAX_SELECTED + " items"); } catch (Exception ignored) {}
+//            requestRefreshSafe.run();
+//            refreshAddState.run();
+//        });
+//
+//        clearSel.setOnAction(e -> {
+//            updatingSelection.set(true);
+//            try {
+//                for (PlaylistEntry it : items) {
+//                    if (it == null) continue;
+//                    it.setSelected(false);
+//                }
+//            } finally {
+//                updatingSelection.set(false);
+//            }
+//            requestRefreshSafe.run();
+//            refreshAddState.run();
+//        });
+//
+//        cancel.setOnAction(e -> {
+//            stage.close();
+//
+//            // If Playlist was opened from Add Link and user pressed Back (not Download), restore Add Link dialog
+//            if (!didDownload.get() && reopenAddLinkAfterPlaylist) {
+//                final String u = reopenAddLinkPrefillUrl;
+//
+//                reopenAddLinkAfterPlaylist = false;
+//                reopenAddLinkPrefillUrl = null;
+//
+//                javafx.application.Platform.runLater(() -> openOrUpdateAddLinkDialog(u));
+//            }
+//        });
+//
+//        download.setOnAction(e -> {
+//            saveLastDownloadFolder(playlistFolder);
+//
+//            didDownload.set(true);
+//            try {
+//                if (activeAddLinkDialog != null) activeAddLinkDialog.hide();
+//            } catch (Exception ignored) {}
+//
+//            // snapshot selected, keep original playlist order by index
+//            java.util.List<PlaylistEntry> batch = items.stream()
+//                    .filter(it -> it != null && it.isSelected() && !it.isUnavailable())
+//                    .sorted(java.util.Comparator.comparingInt(PlaylistEntry::getIndex)) // لو اسمها getIndex
+//                    .toList();
+//
+//            if (batch.isEmpty()) {
+//                if (statusText != null) statusText.setText("No items selected.");
+//                return;
+//            }
+//            String modeNow = globalDesiredMode.get();
+//            String desiredNow = globalDesiredQuality.get();
+//            enqueuePlaylistBatch(batch, modeNow, desiredNow);
+//
+//            if (statusText != null) {
+//                statusText.setText("Queued playlist: " + batch.size() + " items");
+//            }
+//
+//            reopenAddLinkAfterPlaylist = false;
+//            reopenAddLinkPrefillUrl = null;
+//
+//            stage.close();
+//        });
+//
+//        // Load playlist entries asynchronously
+//        new Thread(() -> {
+//            java.util.List<PlaylistEntry> loaded = probePlaylistFlat(playlistUrl);
+//            Platform.runLater(() -> {
+//                items.setAll(loaded);
+//                if (loaded.isEmpty()) {
+//                    status.setText("Could not load playlist (yt-dlp missing?)");
+//                } else {
+//                    long bad = loaded.stream().filter(PlaylistEntry::isUnavailable).count();
+//                    status.setText("Loaded " + loaded.size() + " items" + (bad > 0 ? (" • " + bad + " unavailable") : ""));
+//                }
+//
+//                // default select NONE (skip unavailable) - programmatic, do NOT treat as user interaction
+//                updatingSelection.set(true);
+//                try {
+//                    for (PlaylistEntry it : items) {
+//                        if (it == null) continue;
+//                        it.setSelected(false);
+//                    }
+//                } finally {
+//                    updatingSelection.set(false);
+//                }
+//
+//                // initial default: BEST (do not mark as user interaction)
+//                updatingGlobalCombo.set(true);
+//                try {
+//                    globalQualityCombo.getSelectionModel().select(QUALITY_BEST);
+//                } finally {
+//                    updatingGlobalCombo.set(false);
+//                }
+//                globalDesiredQuality.set(QUALITY_BEST);
+//
+//                requestRefreshSafe.run();
+//                refreshAddState.run();
+//                // NOTE: no background prefetch for huge playlists.
+//                // We probe qualities/sizes ONLY when the user selects an item.
+//            });
+//        }, "probe-playlist").start();
+//
+//        stage.showAndWait();
+//    }
+
+
     private void openPlaylistWindow(String playlistUrl, String folder) {
+    final String playlistFolder = (folder == null || folder.isBlank())
+            ? getLastDownloadFolderOrDefault()
+            : folder;
 
+    Stage stage = new Stage();
+    stage.setTitle("Playlist");
 
-        Stage stage = new Stage();
-        stage.setTitle("Playlist");
-//        stage.initModality(Modality.APPLICATION_MODAL);
-        final double PLAYLIST_Q_COMBO_W = 160;
+    Button calcSize = new Button("Compute size");
+    calcSize.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
+    calcSize.setDisable(true);
 
+        // Sequential probing (top -> bottom)
+    final java.util.Set<String> qualitiesInflight = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    final java.util.concurrent.atomic.AtomicInteger probeIndex = new java.util.concurrent.atomic.AtomicInteger(0);
+    final java.util.concurrent.atomic.AtomicBoolean probingNow = new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    final double PLAYLIST_Q_COMBO_W = 160;
+    final int PLAYLIST_MAX_SELECTED = 200; // hard cap to avoid UI/native crashes on huge playlists
+
+    // ✅ NEW: Playlist should stay lightweight (NO size probing here)
+    final boolean SHOW_PLAYLIST_SIZES = false;
+
+    ObservableList<PlaylistEntry> items = FXCollections.observableArrayList();
+
+    java.util.function.IntSupplier selectedCount = () -> {
         try {
-            if (root != null && root.getScene() != null && root.getScene().getWindow() != null) {
-                stage.initOwner(root.getScene().getWindow());
-                stage.initModality(javafx.stage.Modality.WINDOW_MODAL);
-            } else {
-                stage.initModality(javafx.stage.Modality.APPLICATION_MODAL);
+            int c = 0;
+            for (PlaylistEntry it : items) {
+                if (it != null && it.isSelected() && !it.isUnavailable()) c++;
             }
-        } catch (Exception ignored) {
+            return c;
+        } catch (Exception ex) {
+            return 0;
+        }
+    };
+
+    try {
+        if (root != null && root.getScene() != null && root.getScene().getWindow() != null) {
+            stage.initOwner(root.getScene().getWindow());
+            stage.initModality(javafx.stage.Modality.WINDOW_MODAL);
+        } else {
             stage.initModality(javafx.stage.Modality.APPLICATION_MODAL);
         }
+    } catch (Exception ignored) {
+        stage.initModality(javafx.stage.Modality.APPLICATION_MODAL);
+    }
 
-// لما تنعرض، خلّيها Key فورًا
-        stage.setOnShown(ev -> Platform.runLater(() -> bringWindowToFront(stage)));
+    // لما تنعرض، خلّيها Key فورًا
+    stage.setOnShown(ev -> Platform.runLater(() -> bringWindowToFront(stage)));
 
-        VBox rootBox = new VBox(12);
-        installClickToDefocus(rootBox);
-        rootBox.getStyleClass().addAll("gx-panel", "gx-playlist-root");
-        rootBox.setPadding(new Insets(16));
-        rootBox.setFillWidth(true);
+    VBox rootBox = new VBox(12);
+    installClickToDefocus(rootBox);
+    rootBox.getStyleClass().addAll("gx-panel", "gx-playlist-root");
+    rootBox.setPadding(new Insets(16));
+    rootBox.setFillWidth(true);
 
-        // ✅ يمنع أي وميض/أبيض في بداية إظهار النافذة
-        rootBox.setStyle("-fx-background-color: #121826;");
+    // ✅ يمنع أي وميض/أبيض في بداية إظهار النافذة
+    rootBox.setStyle("-fx-background-color: #121826;");
 
-        Label header = new Label("Playlist items");
-        header.getStyleClass().add("gx-section-title");
+    Label header = new Label("Playlist items");
+    header.getStyleClass().add("gx-section-title");
 
-        Label sub = new Label("Select what you want to download, then Add & Start.");
-        sub.getStyleClass().add("gx-text-muted");
+    Label sub = new Label("Select what you want to download, then Add & Start.");
+    sub.getStyleClass().add("gx-text-muted");
 
-        // Global quality selector (applies to selected items, keeps per-item override possible)
-        Label globalQLabel = new Label("Quality for all");
-        globalQLabel.getStyleClass().add("gx-text-muted");
+    Label globalQLabel = new Label("Quality for all");
+    globalQLabel.getStyleClass().add("gx-text-muted");
 
-        Label globalModeLabel = new Label("Mode for all");
-        globalModeLabel.getStyleClass().add("gx-text-muted");
+    Label globalModeLabel = new Label("Mode for all");
+    globalModeLabel.getStyleClass().add("gx-text-muted");
 
-        ComboBox<String> globalModeCombo = new ComboBox<>();
-        globalModeCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality");
+    ComboBox<String> globalModeCombo = new ComboBox<>();
+    globalModeCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality");
+    globalModeCombo.getItems().setAll(MODE_VIDEO, MODE_AUDIO);
 
-        globalModeCombo.getItems().setAll(MODE_VIDEO, MODE_AUDIO);
+    ComboBox<String> globalQualityCombo = new ComboBox<>();
+    globalQualityCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality");
 
-        ComboBox<String> globalQualityCombo = new ComboBox<>();
-        globalQualityCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality");
-        globalModeCombo.setPrefWidth(PLAYLIST_Q_COMBO_W);
-        globalModeCombo.setMinWidth(PLAYLIST_Q_COMBO_W);
+    globalModeCombo.setPrefWidth(PLAYLIST_Q_COMBO_W);
+    globalModeCombo.setMinWidth(PLAYLIST_Q_COMBO_W);
 
-        globalQualityCombo.setPrefWidth(PLAYLIST_Q_COMBO_W);
-        globalQualityCombo.setMinWidth(PLAYLIST_Q_COMBO_W);
+    globalQualityCombo.setPrefWidth(PLAYLIST_Q_COMBO_W);
+    globalQualityCombo.setMinWidth(PLAYLIST_Q_COMBO_W);
 
-        // standard list; we will map to closest supported per item
-        fillQualityCombo(globalQualityCombo);
+    // standard list
+    fillQualityCombo(globalQualityCombo);
 
-        // separator behavior
-        globalQualityCombo.setCellFactory(lv -> new ListCell<>() {
-            @Override
-            protected void updateItem(String item, boolean empty) {
-                super.updateItem(item, empty);
-                setText(empty ? null : item);
-//                setDisable(QUALITY_SEPARATOR.equals(item));
-//                setOpacity(QUALITY_SEPARATOR.equals(item) ? 0.55 : 1.0);
-                boolean disabled = QUALITY_SEPARATOR.equals(item) || QUALITY_CUSTOM.equals(item);
-                setDisable(disabled);
-                setOpacity(disabled ? 0.55 : 1.0);
+    // separator behavior
+    globalQualityCombo.setCellFactory(lv -> new ListCell<>() {
+        @Override
+        protected void updateItem(String item, boolean empty) {
+            super.updateItem(item, empty);
+            setText(empty ? null : item);
 
+            boolean disabled = QUALITY_SEPARATOR.equals(item) || QUALITY_CUSTOM.equals(item);
+            setDisable(disabled);
+            setOpacity(disabled ? 0.55 : 1.0);
+        }
+    });
+    globalQualityCombo.setButtonCell(new ListCell<>() {
+        @Override
+        protected void updateItem(String item, boolean empty) {
+            super.updateItem(item, empty);
+            setText(empty ? null : item);
+        }
+    });
+
+    // store desired global mode/quality (used as default for items that are not manual)
+    StringProperty globalDesiredMode = new SimpleStringProperty(MODE_VIDEO);
+    StringProperty globalDesiredQuality = new SimpleStringProperty(QUALITY_BEST);
+
+    globalModeCombo.getSelectionModel().select(MODE_VIDEO);
+    globalQualityCombo.getSelectionModel().select(QUALITY_BEST);
+    globalDesiredMode.set(MODE_VIDEO);
+    globalDesiredQuality.set(QUALITY_BEST);
+
+    HBox globalRow = new HBox(10);
+    globalRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+    globalRow.getChildren().addAll(globalModeLabel, globalModeCombo, globalQLabel, globalQualityCombo);
+
+    Label status = new Label("Loading playlist...");
+    status.getStyleClass().add("gx-text-muted");
+
+    ListView<PlaylistEntry> list = new ListView<>();
+    list.getStyleClass().add("gx-playlist-list");
+    list.setStyle("-fx-background-color: transparent;");
+
+    Button download = new Button("Download");
+    download.getStyleClass().addAll("gx-btn", "gx-btn-primary");
+    download.setDisable(true);
+
+    Runnable refreshAddState = () -> {
+        try {
+            boolean any = items.stream().anyMatch(it -> it != null && it.isSelected() && !it.isUnavailable());
+            download.setDisable(!any);
+            calcSize.setDisable(!any);
+        } catch (Exception ignored) {}
+    };
+
+    list.setItems(items);
+    list.setPrefHeight(420);
+    list.setFocusTraversable(false);
+    list.setSelectionModel(new NoSelectionModel<>());
+
+    // Throttle refreshes
+    PauseTransition refreshThrottle = new PauseTransition(Duration.millis(140));
+    Runnable requestRefresh = () -> {
+        refreshThrottle.stop();
+        refreshThrottle.setOnFinished(ev -> list.refresh());
+        refreshThrottle.playFromStart();
+    };
+
+    javafx.beans.property.BooleanProperty anyQualityPopupOpen =
+            new javafx.beans.property.SimpleBooleanProperty(false);
+    java.util.concurrent.atomic.AtomicBoolean pendingRefresh =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    java.util.concurrent.atomic.AtomicBoolean pendingMixedUpdate =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    final java.util.concurrent.atomic.AtomicReference<Runnable> updateGlobalMixedStateRef =
+            new java.util.concurrent.atomic.AtomicReference<>();
+
+    Runnable requestRefreshSafe = () -> {
+        if (anyQualityPopupOpen.get()) {
+            pendingRefresh.set(true);
+            return;
+        }
+        refreshThrottle.stop();
+        refreshThrottle.setOnFinished(ev -> list.refresh());
+        refreshThrottle.playFromStart();
+    };
+
+    globalQualityCombo.showingProperty().addListener((obs, was, isNow) -> anyQualityPopupOpen.set(isNow));
+    anyQualityPopupOpen.addListener((o, was, isNow) -> {
+        if (!isNow) {
+            if (pendingRefresh.getAndSet(false)) {
+                refreshThrottle.stop();
+                refreshThrottle.setOnFinished(ev -> list.refresh());
+                refreshThrottle.playFromStart();
             }
-        });
-        globalQualityCombo.setButtonCell(new ListCell<>() {
-            @Override
-            protected void updateItem(String item, boolean empty) {
-                super.updateItem(item, empty);
-                setText(empty ? null : item);
-            }
-        });
-
-        // store desired global mode/quality (used as default for items that are not manual)
-        StringProperty globalDesiredMode = new SimpleStringProperty(MODE_VIDEO);
-        StringProperty globalDesiredQuality = new SimpleStringProperty(QUALITY_BEST);
-
-        globalModeCombo.getSelectionModel().select(MODE_VIDEO);
-        globalQualityCombo.getSelectionModel().select(QUALITY_BEST);
-        globalDesiredMode.set(MODE_VIDEO);
-        globalDesiredQuality.set(QUALITY_BEST);
-
-        // NOTE: we DO NOT bind; we only update these on USER changes to the global combos.
-
-        HBox globalRow = new HBox(10);
-        globalRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
-//        globalRow.getChildren().addAll(globalQLabel, globalQualityCombo);
-        globalRow.getChildren().addAll(globalModeLabel, globalModeCombo, globalQLabel, globalQualityCombo);
-
-
-        Label status = new Label("Loading playlist...");
-
-        status.getStyleClass().add("gx-text-muted");
-
-        ListView<PlaylistEntry> list = new ListView<>();
-        list.getStyleClass().add("gx-playlist-list");   // لا تضيف gx-list
-        list.setStyle("-fx-background-color: transparent;");
-        ObservableList<PlaylistEntry> items = FXCollections.observableArrayList();
-        list.setItems(items);
-
-        list.setPrefHeight(420);
-        list.setFocusTraversable(false);
-        // Prevent default ListView selection highlight (blue outlines)
-        list.setSelectionModel(new NoSelectionModel<>());
-
-        // Throttle refreshes (so 100 callbacks won't spam list.refresh())
-        PauseTransition refreshThrottle = new PauseTransition(Duration.millis(140));
-        Runnable requestRefresh = () -> {
-            refreshThrottle.stop();
-            refreshThrottle.setOnFinished(ev -> list.refresh());
-            refreshThrottle.playFromStart();
-        };
-
-        javafx.beans.property.BooleanProperty anyQualityPopupOpen =
-                new javafx.beans.property.SimpleBooleanProperty(false);
-        java.util.concurrent.atomic.AtomicBoolean pendingRefresh =
-                new java.util.concurrent.atomic.AtomicBoolean(false);
-
-        java.util.concurrent.atomic.AtomicBoolean pendingMixedUpdate =
-                new java.util.concurrent.atomic.AtomicBoolean(false);
-        final java.util.concurrent.atomic.AtomicReference<Runnable> updateGlobalMixedStateRef = new java.util.concurrent.atomic.AtomicReference<>();
-
-        Runnable requestRefreshSafe = () -> {
-            if (anyQualityPopupOpen.get()) {
-                pendingRefresh.set(true);
-                return;
-            }
-            refreshThrottle.stop();
-            refreshThrottle.setOnFinished(ev -> list.refresh());
-            refreshThrottle.playFromStart();
-        };
-
-        // Track popup state (so list.refresh() doesn't close an open ComboBox)
-        globalQualityCombo.showingProperty().addListener((obs, was, isNow) -> anyQualityPopupOpen.set(isNow));
-        // Run pending UI refresh/mixed update after any quality popup closes
-        anyQualityPopupOpen.addListener((o, was, isNow) -> {
-            if (!isNow) {
-                if (pendingRefresh.getAndSet(false)) {
-                    refreshThrottle.stop();
-                    refreshThrottle.setOnFinished(ev -> list.refresh());
-                    refreshThrottle.playFromStart();
-                }
-                if (pendingMixedUpdate.getAndSet(false)) {
-                    Platform.runLater(() -> {
-                        Runnable r = updateGlobalMixedStateRef.get();
-                        if (r != null) r.run();
-                    });
-                }
-            }
-        });
-
-// Stop background prefetch when window closes
-        java.util.concurrent.atomic.AtomicBoolean stopPrefetch = new java.util.concurrent.atomic.AtomicBoolean(false);
-        stage.setOnHidden(ev -> stopPrefetch.set(true));
-
-        // ===== Lazy size calculation (VIDEO only) =====
-        java.util.Set<String> playlistSizeInflight = java.util.concurrent.ConcurrentHashMap.newKeySet();
-
-        java.util.function.BiConsumer<PlaylistEntry, String> ensureSizeFor = (it, qLabel) -> {
-            if (it == null || it.isUnavailable()) return;
-            if (qLabel == null || qLabel.isBlank() || QUALITY_SEPARATOR.equals(qLabel) || QUALITY_CUSTOM.equals(qLabel)) return;
-
-            // only in VIDEO mode
-            String modeNow = globalDesiredMode.get();
-            if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
-            if (MODE_AUDIO.equals(modeNow)) return;
-
-            String vid = it.getId();
-            if (vid == null || vid.isBlank()) return;
-
-            String videoUrl = youtubeWatchUrl(vid);
-
-            // 0) Global size cache hit (avoid re-running yt-dlp)
-            try {
-                String cacheKey = videoUrl + "|" + MODE_VIDEO + "|" + qLabel;
-                Long cachedBytes = SIZE_CACHE.get(cacheKey);
-                if (cachedBytes != null && cachedBytes > 0) {
-                    // update UI map if missing
-                    var cur = it.getSizeByQuality();
-                    String exist = (cur == null) ? null : cur.get(qLabel);
-                    if (exist == null || exist.isBlank()) {
-                        var next = new java.util.HashMap<String, String>();
-                        if (cur != null) next.putAll(cur);
-                        next.put(qLabel, formatBytesDecimal(cachedBytes));
-                        it.setSizeByQuality(next);
-                        requestRefreshSafe.run();
-                    }
-                    return;
-                }
-            } catch (Exception ignored) {}
-
-            // 1) If already have it in the item map, stop.
-            try {
-                var cur = it.getSizeByQuality();
-                if (cur != null) {
-                    String exist = cur.get(qLabel);
-                    if (exist != null && !exist.isBlank()) return;
-                }
-            } catch (Exception ignored) {}
-
-            // 2) de-dupe inflight
-            String inflightKey = vid + "||" + qLabel;
-            if (!playlistSizeInflight.add(inflightKey)) return;
-
-            Runnable job = () -> {
-                Long bytes = null;
-                try {
-                    String selector;
-                    if (QUALITY_BEST.equals(qLabel)) {
-                        selector = "bv*+ba/b";
-                    } else {
-                        int h = parseHeightFromLabel(qLabel);
-                        selector = (h > 0) ? buildFormatSelectorForHeight(h) : "bv*+ba/b";
-                    }
-
-                    bytes = fetchCombinedSizeBytesWithYtDlpPrint(videoUrl, selector);
-
-                    if (bytes != null && bytes > 0) {
-                        // persist to shared cache so we never re-probe this quality again
-                        try {
-                            String cacheKey = videoUrl + "|" + MODE_VIDEO + "|" + qLabel;
-                            SIZE_CACHE.put(cacheKey, bytes);
-                        } catch (Exception ignored) {}
-                    }
-                } catch (Exception ignored) {
-                } finally {
-                    playlistSizeInflight.remove(inflightKey);
-                }
-
-                Long fbytes = bytes;
-                Platform.runLater(() -> {
-                    if (fbytes != null && fbytes > 0) {
-                        var next = new java.util.HashMap<String, String>();
-                        var cur = it.getSizeByQuality();
-                        if (cur != null) next.putAll(cur);
-                        next.put(qLabel, formatBytesDecimal(fbytes));
-                        it.setSizeByQuality(next);
-                        requestRefreshSafe.run();
-                    }
-                });
-            };
-
-            try {
-                VIDEO_SIZE_EXEC.execute(job);
-            } catch (java.util.concurrent.RejectedExecutionException rex) {
-                // VERY IMPORTANT: if executor rejects, clear inflight so future attempts can retry
-                playlistSizeInflight.remove(inflightKey);
-            } catch (Exception ex) {
-                playlistSizeInflight.remove(inflightKey);
-                new Thread(job, "playlist-size-probe").start();
-            }
-        };
-
-        // Prefer quick low-quality size first (improves perceived speed)
-        java.util.function.Consumer<PlaylistEntry> kickFastInitialSize = (it) -> {
-            if (it == null || it.isUnavailable()) return;
-
-            // VIDEO only
-            String modeNow = globalDesiredMode.get();
-            if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
-            if (MODE_AUDIO.equals(modeNow)) return;
-
-            var q = it.getAvailableQualities();
-            if (q == null || q.isEmpty()) return;
-
-            String fast = null;
-            if (q.contains("480p")) fast = "480p";
-            else if (q.contains("360p")) fast = "360p";
-            else if (q.contains("240p")) fast = "240p";
-            else if (q.contains("144p")) fast = "144p";
-
-            if (fast != null) {
-                ensureSizeFor.accept(it, fast);
-            }
-        };
-
-        // ===== Union of discovered heights across playlist for the GLOBAL combo =====
-        java.util.Set<Integer> globalHeightsUnion = new java.util.concurrent.ConcurrentSkipListSet<>();
-
-        // Guards so programmatic combo changes don't trigger applying qualities
-        final javafx.beans.property.BooleanProperty updatingGlobalCombo =
-                new javafx.beans.property.SimpleBooleanProperty(false);
-
-        // Once the user touches any quality control, we allow mixed-state logic to drive the global combo.
-        final java.util.concurrent.atomic.AtomicBoolean userQualityInteracted =
-                new java.util.concurrent.atomic.AtomicBoolean(false);
-
-        // Guards so programmatic selection/check changes don't count as "user interaction"
-        final javafx.beans.property.BooleanProperty updatingSelection =
-                new javafx.beans.property.SimpleBooleanProperty(false);
-
-        // Mixed state rule (matches UX requirement):
-        // - Default shows the CURRENT global desired quality (Best by default)
-        // - If ANY selected item is manually overridden -> show CUSTOM
-        // - When manual overrides are cleared (back to global), global returns to the global desired value
-        final Runnable updateGlobalMixedState = () -> {
-            if (anyQualityPopupOpen.get() || updatingGlobalCombo.get()) {
-                pendingMixedUpdate.set(true);
-                return;
-            }
-
-            // If user never interacted, keep the global combo stable (Best by default)
-            if (!userQualityInteracted.get()) return;
-
-            boolean anyManual = false;
-            boolean anySelected = false;
-
-            for (PlaylistEntry it : items) {
-                if (it == null) continue;
-                if (!it.isSelected()) continue;
-                if (it.isUnavailable()) continue;
-                anySelected = true;
-                if (it.isManualQuality()) {
-                    anyManual = true;
-                    break;
-                }
-            }
-
-            if (!anySelected) return;
-
-            String desired = globalDesiredQuality.get();
-            if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
-
-            updatingGlobalCombo.set(true);
-            try {
-                if (anyManual) {
-                    if (!globalQualityCombo.getItems().contains(QUALITY_CUSTOM)) {
-                        globalQualityCombo.getItems().add(0, QUALITY_CUSTOM);
-                    }
-                    globalQualityCombo.getSelectionModel().select(QUALITY_CUSTOM);
-                } else {
-                    // no manual overrides -> show desired global quality
-                    if (globalQualityCombo.getItems().contains(QUALITY_CUSTOM)) {
-                        globalQualityCombo.getItems().remove(QUALITY_CUSTOM);
-                    }
-
-                    if (globalQualityCombo.getItems().contains(desired)) {
-                        globalQualityCombo.getSelectionModel().select(desired);
-                    } else {
-                        String mapped = pickClosestSupportedQuality(desired, new java.util.ArrayList<>(globalQualityCombo.getItems()));
-                        globalQualityCombo.getSelectionModel().select(mapped);
-                    }
-                }
-            } finally {
-                updatingGlobalCombo.set(false);
-            }
-        };
-        updateGlobalMixedStateRef.set(updateGlobalMixedState);
-
-
-        PauseTransition globalComboUpdateThrottle = new PauseTransition(Duration.millis(220));
-        Runnable updateGlobalQualityCombo = () -> {
-            globalComboUpdateThrottle.stop();
-            globalComboUpdateThrottle.setOnFinished(ev -> {
-                // If we're in AUDIO mode, never rebuild the global quality list from video heights.
-                if (MODE_AUDIO.equals(globalDesiredMode.get())) {
-                    return;
-                }
-
-                // Preserve selection across rebuilds (especially CUSTOM)
-                String prev = globalQualityCombo.getValue();
-                if (prev == null || prev.isBlank()) prev = QUALITY_BEST;
-
-                boolean keepCustom = QUALITY_CUSTOM.equals(prev);
-
-                updatingGlobalCombo.set(true);
-                try {
-                    globalQualityCombo.getItems().clear();
-
-                    if (keepCustom) {
-                        globalQualityCombo.getItems().add(QUALITY_CUSTOM);
-                    }
-
-                    if (globalHeightsUnion.isEmpty()) {
-                        // Safe fallback list
-                        globalQualityCombo.getItems().addAll(
-                                QUALITY_BEST,
-                                QUALITY_SEPARATOR,
-                                "1080p",
-                                "720p",
-                                "480p",
-                                "360p",
-                                "240p",
-                                "144p"
-                        );
-                    } else {
-                        // Only normalized ladder values
-                        java.util.Set<Integer> normalized = normalizeHeights(new java.util.HashSet<>(globalHeightsUnion));
-                        java.util.List<Integer> sorted = new java.util.ArrayList<>(normalized);
-                        sorted.sort(java.util.Comparator.reverseOrder());
-
-                        globalQualityCombo.getItems().add(QUALITY_BEST);
-                        globalQualityCombo.getItems().add(QUALITY_SEPARATOR);
-                        for (Integer h : sorted) {
-                            globalQualityCombo.getItems().add(formatHeightLabel(h));
-                        }
-                    }
-
-                    // Restore selection without fighting CUSTOM
-                    if (QUALITY_CUSTOM.equals(prev) && keepCustom) {
-                        globalQualityCombo.getSelectionModel().select(QUALITY_CUSTOM);
-                    } else if (globalQualityCombo.getItems().contains(prev)) {
-                        globalQualityCombo.getSelectionModel().select(prev);
-                    } else {
-                        String mapped = pickClosestSupportedQuality(prev, new java.util.ArrayList<>(globalQualityCombo.getItems()));
-                        globalQualityCombo.getSelectionModel().select(mapped);
-                    }
-
-                } finally {
-                    updatingGlobalCombo.set(false);
-                }
-
-                // If the user already interacted, re-evaluate mixed state once after rebuild.
+            if (pendingMixedUpdate.getAndSet(false)) {
                 Platform.runLater(() -> {
                     Runnable r = updateGlobalMixedStateRef.get();
                     if (r != null) r.run();
                 });
-            });
-            globalComboUpdateThrottle.playFromStart();
-        };
+            }
+        }
+    });
 
-        // =============================
-        // Global mode listener (put here so items/requestRefreshSafe/updateGlobalMixedState/updateGlobalQualityCombo are in-scope)
-        // =============================
-        globalModeCombo.valueProperty().addListener((obs, old, val) -> {
-            if (val == null) return;
+    // ===== Union of discovered heights across playlist for the GLOBAL combo =====
+    java.util.Set<Integer> globalHeightsUnion = new java.util.concurrent.ConcurrentSkipListSet<>();
 
-            globalDesiredMode.set(val);
+    final javafx.beans.property.BooleanProperty updatingGlobalCombo =
+            new javafx.beans.property.SimpleBooleanProperty(false);
 
-            // Switch the global quality list based on mode (guard to avoid triggering globalQuality listener)
+    final java.util.concurrent.atomic.AtomicBoolean userQualityInteracted =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    final javafx.beans.property.BooleanProperty updatingSelection =
+            new javafx.beans.property.SimpleBooleanProperty(false);
+
+    final Runnable updateGlobalMixedState = () -> {
+        if (anyQualityPopupOpen.get() || updatingGlobalCombo.get()) {
+            pendingMixedUpdate.set(true);
+            return;
+        }
+        if (!userQualityInteracted.get()) return;
+
+        boolean anyManual = false;
+        boolean anySelected = false;
+
+        for (PlaylistEntry it : items) {
+            if (it == null) continue;
+            if (!it.isSelected()) continue;
+            if (it.isUnavailable()) continue;
+            anySelected = true;
+            if (it.isManualQuality()) {
+                anyManual = true;
+                break;
+            }
+        }
+        if (!anySelected) return;
+
+        String desired = globalDesiredQuality.get();
+        if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
+
+        updatingGlobalCombo.set(true);
+        try {
+            if (anyManual) {
+                if (!globalQualityCombo.getItems().contains(QUALITY_CUSTOM)) {
+                    globalQualityCombo.getItems().add(0, QUALITY_CUSTOM);
+                }
+                globalQualityCombo.getSelectionModel().select(QUALITY_CUSTOM);
+            } else {
+                if (globalQualityCombo.getItems().contains(QUALITY_CUSTOM)) {
+                    globalQualityCombo.getItems().remove(QUALITY_CUSTOM);
+                }
+                if (globalQualityCombo.getItems().contains(desired)) {
+                    globalQualityCombo.getSelectionModel().select(desired);
+                } else {
+                    String mapped = pickClosestSupportedQuality(desired, new java.util.ArrayList<>(globalQualityCombo.getItems()));
+                    globalQualityCombo.getSelectionModel().select(mapped);
+                }
+            }
+        } finally {
+            updatingGlobalCombo.set(false);
+        }
+    };
+    updateGlobalMixedStateRef.set(updateGlobalMixedState);
+
+    PauseTransition globalComboUpdateThrottle = new PauseTransition(Duration.millis(220));
+    Runnable updateGlobalQualityCombo = () -> {
+        globalComboUpdateThrottle.stop();
+        globalComboUpdateThrottle.setOnFinished(ev -> {
+            if (MODE_AUDIO.equals(globalDesiredMode.get())) return;
+
+            String prev = globalQualityCombo.getValue();
+            if (prev == null || prev.isBlank()) prev = QUALITY_BEST;
+            boolean keepCustom = QUALITY_CUSTOM.equals(prev);
+
             updatingGlobalCombo.set(true);
             try {
-                if (MODE_AUDIO.equals(val)) {
-                    globalQualityCombo.getItems().setAll(buildAudioOptions());
-                    globalQualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
-                    globalDesiredQuality.set(AUDIO_DEFAULT_FORMAT);
+                globalQualityCombo.getItems().clear();
+
+                if (keepCustom) globalQualityCombo.getItems().add(QUALITY_CUSTOM);
+
+                if (globalHeightsUnion.isEmpty()) {
+                    globalQualityCombo.getItems().addAll(
+                            QUALITY_BEST,
+                            QUALITY_SEPARATOR,
+                            "1080p", "720p", "480p", "360p", "240p", "144p"
+                    );
                 } else {
-                    // rebuild video list from union (keeps best default)
-                    updateGlobalQualityCombo.run();
-                    globalQualityCombo.getSelectionModel().select(QUALITY_BEST);
-                    globalDesiredQuality.set(QUALITY_BEST);
+                    java.util.Set<Integer> normalized = normalizeHeights(new java.util.HashSet<>(globalHeightsUnion));
+                    java.util.List<Integer> sorted = new java.util.ArrayList<>(normalized);
+                    sorted.sort(java.util.Comparator.reverseOrder());
+
+                    globalQualityCombo.getItems().add(QUALITY_BEST);
+                    globalQualityCombo.getItems().add(QUALITY_SEPARATOR);
+                    for (Integer h : sorted) globalQualityCombo.getItems().add(formatHeightLabel(h));
+                }
+
+                if (QUALITY_CUSTOM.equals(prev) && keepCustom) {
+                    globalQualityCombo.getSelectionModel().select(QUALITY_CUSTOM);
+                } else if (globalQualityCombo.getItems().contains(prev)) {
+                    globalQualityCombo.getSelectionModel().select(prev);
+                } else {
+                    String mapped = pickClosestSupportedQuality(prev, new java.util.ArrayList<>(globalQualityCombo.getItems()));
+                    globalQualityCombo.getSelectionModel().select(mapped);
                 }
             } finally {
                 updatingGlobalCombo.set(false);
             }
 
-            // Priority to global: apply to ALL items
-            for (PlaylistEntry it : items) {
-                if (it == null || it.isUnavailable()) continue;
-                it.setManualQuality(false);
-                it.setQuality(MODE_AUDIO.equals(val) ? globalDesiredQuality.get() : QUALITY_BEST);
-            }
-
-            requestRefreshSafe.run();
-            Platform.runLater(updateGlobalMixedState);
-            if (!MODE_AUDIO.equals(globalDesiredMode.get())) {
-                for (PlaylistEntry it : items) {
-                    if (it == null || it.isUnavailable()) continue;
-                    if (!it.isSelected()) continue;
-                    String qNow = it.getQuality();
-                    if (qNow == null || qNow.isBlank()) qNow = QUALITY_BEST;
-                    ensureSizeFor.accept(it, qNow);
-                }
-            }
-            // Now that the user explicitly changed mode, allow mixed-state logic (for quality) later.
-            userQualityInteracted.set(true);
+            Platform.runLater(() -> {
+                Runnable r = updateGlobalMixedStateRef.get();
+                if (r != null) r.run();
+            });
         });
+        globalComboUpdateThrottle.playFromStart();
+    };
+
+    // Global mode listener
+    globalModeCombo.valueProperty().addListener((obs, old, val) -> {
+        if (val == null) return;
+
+        globalDesiredMode.set(val);
+
+        updatingGlobalCombo.set(true);
+        try {
+            if (MODE_AUDIO.equals(val)) {
+                globalQualityCombo.getItems().setAll(buildAudioOptions());
+                globalQualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
+                globalDesiredQuality.set(AUDIO_DEFAULT_FORMAT);
+            } else {
+                updateGlobalQualityCombo.run();
+                globalQualityCombo.getSelectionModel().select(QUALITY_BEST);
+                globalDesiredQuality.set(QUALITY_BEST);
+            }
+        } finally {
+            updatingGlobalCombo.set(false);
+        }
+
+        // Apply to ALL items (no size probing)
+        for (PlaylistEntry it : items) {
+            if (it == null || it.isUnavailable()) continue;
+            it.setManualQuality(false);
+            it.setQuality(MODE_AUDIO.equals(val) ? globalDesiredQuality.get() : QUALITY_BEST);
+        }
+
+        requestRefreshSafe.run();
+        Platform.runLater(updateGlobalMixedState);
+        userQualityInteracted.set(true);
+    });
+
+        Runnable startNextProbe = new Runnable() {
+            @Override
+            public void run() {
+                if (probingNow.getAndSet(true)) return; // already running
+
+                // find next item to probe
+                int i = probeIndex.get();
+                while (i < items.size()) {
+                    PlaylistEntry it = items.get(i);
+                    i++;
+
+                    if (it == null || it.isUnavailable()) continue;
+                    if (it.isQualitiesLoaded()) continue; // already ready
+
+                    String vid = it.getId();
+                    if (vid == null || vid.isBlank()) continue;
+
+                    // de-dupe inflight
+                    if (!qualitiesInflight.add(vid)) continue;
+
+                    probeIndex.set(i); // next position for later
+
+                    String url = youtubeWatchUrl(vid);
+
+                    boolean queued = probeVideoQualitiesAsync(url, vid, pr -> {
+                        try {
+                            java.util.Set<Integer> heights = (pr == null) ? java.util.Set.of() : pr.heights;
+                            java.util.Set<Integer> norm = normalizeHeights(heights);
+
+                            if (norm != null && !norm.isEmpty()) {
+                                globalHeightsUnion.addAll(norm);
+                            }
+                            Platform.runLater(updateGlobalQualityCombo);
+
+                            java.util.ArrayList<String> labels = new java.util.ArrayList<>();
+                            labels.add(QUALITY_BEST);
+                            labels.add(QUALITY_SEPARATOR);
+
+                            java.util.List<Integer> sorted = (norm == null)
+                                    ? new java.util.ArrayList<>()
+                                    : new java.util.ArrayList<>(norm);
+                            sorted.sort(java.util.Comparator.reverseOrder());
+                            for (Integer h : sorted) labels.add(formatHeightLabel(h));
+
+                            it.setAvailableQualities(labels);
+
+                            // don't compute sizes here; keep empty map
+                            if (it.getSizeByQuality() == null) it.setSizeByQuality(new java.util.HashMap<>());
+
+                            // apply desired (video)
+                            if (!MODE_AUDIO.equals(globalDesiredMode.get())) {
+                                String desired = it.getQuality();
+                                if (!it.isManualQuality()) {
+                                    desired = globalDesiredQuality.get();
+                                    if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
+                                }
+                                String supported = pickClosestSupportedQuality(desired, it.getAvailableQualities());
+                                it.setQuality(supported);
+                            }
+
+                            // ✅ READY now
+                            it.setQualitiesLoaded(true);
+
+                        } catch (Exception ignored) {
+                            it.setQualitiesLoaded(false); // allow retry
+                        } finally {
+                            qualitiesInflight.remove(vid);
+                            Platform.runLater(() -> {
+                                requestRefreshSafe.run();
+                                probingNow.set(false);
+                                // continue with next item
+                                this.run();
+                            });
+                        }
+                    });
+
+                    if (!queued) {
+                        qualitiesInflight.remove(vid);
+                        probingNow.set(false);
+                        // try again later / move on
+                        Platform.runLater(this);
+                    }
+                    return;
+                }
+
+                // done
+                probingNow.set(false);
+            }
+        };
+
+        // Probe qualities sequentially (NO size) - kick the queue only
+        java.util.function.Consumer<PlaylistEntry> ensureProbed = (PlaylistEntry it) -> {
+            if (it == null) return;
+            if (it.isUnavailable()) return;
+            // لا تغيّر flags هنا — startNextProbe هو المسؤول الوحيد
+            Platform.runLater(startNextProbe);
+        };
+
+
 
         list.setCellFactory(lv -> new ListCell<>() {
 
@@ -5303,12 +6857,12 @@ public class MainController {
             private final Label placeholder = new Label("NO PREVIEW");
 
             private final ComboBox<String> qualityCombo = new ComboBox<>();
-
             private boolean updatingRowCombo = false;
+            private boolean suppressQualityListener = false;
+            private boolean suppressCheckListener = false;
 
             private final HBox card = new HBox(12);
 
-            // Helper to check if node is a child (or self) of parent
             private boolean isChildOf(javafx.scene.Node n, javafx.scene.Node parent) {
                 if (n == null || parent == null) return false;
                 javafx.scene.Node cur = n;
@@ -5322,11 +6876,9 @@ public class MainController {
             {
                 setStyle("-fx-background-color: transparent;");
 
-                // Checkbox
                 cb.getStyleClass().addAll("gx-check", "gx-playlist-check");
                 cb.setFocusTraversable(false);
 
-                // Thumbnail
                 thumb.setFitWidth(96);
                 thumb.setFitHeight(54);
                 thumb.setPreserveRatio(true);
@@ -5337,7 +6889,6 @@ public class MainController {
                 thumbBox.getStyleClass().add("gx-playlist-thumb");
                 thumbBox.getChildren().addAll(thumb, placeholder);
 
-                // Text
                 title.getStyleClass().add("gx-playlist-title");
                 title.setWrapText(false);
 
@@ -5346,12 +6897,7 @@ public class MainController {
                 textBox.getChildren().addAll(title, meta);
                 HBox.setHgrow(textBox, Priority.ALWAYS);
 
-                // Quality Combo (right side)
-                qualityCombo.getStyleClass().addAll(
-                        "gx-combo",
-                        "gx-playlist-quality",
-                        "gx-playlist-item-combo"
-                );
+                qualityCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality", "gx-playlist-item-combo");
                 qualityCombo.setPrefWidth(PLAYLIST_Q_COMBO_W);
                 qualityCombo.setMinWidth(PLAYLIST_Q_COMBO_W);
                 qualityCombo.setMaxWidth(240);
@@ -5374,41 +6920,32 @@ public class MainController {
                     }
                 });
 
-                // Prevent refresh from closing the popup while user is choosing a quality
                 qualityCombo.showingProperty().addListener((obs, was, isNow) -> anyQualityPopupOpen.set(isNow));
 
                 qualityCombo.valueProperty().addListener((obs, old, val) -> {
-                    if (updatingRowCombo) return;
-                    if (val == null || QUALITY_SEPARATOR.equals(val)) return;
+                    if (updatingRowCombo || suppressQualityListener) return;
+                    if (val == null) return;
+                    if (QUALITY_SEPARATOR.equals(val) || QUALITY_CUSTOM.equals(val)) return;
 
                     PlaylistEntry it = getItem();
-                    if (it == null) return;
+                    if (it == null || it.isUnavailable()) return;
 
-                    // USER interaction
                     userQualityInteracted.set(true);
 
-                    // Apply selected value to THIS item only
                     it.setQuality(val);
-
-                    // If chosen value equals what the GLOBAL desired would map to for this item,
-                    // then it's not a manual override.
-                    String desired = globalDesiredQuality.get();
-                    if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
 
                     String modeNow = globalDesiredMode.get();
                     if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
 
-                    if (!MODE_AUDIO.equals(modeNow)) {
-                        ensureSizeFor.accept(it, val);
-                    }
+                    // Playlist screen: no size probing (sizes appear in main downloads list)
+                    String desired = globalDesiredQuality.get();
+                    if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
 
                     String globalMapped;
                     if (MODE_AUDIO.equals(modeNow)) {
-                        // In audio mode, global desired is the selected format (e.g., mp3)
                         globalMapped = desired;
                     } else {
                         java.util.List<String> avail = it.getAvailableQualities();
-                        kickFastInitialSize.accept(it);
                         globalMapped = (avail == null || avail.isEmpty())
                                 ? desired
                                 : pickClosestSupportedQuality(desired, avail);
@@ -5417,49 +6954,62 @@ public class MainController {
                     boolean manual = !val.equals(globalMapped);
                     it.setManualQuality(manual);
 
-                    meta.setText(buildMetaLine(it));
+                    meta.setText(buildMetaLine(it)); // (will no longer show sizes because we never fill size map)
                     Platform.runLater(updateGlobalMixedState);
                 });
 
-                // Card
                 card.getStyleClass().add("gx-playlist-card");
                 card.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
                 card.getChildren().addAll(cb, thumbBox, textBox, qualityCombo);
 
-                // Toggle selection on card click
                 card.setOnMouseClicked(e -> {
                     if (isEmpty() || getItem() == null) return;
 
-                    // Do not toggle selection when interacting with controls inside the card
                     javafx.scene.Node target = (e.getTarget() instanceof javafx.scene.Node)
                             ? (javafx.scene.Node) e.getTarget()
                             : null;
                     if (isChildOf(target, qualityCombo) || isChildOf(target, cb)) {
                         return;
                     }
-
                     cb.setSelected(!cb.isSelected());
                 });
 
                 cb.selectedProperty().addListener((obs, was, isNow) -> {
+                    if (suppressCheckListener) return;
                     PlaylistEntry it = getItem();
                     if (it == null) return;
 
                     if (it.isUnavailable()) {
-                        // force it off
                         cb.setSelected(false);
                         it.setSelected(false);
                         return;
                     }
 
+                    if (isNow && !updatingSelection.get()) {
+                        int cur = selectedCount.getAsInt();
+                        if (cur >= PLAYLIST_MAX_SELECTED) {
+                            cb.setSelected(false);
+                            it.setSelected(false);
+                            syncCardSelectedStyle(it, card);
+                            try { if (status != null) status.setText("Selection limit: " + PLAYLIST_MAX_SELECTED + " items"); } catch (Exception ignored) {}
+                            return;
+                        }
+                    }
+
                     it.setSelected(isNow);
                     syncCardSelectedStyle(it, card);
 
-                    // Only count as a user interaction when it wasn't a programmatic bulk change
+                    if (isNow && !updatingSelection.get()) {
+                        // شغّل التحليل التسلسلي من فوق لتحت
+                        Platform.runLater(startNextProbe);
+                    }
+
                     if (!updatingSelection.get()) {
                         userQualityInteracted.set(true);
                         Platform.runLater(updateGlobalMixedState);
                     }
+
+                    try { refreshAddState.run(); } catch (Exception ignored) {}
                 });
             }
 
@@ -5476,37 +7026,35 @@ public class MainController {
                 title.setText(item.displayTitle());
                 meta.setText(buildMetaLine(item));
 
-                cb.setSelected(item.isSelected());
+                suppressCheckListener = true;
+                try {
+                    cb.setSelected(item.isSelected());
+                } finally {
+                    suppressCheckListener = false;
+                }
                 syncCardSelectedStyle(item, card);
-                // Defensive reset for recycled cells
-                cb.setDisable(false);
-                qualityCombo.setDisable(false);
 
-                // Unavailable (private/deleted/etc.)
+                cb.setDisable(false);
+                qualityCombo.setDisable(true); // الافتراضي معطّل
+
+                // ===== UNAVAILABLE =====
                 if (item.isUnavailable()) {
                     cb.setDisable(true);
                     qualityCombo.setDisable(true);
                     placeholder.setText("UNAVAILABLE");
                     placeholder.setVisible(true);
                     thumb.setImage(null);
-
-                    // keep meta simple and clear
                     meta.setText("Unavailable");
-
-                    // dim the whole card
                     card.setOpacity(0.55);
-
                     setGraphic(card);
-                    return; // IMPORTANT: skip probing
+                    return;
                 } else {
-                    cb.setDisable(false);
                     card.setOpacity(1.0);
                 }
 
-                // Set placeholder text for normal items
+                // ===== THUMBNAIL =====
                 placeholder.setText("NO PREVIEW");
 
-                // Thumbnail load (cached + inflight guard) — must run for BOTH Video and Audio
                 String tid = item.getId();
                 Image cachedThumb = (tid == null) ? null : PLAYLIST_THUMB_CACHE.get(tid);
 
@@ -5517,16 +7065,13 @@ public class MainController {
                 } else if (item.getThumbUrl() != null && !item.getThumbUrl().isBlank()) {
                     placeholder.setVisible(true);
 
-                    // Create the Image ONCE per video id, cache it immediately so recycled cells reuse it
                     if (tid != null && PLAYLIST_THUMB_INFLIGHT.add(tid)) {
-
                         Image img = new Image(item.getThumbUrl(), true);
                         PLAYLIST_THUMB_CACHE.put(tid, img);
 
                         img.progressProperty().addListener((o, oldP, newP) -> {
                             if (newP != null && newP.doubleValue() >= 1.0) {
                                 PLAYLIST_THUMB_INFLIGHT.remove(tid);
-                                // If this cell is still showing same item, hide placeholder
                                 Platform.runLater(() -> {
                                     PlaylistEntry now = getItem();
                                     if (now != null && tid.equals(now.getId()) && img.getException() == null) {
@@ -5536,28 +7081,19 @@ public class MainController {
                             }
                         });
 
-                        img.exceptionProperty().addListener((o, oldEx, ex) -> {
-                            PLAYLIST_THUMB_INFLIGHT.remove(tid);
-                        });
+                        img.exceptionProperty().addListener((o, oldEx, ex) ->
+                                PLAYLIST_THUMB_INFLIGHT.remove(tid)
+                        );
                     }
 
-                    Image reuse = (tid == null) ? null : PLAYLIST_THUMB_CACHE.get(tid);
-                    thumb.setImage(reuse);
-                    if (reuse != null && reuse.getProgress() >= 1.0 && reuse.getException() == null) {
-                        placeholder.setVisible(false);
-                    } else {
-                        placeholder.setVisible(true);
-                    }
-
-                } else {
-                    thumb.setImage(null);
-                    placeholder.setVisible(true);
+                    thumb.setImage(PLAYLIST_THUMB_CACHE.get(tid));
                 }
 
-                // ===== AUDIO MODE: show audio formats in each row and skip video probing/quality lists =====
+                // ===== MODE =====
                 String modeNow = globalDesiredMode.get();
                 if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
 
+                // ===== AUDIO MODE =====
                 if (MODE_AUDIO.equals(modeNow)) {
                     updatingRowCombo = true;
                     try {
@@ -5569,143 +7105,71 @@ public class MainController {
                             cur = globalDesiredQuality.get();
                         }
                         if (cur == null || cur.isBlank()) cur = AUDIO_DEFAULT_FORMAT;
-                        if (!qualityCombo.getItems().contains(cur)) cur = AUDIO_DEFAULT_FORMAT;
 
-                        qualityCombo.getSelectionModel().select(cur);
+                        suppressQualityListener = true;
+                        try {
+                            qualityCombo.getSelectionModel().select(cur);
+                        } finally {
+                            suppressQualityListener = false;
+                        }
                     } finally {
                         updatingRowCombo = false;
                     }
 
-                    meta.setText(buildMetaLine(item));
                     setGraphic(card);
                     return;
                 }
 
-
-                // If qualities not loaded yet → probe in background once
+                // ===== VIDEO MODE – LOADING =====
                 if (!item.isQualitiesLoaded()) {
-                    item.setQualitiesLoaded(true); // mark immediately to prevent multi-threads from multiple cells
-
-                    // ✅ Show a usable list immediately (standard list), while probing the real supported heights in background.
-                    // This prevents the row combo from looking "broken/disabled".
                     updatingRowCombo = true;
                     try {
-                        fillQualityCombo(qualityCombo);
-                        qualityCombo.setDisable(false);
+                        qualityCombo.getItems().setAll("Loading qualities...");
+                        qualityCombo.setDisable(true);
 
-                        // Prefer the item's current value; otherwise fall back to the global desired quality
-                        String cur = item.getQuality();
-                        if (cur == null || cur.isBlank()) {
-                            cur = globalDesiredQuality.get();
+                        suppressQualityListener = true;
+                        try {
+                            qualityCombo.getSelectionModel().select(0);
+                        } finally {
+                            suppressQualityListener = false;
                         }
-                        if (cur == null || cur.isBlank()) cur = QUALITY_BEST;
-
-                        if (!qualityCombo.getItems().contains(cur)) {
-                            String mapped = pickClosestSupportedQuality(cur, new java.util.ArrayList<>(qualityCombo.getItems()));
-                            item.setQuality(mapped);
-                            cur = mapped;
-                        }
-                        qualityCombo.getSelectionModel().select(cur);
                     } finally {
                         updatingRowCombo = false;
                     }
 
-                    String videoId = item.getId();
-                    String videoUrl = youtubeWatchUrl(videoId);
+                    Platform.runLater(startNextProbe);
+                    setGraphic(card);
+                    return;
+                }
 
-                    boolean queued = probeVideoQualitiesAsync(videoUrl, videoId, pr -> {
+                // ===== VIDEO MODE – READY =====
+                java.util.List<String> q = item.getAvailableQualities();
+                if (q != null && q.size() >= 2) {
+                    updatingRowCombo = true;
+                    try {
+                        qualityCombo.getItems().setAll(q);
+                        qualityCombo.setDisable(false);
 
-                        // raw heights from probe
-                        java.util.Set<Integer> heights = (pr == null) ? java.util.Set.of() : pr.heights;
+                        String cur = item.getQuality();
+                        if (cur == null || cur.isBlank()) cur = QUALITY_BEST;
 
-                        // ✅ normalize + keep only ladder (2160/1440/1080/720/480/360/240/144)
-                        java.util.Set<Integer> norm = normalizeHeights(heights);
-
-                        // ✅ update global union from NORMALIZED heights only
-                        if (norm != null && !norm.isEmpty()) {
-                            globalHeightsUnion.addAll(norm);
+                        if (!q.contains(cur)) {
+                            cur = pickClosestSupportedQuality(cur, q);
+                            item.setQuality(cur);
                         }
-                        Platform.runLater(updateGlobalQualityCombo);
 
-                        // ✅ labels: Best + separator + ONLY normalized heights
-                        java.util.ArrayList<String> labels = new java.util.ArrayList<>();
-                        labels.add(QUALITY_BEST);
-                        labels.add(QUALITY_SEPARATOR);
-
-                        java.util.List<Integer> sorted = (norm == null)
-                                ? new java.util.ArrayList<>()
-                                : new java.util.ArrayList<>(norm);
-
-                        sorted.sort(java.util.Comparator.reverseOrder());
-
-                        for (Integer h : sorted) {
-                            labels.add(formatHeightLabel(h));
-                        }
-                        item.setAvailableQualities(labels);
-                        kickFastInitialSize.accept(item);
-
-                        item.setSizeByQuality(new java.util.HashMap<>());
-
-                        // ✅ pick desired + apply ONLY in VIDEO mode (do not overwrite AUDIO format selection)
-                        if (!MODE_AUDIO.equals(globalDesiredMode.get())) {
-                            String desired = item.getQuality();
-                            if (!item.isManualQuality()) {
-                                desired = globalDesiredQuality.get();
-                                if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
-                            }
-
-                            String supported = pickClosestSupportedQuality(desired, item.getAvailableQualities());
-                            kickFastInitialSize.accept(item);
-                            item.setQuality(supported);
-                        }
-                        // Platform.runLater(updateGlobalMixedState);
-
-                        // ✅ refresh without closing popups
-                        requestRefreshSafe.run();
-                    });
-
-                    if (!queued) {
-                        // queue full -> allow retry later (VERY IMPORTANT)
-                        item.setQualitiesLoaded(false);
-                    }
-
-                } else {
-                    // already probed (or attempted). Always render from the item's cached qualities.
-                    java.util.List<String> q = item.getAvailableQualities();
-                    kickFastInitialSize.accept(item);
-
-                    if (q != null && q.size() >= 2) { // Best + separator at minimum
-                        updatingRowCombo = true;
+                        suppressQualityListener = true;
                         try {
-                            qualityCombo.getItems().setAll(q);
-                            qualityCombo.setDisable(false);
-
-                            String cur = item.getQuality();
-                            if (cur == null || cur.isBlank()) cur = QUALITY_BEST;
-
-                            if (!qualityCombo.getItems().contains(cur)) {
-                                String mapped = pickClosestSupportedQuality(cur, q);
-                                item.setQuality(mapped);
-                                cur = mapped;
-                            }
                             qualityCombo.getSelectionModel().select(cur);
                         } finally {
-                            updatingRowCombo = false;
+                            suppressQualityListener = false;
                         }
-
-                    } else {
-                        // Probe failed/rejected -> allow retry later instead of getting stuck disabled forever
-                        item.setQualitiesLoaded(false);
-
-                        updatingRowCombo = true;
-                        try {
-                            qualityCombo.getItems().setAll(QUALITY_BEST, QUALITY_SEPARATOR);
-                            qualityCombo.getSelectionModel().select(QUALITY_BEST);
-                            qualityCombo.setDisable(true);
-                        } finally {
-                            updatingRowCombo = false;
-                        }
+                    } finally {
+                        updatingRowCombo = false;
                     }
+                } else {
+                    // fallback
+                    qualityCombo.setDisable(true);
                 }
 
                 setGraphic(card);
@@ -5721,28 +7185,23 @@ public class MainController {
         Button clearSel = new Button("Clear");
         clearSel.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
 
+
         Region spacer = new Region();
         HBox.setHgrow(spacer, Priority.ALWAYS);
 
         Button cancel = new Button("Back");
         cancel.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
-            // "Add & Start" .  / download
-        Button download = new Button("Download");
-        download.getStyleClass().addAll("gx-btn", "gx-btn-primary");
-        download.setDisable(true);
 
-        actions.getChildren().addAll(selectAll, clearSel, spacer, cancel, download);
+        final java.util.concurrent.atomic.AtomicBoolean didDownload =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
 
-//        rootBox.getChildren().addAll(header, sub, list, status, actions);
+        actions.getChildren().addAll(selectAll, clearSel, calcSize, spacer, cancel, download);
         rootBox.getChildren().addAll(header, sub, globalRow, list, status, actions);
 
         Scene scene = new Scene(rootBox, 820, 560);
-
-        // ✅ مهم جداً: يلوّن خلفية الـ Stage نفسها
         scene.setFill(Color.web("#121826"));
         scene.getRoot().setStyle("-fx-background-color: #121826;");
 
-        // Apply same app styles
         scene.getStylesheets().addAll(
                 getClass().getResource("/com/grabx/app/grabx/styles/theme-base.css").toExternalForm(),
                 getClass().getResource("/com/grabx/app/grabx/styles/layout.css").toExternalForm(),
@@ -5750,73 +7209,9 @@ public class MainController {
                 getClass().getResource("/com/grabx/app/grabx/styles/sidebar.css").toExternalForm()
         );
 
-
-        // ✅ خلي CSS يتطبق قبل ما تبان النافذة (تقليل الوميض)
         rootBox.applyCss();
         rootBox.layout();
-
         stage.setScene(scene);
-
-
-        // Background prefetch a limited number of items so sizes/qualities appear without requiring scroll-to-touch.
-        java.util.function.Consumer<PlaylistEntry> ensureProbed = (PlaylistEntry it) -> {
-            if (it == null) return;
-            if (it.isUnavailable()) return;
-            if (it.isQualitiesLoaded()) return;
-
-            it.setQualitiesLoaded(true);
-
-            String videoId = it.getId();
-            String videoUrl = youtubeWatchUrl(videoId);
-
-            boolean queued = probeVideoQualitiesAsync(videoUrl, videoId, pr -> {
-                java.util.Set<Integer> heights = (pr == null) ? java.util.Set.of() : pr.heights;
-
-                java.util.Set<Integer> norm = normalizeHeights(heights);
-                if (norm != null && !norm.isEmpty()) {
-                    globalHeightsUnion.addAll(norm);
-                }
-                Platform.runLater(updateGlobalQualityCombo);
-
-                // labels: Best + separator + ONLY actual heights
-                java.util.ArrayList<String> labels = new java.util.ArrayList<>();
-                labels.add(QUALITY_BEST);
-                labels.add(QUALITY_SEPARATOR);
-
-                java.util.Set<Integer> norm2 = normalizeHeights(heights);
-                java.util.List<Integer> sorted = new java.util.ArrayList<>(norm2);
-                sorted.sort(java.util.Comparator.reverseOrder());
-
-                for (Integer h : sorted) labels.add(formatHeightLabel(h));
-                it.setAvailableQualities(labels);
-                kickFastInitialSize.accept(it);
-
-
-                // size map: label -> "~xxx MB"
-                it.setSizeByQuality(new java.util.HashMap<>());
-
-                // pick desired + apply ONLY in VIDEO mode (do not overwrite AUDIO format selection)
-                if (!MODE_AUDIO.equals(globalDesiredMode.get())) {
-                    String desired = it.getQuality();
-                    if (!it.isManualQuality()) {
-                        desired = globalDesiredQuality.get();
-                        if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
-                    }
-
-                    String supported = pickClosestSupportedQuality(desired, it.getAvailableQualities());
-                    kickFastInitialSize.accept(it);
-                    it.setQuality(supported);
-                }
-                // Platform.runLater(updateGlobalMixedState); // REMOVE: do not update mixed state during probing
-
-                requestRefreshSafe.run();
-            });
-
-            if (!queued) {
-                // queue full -> allow retry later
-                it.setQualitiesLoaded(false);
-            }
-        };
 
         globalQualityCombo.valueProperty().addListener((obs, old, val) -> {
             if (val == null) return;
@@ -5836,15 +7231,14 @@ public class MainController {
                 it.setManualQuality(false);
 
                 if (MODE_AUDIO.equals(modeNow)) {
-                    it.setQuality(val); // format
+                    it.setQuality(val);
                 } else {
                     java.util.List<String> avail = it.getAvailableQualities();
-                    kickFastInitialSize.accept(it);
                     String mapped = (avail == null || avail.isEmpty())
                             ? val
                             : pickClosestSupportedQuality(val, avail);
                     it.setQuality(mapped);
-                    ensureSizeFor.accept(it, mapped);
+                    // ✅ NO size probing
                 }
             }
 
@@ -5852,40 +7246,115 @@ public class MainController {
             Platform.runLater(updateGlobalMixedState);
         });
 
-        Runnable refreshAddState = () -> {
-            boolean any = items.stream().anyMatch(PlaylistEntry::isSelected);
-            download.setDisable(!any);
-        };
-
         selectAll.setOnAction(e -> {
-            for (PlaylistEntry it : items) it.setSelected(true);
+            updatingSelection.set(true);
+            try {
+                int c = 0;
+                for (PlaylistEntry it : items) {
+                    if (it == null || it.isUnavailable()) continue;
+                    if (c >= PLAYLIST_MAX_SELECTED) {
+                        it.setSelected(false);
+                        continue;
+                    }
+                    it.setSelected(true);
+                    c++;
+                }
+            } finally {
+                updatingSelection.set(false);
+            }
+            try { if (status != null) status.setText("Selected up to " + PLAYLIST_MAX_SELECTED + " items"); } catch (Exception ignored) {}
             requestRefreshSafe.run();
             refreshAddState.run();
+            list.refresh();
+            Platform.runLater(() -> {
+                list.refresh();
+                list.scrollTo(0);
+            });
         });
 
         clearSel.setOnAction(e -> {
-            for (PlaylistEntry it : items) it.setSelected(false);
+            updatingSelection.set(true);
+            try {
+                for (PlaylistEntry it : items) {
+                    if (it == null) continue;
+                    it.setSelected(false);
+                }
+            } finally {
+                updatingSelection.set(false);
+            }
             requestRefreshSafe.run();
             refreshAddState.run();
         });
+        calcSize.setOnAction(e -> {
+            String modeNow = globalDesiredMode.get();
+            if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
 
-        cancel.setOnAction(e -> stage.close());
+            // AUDIO: ما بنحسب حجم هون (خليه يظهر بالواجهة الرئيسية عند بدء التحميل)
+            if (MODE_AUDIO.equals(modeNow)) {
+                try { if (status != null) status.setText("Size is not calculated in Audio mode."); } catch (Exception ignored) {}
+                return;
+            }
+
+            int scheduled = 0;
+            for (PlaylistEntry it : items) {
+                if (it == null || it.isUnavailable()) continue;
+                if (!it.isSelected()) continue;
+
+                String qNow = it.getQuality();
+                if (qNow == null || qNow.isBlank() || QUALITY_BEST.equals(qNow)) {
+                    qNow = globalDesiredQuality.get();
+                }
+                if (qNow == null || qNow.isBlank()) qNow = QUALITY_BEST;
+
+                // تأكد إن الماب موجود
+                try {
+                    if (it.getSizeByQuality() == null) it.setSizeByQuality(new java.util.HashMap<>());
+                } catch (Exception ignored) {}
+
+                ensurePlaylistSizeAsync(it, qNow, requestRefreshSafe);
+                scheduled++;
+            }
+
+            try {
+                if (status != null) {
+                    status.setText(scheduled > 0
+                            ? ("Computing sizes for " + scheduled + " selected item(s)...")
+                            : "No items selected.");
+                }
+            } catch (Exception ignored) {}
+        });
+
+        cancel.setOnAction(e -> {
+            stage.close();
+
+            if (!didDownload.get() && reopenAddLinkAfterPlaylist) {
+                final String u = reopenAddLinkPrefillUrl;
+
+                reopenAddLinkAfterPlaylist = false;
+                reopenAddLinkPrefillUrl = null;
+
+                javafx.application.Platform.runLater(() -> openOrUpdateAddLinkDialog(u));
+            }
+        });
 
         download.setOnAction(e -> {
+            saveLastDownloadFolder(playlistFolder);
+
+            didDownload.set(true);
             try {
                 if (activeAddLinkDialog != null) activeAddLinkDialog.hide();
             } catch (Exception ignored) {}
 
-            // snapshot selected, keep original playlist order by index
             java.util.List<PlaylistEntry> batch = items.stream()
                     .filter(it -> it != null && it.isSelected() && !it.isUnavailable())
-                    .sorted(java.util.Comparator.comparingInt(PlaylistEntry::getIndex)) // لو اسمها getIndex
+                    .sorted(java.util.Comparator.comparingInt(PlaylistEntry::getIndex))
                     .toList();
 
             if (batch.isEmpty()) {
                 if (statusText != null) statusText.setText("No items selected.");
                 return;
             }
+
             String modeNow = globalDesiredMode.get();
             String desiredNow = globalDesiredQuality.get();
             enqueuePlaylistBatch(batch, modeNow, desiredNow);
@@ -5893,6 +7362,9 @@ public class MainController {
             if (statusText != null) {
                 statusText.setText("Queued playlist: " + batch.size() + " items");
             }
+
+            reopenAddLinkAfterPlaylist = false;
+            reopenAddLinkPrefillUrl = null;
 
             stage.close();
         });
@@ -5909,17 +7381,16 @@ public class MainController {
                     status.setText("Loaded " + loaded.size() + " items" + (bad > 0 ? (" • " + bad + " unavailable") : ""));
                 }
 
-                // default select all (skip unavailable) - programmatic, do NOT treat as user interaction
                 updatingSelection.set(true);
                 try {
                     for (PlaylistEntry it : items) {
-                        it.setSelected(!it.isUnavailable());
+                        if (it == null) continue;
+                        it.setSelected(false);
                     }
                 } finally {
                     updatingSelection.set(false);
                 }
 
-                // initial default: BEST (do not mark as user interaction)
                 updatingGlobalCombo.set(true);
                 try {
                     globalQualityCombo.getSelectionModel().select(QUALITY_BEST);
@@ -5930,32 +7401,110 @@ public class MainController {
 
                 requestRefreshSafe.run();
                 refreshAddState.run();
-                // Prefetch progressively so sizes appear without needing scroll-to-touch
-                new Thread(() -> {
-                    try {
-                        // Fast first batch
-                        int firstBatch = Math.min(30, items.size());
-                        for (int i = 0; i < firstBatch && !stopPrefetch.get(); i++) {
-                            ensureProbed.accept(items.get(i));
-                            Thread.sleep(25);
-                        }
-
-                        // Continue gently (prefer selected)
-                        int idx = 0;
-                        while (!stopPrefetch.get() && idx < items.size()) {
-                            PlaylistEntry it = items.get(idx++);
-                            if (it != null && it.isSelected() && !it.isUnavailable()) {
-                                ensureProbed.accept(it);
-                            }
-                            Thread.sleep(60);
-                        }
-                    } catch (InterruptedException ignored) {
-                    }
-                }, "playlist-prefetch").start();
+                // Start probing sequentially from top -> bottom
+                probeIndex.set(0);
+                Platform.runLater(startNextProbe);
             });
         }, "probe-playlist").start();
 
         stage.showAndWait();
+}
+
+    // De-dupe playlist size probes (key: videoId||quality)
+    private final java.util.Set<String> PLAYLIST_SIZE_INFLIGHT =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    // Playlist: compute size ON DEMAND (button) to keep UI fast.
+// VIDEO only. Uses shared SIZE_CACHE + VIDEO_SIZE_EXEC if available.
+    private void ensurePlaylistSizeAsync(PlaylistEntry it, String qLabel, Runnable requestRefreshSafe) {
+        if (it == null || it.isUnavailable()) return;
+        if (qLabel == null || qLabel.isBlank()) return;
+        if (QUALITY_SEPARATOR.equals(qLabel) || QUALITY_CUSTOM.equals(qLabel)) return;
+
+        String vid = it.getId();
+        if (vid == null || vid.isBlank()) return;
+
+        String videoUrl = youtubeWatchUrl(vid);
+        if (videoUrl == null || videoUrl.isBlank()) return;
+
+        // 0) Global size cache hit
+        try {
+            String cacheKey = videoUrl + "|" + MODE_VIDEO + "|" + qLabel;
+            Long cachedBytes = SIZE_CACHE.get(cacheKey);
+            if (cachedBytes != null && cachedBytes > 0) {
+                var cur = it.getSizeByQuality();
+                String exist = (cur == null) ? null : cur.get(qLabel);
+                if (exist == null || exist.isBlank()) {
+                    var next = new java.util.HashMap<String, String>();
+                    if (cur != null) next.putAll(cur);
+                    next.put(qLabel, formatBytesDecimal(cachedBytes));
+                    it.setSizeByQuality(next);
+                    if (requestRefreshSafe != null) requestRefreshSafe.run();
+                }
+                return;
+            }
+        } catch (Exception ignored) {}
+
+        // 1) Already present in the item map
+        try {
+            var cur = it.getSizeByQuality();
+            if (cur != null) {
+                String exist = cur.get(qLabel);
+                if (exist != null && !exist.isBlank()) return;
+            }
+        } catch (Exception ignored) {}
+
+        // 2) De-dupe inflight
+        String inflightKey = vid + "||" + qLabel;
+        if (!PLAYLIST_SIZE_INFLIGHT.add(inflightKey)) return;
+
+        Runnable job = () -> {
+            Long bytes = null;
+            try {
+                String selector;
+                if (QUALITY_BEST.equals(qLabel)) {
+                    selector = "bv*+ba/b";
+                } else {
+                    int h = parseHeightFromLabel(qLabel);
+                    selector = (h > 0) ? buildFormatSelectorForHeight(h) : "bv*+ba/b";
+                }
+
+                bytes = fetchCombinedSizeBytesWithYtDlpPrint(videoUrl, selector);
+
+                if (bytes != null && bytes > 0) {
+                    try {
+                        String cacheKey = videoUrl + "|" + MODE_VIDEO + "|" + qLabel;
+                        SIZE_CACHE.put(cacheKey, bytes);
+                    } catch (Exception ignored) {}
+                }
+            } catch (Exception ignored) {
+            } finally {
+                PLAYLIST_SIZE_INFLIGHT.remove(inflightKey);
+            }
+
+            Long fbytes = bytes;
+            Platform.runLater(() -> {
+                try {
+                    if (fbytes != null && fbytes > 0) {
+                        var next = new java.util.HashMap<String, String>();
+                        var cur = it.getSizeByQuality();
+                        if (cur != null) next.putAll(cur);
+                        next.put(qLabel, formatBytesDecimal(fbytes));
+                        it.setSizeByQuality(next);
+                        if (requestRefreshSafe != null) requestRefreshSafe.run();
+                    }
+                } catch (Exception ignored) {}
+            });
+        };
+
+        try {
+            VIDEO_SIZE_EXEC.execute(job);
+        } catch (java.util.concurrent.RejectedExecutionException rex) {
+            PLAYLIST_SIZE_INFLIGHT.remove(inflightKey);
+        } catch (Exception ex) {
+            PLAYLIST_SIZE_INFLIGHT.remove(inflightKey);
+            new Thread(job, "playlist-size-probe").start();
+        }
     }
 
     private static final String CARD_SELECTED_CLASS = "gx-selected";
@@ -6483,5 +8032,4 @@ private static java.util.List<PlaylistEntry> probePlaylistFlat(String playlistUr
             }
         } catch (Exception ignored) {}
     }
-
 }
