@@ -532,8 +532,8 @@
 
 .gx-playlist-title {
     -fx-text-fill: rgba(255,255,255,0.92);
-    -fx-font-size: 14px;
-    -fx-font-weight: 800;
+    -fx-font-size: 15px;
+    -fx-font-weight: 900;
 }
 
 .gx-playlist-meta {
@@ -839,4 +839,33 @@ DialogPane.gx-dialog {
 
 .gx-remove-yes:hover {
     -fx-background-color: #2A51E6;
+}
+
+
+
+/* ===============================
+   Playlist title tooltip (GrabX style)
+   =============================== */
+.tooltip {
+    -fx-background-color: #121826;
+    -fx-background-radius: 14;
+    -fx-border-radius: 14;
+
+    /*-fx-border-color: rgba(46,91,255,0.45);*/
+    /*-fx-border-width: 1;*/
+
+    /*-fx-padding: 12 14;*/
+
+    /*-fx-text-fill: rgba(255,255,255,0.95);*/
+    /*-fx-font-size: 13px;*/
+    /*-fx-font-weight: 700;*/
+
+    /*-fx-effect: dropshadow(*/
+    /*        gaussian,*/
+    /*        rgba(0,0,0,0.55),*/
+    /*        18,*/
+    /*        0.25,*/
+    /*        0,*/
+    /*        8*/
+    /*);*/
 }
