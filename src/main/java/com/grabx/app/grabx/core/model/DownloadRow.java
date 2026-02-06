@@ -10,6 +10,7 @@ public class DownloadRow {
 
     public final BooleanProperty titleLocked = new SimpleBooleanProperty(false);
 
+    public final long orderIndex;
     public long completedAt = -1;
 
     public void setTitleOnce(String t) {
@@ -57,8 +58,9 @@ public class DownloadRow {
     public final LongProperty totalBytes = new SimpleLongProperty(-1);
     public final LongProperty downloadedBytes = new SimpleLongProperty(0);
 
-    public DownloadRow(String url, String initialTitle, String folder, String mode, String quality) {
+    public DownloadRow(String url, String initialTitle, long orderIndex, String folder, String mode, String quality) {
         this.url = url;
+        this.orderIndex = orderIndex;
         this.folder = folder;
         this.mode = mode;
         this.quality = quality;

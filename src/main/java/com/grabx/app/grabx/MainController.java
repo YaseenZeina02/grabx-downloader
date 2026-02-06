@@ -7,6 +7,7 @@ import com.grabx.app.grabx.ui.dialogs.NativeDialogs;
 import com.grabx.app.grabx.thumbs.ThumbnailCacheManager;
 import com.grabx.app.grabx.util.YtDlpManager;
 import javafx.animation.*;
+import javafx.collections.transformation.SortedList;
 import javafx.geometry.NodeOrientation;
 import javafx.geometry.Pos;
 import javafx.scene.layout.HBox;
@@ -95,9 +96,14 @@ public class MainController {
     private volatile String playlistBatchMode = MODE_VIDEO;
     private volatile String playlistBatchDefaultQuality = QUALITY_BEST;
 
+
+    private final java.util.concurrent.atomic.AtomicLong downloadOrderSeq =
+            new java.util.concurrent.atomic.AtomicLong(0);
+
     // فوق مع حقول الكلاس
     private final java.util.concurrent.ConcurrentHashMap<String, DownloadRow> playlistRowByVideoId =
             new java.util.concurrent.ConcurrentHashMap<>();
+
 
 
     private static final String ICON_PLUS =
@@ -1595,6 +1601,7 @@ public class MainController {
                 DownloadRow r = new DownloadRow(
                         url,
                         (title == null || title.isBlank()) ? shorten(url) : title,
+                        downloadOrderSeq.getAndIncrement(),
                         folder == null ? "" : folder,
                         (mode == null || mode.isBlank()) ? MODE_VIDEO : mode,
                         (quality == null || quality.isBlank()) ? QUALITY_BEST : quality
@@ -2577,7 +2584,7 @@ public class MainController {
                 ? (MODE_AUDIO.equals(m) ? AUDIO_DEFAULT_FORMAT : QUALITY_BEST)
                 : quality;
 
-        DownloadRow r = new DownloadRow(u, t, folder, m, q);
+        DownloadRow r = new DownloadRow(u, t,downloadOrderSeq.getAndIncrement(), folder, m, q);
         try { r.status.set("Preparing"); } catch (Exception ignored) {}
         return r;
     }
@@ -2845,6 +2852,18 @@ public class MainController {
         }
 
 //        downloadsList.setItems(downloadItems);
+
+        // Stable, fixed ordering: never re-order when state changes (Completed stays in place)
+        FilteredList<DownloadRow> filtered = new FilteredList<>(downloadItems, r -> true);
+        SortedList<DownloadRow> sorted = new SortedList<>(filtered);
+
+        // ✅ Fixed order by creation order (newest first)
+        sorted.setComparator(java.util.Comparator.comparingLong((DownloadRow r) -> r.orderIndex).reversed());
+
+        // IMPORTANT: use the actual ListView variable name you have:
+        downloadsList.setItems(sorted);
+        // or: downloadsListView.setItems(sorted);
+
         // Prewarm yt-dlp binary in background at startup
         com.grabx.app.grabx.util.YtDlpManager.prewarmAsync();
         if (filteredDownloadItems == null) {
@@ -3883,7 +3902,7 @@ public class MainController {
         String initialTitle = shorten(url);
         if (initialTitle == null || initialTitle.isBlank()) initialTitle = "New item";
 
-        DownloadRow row = new DownloadRow(url, initialTitle, folder, mode, quality);
+        DownloadRow row = new DownloadRow(url, initialTitle,downloadOrderSeq.getAndIncrement(),folder, mode, quality);
         // خَلّي “Loading/Preparing” في status مش في العنوان
         row.status.set("Preparing");
 
