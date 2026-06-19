@@ -1,17 +1,21 @@
 package com.grabx.app.grabx;
 
 import com.grabx.app.grabx.core.model.DownloadRow;
+import com.grabx.app.grabx.core.service.DownloadStateCoordinator;
+import com.grabx.app.grabx.core.service.ClearAllService;
+import com.grabx.app.grabx.core.service.PlaylistBatchService;
 import com.grabx.app.grabx.ui.components.HoverBubble;
 import com.grabx.app.grabx.ui.components.NoSelectionModel;
 import com.grabx.app.grabx.ui.dialogs.NativeDialogs;
 import com.grabx.app.grabx.thumbs.ThumbnailCacheManager;
 import com.grabx.app.grabx.util.YtDlpManager;
 import javafx.animation.*;
+import javafx.collections.transformation.FilteredList;
 import javafx.collections.transformation.SortedList;
 import javafx.geometry.NodeOrientation;
 import javafx.geometry.Pos;
 import javafx.scene.layout.HBox;
-import javafx.collections.transformation.FilteredList;
+import com.grabx.app.grabx.core.service.HoverTooltipService;
 
 import java.nio.file.Files;
 import java.util.*;
@@ -96,6 +100,11 @@ public class MainController {
     private volatile String playlistBatchMode = MODE_VIDEO;
     private volatile String playlistBatchDefaultQuality = QUALITY_BEST;
 
+    private PlaylistBatchService playlistBatchService;
+
+    private com.grabx.app.grabx.core.service.AddLinkDialogService addLinkDialogService;
+
+    private HoverTooltipService hoverTooltipService;
 
     private final java.util.concurrent.atomic.AtomicLong downloadOrderSeq =
             new java.util.concurrent.atomic.AtomicLong(0);
@@ -104,6 +113,8 @@ public class MainController {
     private final java.util.concurrent.ConcurrentHashMap<String, DownloadRow> playlistRowByVideoId =
             new java.util.concurrent.ConcurrentHashMap<>();
 
+
+    private com.grabx.app.grabx.core.service.ClipboardService clipboardService;
 
 
     private static final String ICON_PLUS =
@@ -152,14 +163,16 @@ public class MainController {
         return vid + "|" + m + "|" + qq;
     }
 
+
+
     private static final Map<String, ProbeQualitiesResult> PLAYLIST_PROBE_CACHE = new ConcurrentHashMap<>();
-    // Cache thumbnails to avoid re-downloading when cells are recycled
     private static final Map<String, Image> PLAYLIST_THUMB_CACHE = new ConcurrentHashMap<>();
     private static final Set<String> PLAYLIST_PROBE_INFLIGHT = ConcurrentHashMap.newKeySet();
-    // Avoid creating multiple Image downloads for the same thumbnail when cells are recycled
     private static final Set<String> PLAYLIST_THUMB_INFLIGHT = ConcurrentHashMap.newKeySet();
 
     private final java.util.Map<DownloadRow, Process> activeProcesses = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private DownloadStateCoordinator downloadStateCoordinator;
 
     private final java.util.concurrent.ConcurrentHashMap<DownloadRow, Double> lastProgressMap =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -167,7 +180,8 @@ public class MainController {
     private final java.util.Map<DownloadRow, String> stopReasons = new java.util.concurrent.ConcurrentHashMap<>();
     private static final String YTDLP_OUT_TMPL = "%(title)s.%(ext)s";
 
-    private javafx.animation.Timeline missingWatcherTl;
+
+    private com.grabx.app.grabx.core.service.MissingWatcherService missingWatcherService;
 
     // Dynamic Sidebar item for Missing (show only if needed)
     private final SidebarItem SIDEBAR_MISSING_ITEM = new SidebarItem("MISSING", "Missing");
@@ -189,30 +203,44 @@ public class MainController {
     // Persist last selected download folder
     private static final Preferences PREFS = Preferences.userNodeForPackage(MainController.class);
 
-    // ===== Persist downloads list (history) =====
-    private static final String PREF_HISTORY_DAYS = "grabx.history.days"; // later from settings
-    private static final int DEFAULT_HISTORY_DAYS = 30;
-
-    private static final java.nio.file.Path DOWNLOAD_HISTORY_FILE =
-            java.nio.file.Paths.get(System.getProperty("user.home"), ".grabx", "download-history.tsv");
-
-    private volatile boolean downloadHistoryLoaded = false;
-    private static final String PREF_LAST_FOLDER = "last_download_folder";
-
-
-    private final AtomicBoolean historySaveScheduled = new AtomicBoolean(false);
-
     private final ObservableList<DownloadRow> downloadItems = FXCollections.observableArrayList();
-    private FilteredList<DownloadRow> filteredDownloadItems;
+
+    //  ===========================
+    //  ========= Classes =========
+    //  ===========================
+    private final com.grabx.app.grabx.core.service.DownloadService downloadService =
+            new com.grabx.app.grabx.core.service.DownloadService(downloadItems);
+    private final ClearAllService clearAllService = new ClearAllService(downloadItems);
+
+    private final com.grabx.app.grabx.core.service.HistoryService historyService =
+            new com.grabx.app.grabx.core.service.HistoryService(
+                    downloadItems,
+                    downloadOrderSeq,
+                    UI_DELAY_EXEC,
+                    () -> {
+                        try {
+                            int v = PREFS.getInt("grabx.history.days", 30);
+                            if (v < 1) v = 1;
+                            if (v > 365) v = 365;
+                            return v;
+                        } catch (Exception ignored) {
+                            return 30;
+                        }
+                    },
+                    this::reconcileLoadedRowsWithDisk,
+                    this::updateMissingSidebarItem,
+                    this::warmMissingThumbnailsAsync,
+                    this::thumbFromUrl
+            );
+
+
+    //  ===========================
+
+
     // Current sidebar filter key (combined with searchField filter)
     private volatile String currentSidebarFilterKey = "ALL";
 
     // ========= In-scene hover tooltip (no jitter) =========
-    private Pane hoverLayer;
-    private HoverBubble hoverBubble;
-    // Pending tooltips until hoverBubble is ready (scene/root not ready during initialize)
-    private final java.util.List<javafx.util.Pair<Button, String>> pendingTooltips = new java.util.ArrayList<>();
-    private volatile boolean hoverBubbleReady = false;
 
     private static final String QUALITY_BEST = "Best quality (Recommended)";
     private static final String QUALITY_SEPARATOR = "──────────────";
@@ -222,7 +250,7 @@ public class MainController {
 
     private static final String AUDIO_BEST = "Best audio (Recommended)";
     private static final String AUDIO_DEFAULT_FORMAT = "mp3";
-    private static final java.util.List<String> AUDIO_FORMATS = java.util.List.of(
+    private static final List<String> AUDIO_FORMATS = List.of(
             "m4a", "mp3", "opus", "aac", "wav", "flac"
     );
 
@@ -283,9 +311,22 @@ public class MainController {
 
         installClickToDefocus(root);
 
-        installTooltips();
-        setupHoverBubbleLayer();
+        try {
+            if (hoverTooltipService == null && root != null) {
+                hoverTooltipService = new com.grabx.app.grabx.core.service.HoverTooltipService(root, MainController.class);
+            }
+        } catch (Exception ignored) {}
 
+        try {
+            if (hoverTooltipService != null) {
+                hoverTooltipService.install(pauseAllButton, "Pause all");
+                hoverTooltipService.install(resumeAllButton, "Resume all");
+                hoverTooltipService.install(clearAllButton, "Clear all");
+                hoverTooltipService.install(addLinkButton, "Add link");
+                hoverTooltipService.install(settingsButton, "Settings");
+                hoverTooltipService.install(cancelAllBtn, "Cancel All");
+            }
+        } catch (Exception ignored) {}
 
         setupSvgButton(addLinkButton, ICON_PLUS);
         setupSvgButton(pauseAllButton, ICON_PAUSE);
@@ -304,21 +345,132 @@ public class MainController {
 
         // Main downloads list (center)
         ensureDownloadsListView();
+
+        downloadStateCoordinator = new DownloadStateCoordinator(
+                downloadItems,
+                activeProcesses,
+                stopReasons,
+                (row, isResume) -> startDownloadRow(row, isResume),
+                this::updateMissingSidebarItem
+        );
+
         applyFilter("ALL");
         setupSearchFilter();
-        loadDownloadHistoryOnce();
+        historyService.loadOnce();
+        initPlaylistBatchService();
+
+
+        try {
+            if (addLinkDialogService == null && root != null) {
+                addLinkDialogService =
+                        new com.grabx.app.grabx.core.service.AddLinkDialogService(
+                                root,
+                                UI_DELAY_EXEC,
+                                new com.grabx.app.grabx.core.service.AddLinkDialogService.Callbacks() {
+                                    @Override public void installClickToDefocus(DialogPane pane) { MainController.this.installClickToDefocus(pane); }
+                                    @Override public void bringWindowToFront(javafx.stage.Window w) { MainController.this.bringWindowToFront(w); }
+
+                                    @Override public boolean isHttpUrl(String s) { return MainController.this.isHttpUrl(s); }
+                                    @Override public String shorten(String s) { return MainController.this.shorten(s); }
+
+                                    @Override public String getLastDownloadFolderOrDefault() { return MainController.this.getLastDownloadFolderOrDefault(); }
+                                    @Override public void saveLastDownloadFolder(String folder) { MainController.this.saveLastDownloadFolder(folder); }
+
+                                    @Override public void addDownloadItemToList(String url, String folder, String mode, String quality) {
+                                        MainController.this.addDownloadItemToList(url, folder, mode, quality);
+                                    }
+
+                                    @Override public void onPlaylistDetected(String playlistUrl, String folder) {
+                                        // نفس سلوكك الحالي: flags + open playlist
+                                        reopenAddLinkAfterPlaylist = true;
+                                        reopenAddLinkPrefillUrl = playlistUrl;
+
+                                        try { if (activeAddLinkDialog != null) activeAddLinkDialog.hide(); } catch (Exception ignored) {}
+                                        MainController.this.openPlaylistWindow(playlistUrl, folder);
+                                    }
+
+                                    @Override public void setStatusText(String txt) {
+                                        if (statusText != null && txt != null) statusText.setText(txt);
+                                    }
+                                },
+                                new com.grabx.app.grabx.core.service.AddLinkDialogService.Config(
+                                        MODE_VIDEO,
+                                        MODE_AUDIO,
+                                        QUALITY_BEST,
+                                        QUALITY_SEPARATOR,
+                                        AUDIO_DEFAULT_FORMAT,
+                                        AUDIO_FORMATS,
+                                        "/com/grabx/app/grabx/styles/theme-base.css",
+                                        "/com/grabx/app/grabx/styles/layout.css",
+                                        "/com/grabx/app/grabx/styles/buttons.css",
+                                        "/com/grabx/app/grabx/styles/sidebar.css"
+                                )
+                        );
+            }
+        } catch (Exception ignored) {}
+
+        downloadItems.addListener((javafx.collections.ListChangeListener<DownloadRow>) c -> {
+            boolean addedAny = false;
+            while (c.next()) {
+                if (c.wasAdded()) {
+                    addedAny = true;
+                    for (DownloadRow r : c.getAddedSubList()) {
+                        if (r == null) continue;
+                        historyService.attachAutoSave(r);  // ✅ يراقب تغييرات state/title/outputFile...الخ
+                    }
+                }
+            }
+            if (addedAny) {
+                historyService.scheduleSave(); // ✅ حفظ سريع بعد إضافة عناصر جديدة
+            }
+        });
+
         updateMissingSidebarItem();
-        startMissingFileWatcher();
 
-        setupClipboardAutoPaste();
+        // Missing watcher (init after all dependencies are ready)
+        if (missingWatcherService == null) {
+            missingWatcherService = new com.grabx.app.grabx.core.service.MissingWatcherService(
+                    downloadItems,
+                    UI_DELAY_EXEC,
+                    () -> {
+                        // refresh current view + sidebar when a completed file becomes missing
+                        try {
+                            downloadService.setCombinedFilter(
+                                    currentSidebarFilterKey,
+                                    (searchField == null ? "" : searchField.getText())
+                            );
+                        } catch (Exception ignored) {}
 
+                        try {
+                            Platform.runLater(this::updateMissingSidebarItem);
+                        } catch (Exception ignored) {}
+                    }
+            );
+        }
+        try { missingWatcherService.start(); } catch (Exception ignored) {}
+
+        try {
+            clipboardService = new com.grabx.app.grabx.core.service.ClipboardService(
+                    root,
+                    this::openOrUpdateAddLinkDialog,  // ✅ يفتح الديالوج ومعه الرابط
+                    url -> {
+                        // ✅ لو الديالوج مفتوح: حدّث الحقل فورًا
+                        try { pendingAddLinkPrefillUrl = url; } catch (Exception ignored) {}
+                        if (addLinkDialogOpen && activeAddLinkUrlField != null) {
+                            try {
+                                activeAddLinkUrlField.setText(url);
+                                activeAddLinkUrlField.positionCaret(url.length());
+                            } catch (Exception ignored) {}
+                        }
+                    },
+                    () -> addLinkDialogOpen
+            );
+            clipboardService.start();
+        } catch (Exception ignored) {}
         // + button: open Add Link and prefill from clipboard if URL
         if (addLinkButton != null) {
             addLinkButton.setOnAction(ev -> openAddLinkFromClipboardOrEmpty());
         }
-
-
-
         // Sidebar
         sidebarList.getItems().setAll(
                 new SidebarItem("ALL", "All"),
@@ -327,10 +479,6 @@ public class MainController {
                 new SidebarItem("COMPLETED", "Completed"),
                 new SidebarItem("CANCELLED", "Cancelled")
         );
-
-
-
-
         sidebarList.setFixedCellSize(44);
         sidebarList.setPrefHeight(javafx.scene.layout.Region.USE_COMPUTED_SIZE);
         sidebarList.setMaxHeight(Double.MAX_VALUE);
@@ -366,21 +514,80 @@ public class MainController {
             UI_DELAY_EXEC.schedule(() -> Platform.runLater(() -> openAddLinkDialogDeferred(clip)),
                     350, TimeUnit.MILLISECONDS);
         });
-
-
     }
 
-    private void scheduleHistorySave() {
-        // debounce: لو صار 50 تحديث بسرعة ما نحفظ 50 مرة
-        if (!historySaveScheduled.compareAndSet(false, true)) return;
+    private void initPlaylistBatchService() {
+        try {
+            PlaylistBatchService.Callbacks cb = new PlaylistBatchService.Callbacks();
 
-        UI_DELAY_EXEC.schedule(() -> {
-            try {
-                saveDownloadHistoryAsync();
-            } finally {
-                historySaveScheduled.set(false);
-            }
-        }, 600, TimeUnit.MILLISECONDS);
+            // videoId -> watch URL
+            cb.youtubeWatchUrl = MainController::youtubeWatchUrl;
+
+            // create a PENDING row and add it to main list (no engine start here)
+            cb.addPendingRow = (url, mode, quality, title) -> {
+                DownloadRow r = createDownloadRow(url, mode, quality, title);
+                try { r.state.set(DownloadRow.State.QUEUED); } catch (Exception ignored) {}
+
+                // ✅ apply thumbnail immediately for playlist rows
+                try { applyThumbForRow(r, url); } catch (Exception ignored) {}
+
+                Platform.runLater(() -> {
+                    try {
+                        downloadItems.add(r);
+                        // keep filters/history consistent
+                        try { downloadService.setCombinedFilter(currentSidebarFilterKey, (searchField == null ? "" : searchField.getText())); } catch (Exception ignored) {}
+                        try { if (historyService != null) historyService.attachAutoSave(r); } catch (Exception ignored) {}
+                    } catch (Exception ignored) {}
+                });
+                return r;
+            };
+
+            // start download on an existing row
+            cb.startDownloadRow = (row) -> {
+                if (row == null) return;
+                Platform.runLater(() -> {
+                    try { startDownloadRow(row, false); } catch (Exception ignored) {}
+                });
+            };
+
+            // fallback: create row + add + start immediately
+            cb.startDownloadForUrl = (url, mode, quality, title) -> {
+                DownloadRow r = createDownloadRow(url, mode, quality, title);
+
+                // ✅ apply thumbnail immediately for playlist rows
+                try { applyThumbForRow(r, url); } catch (Exception ignored) {}
+
+                Platform.runLater(() -> {
+                    try {
+                        downloadItems.add(r);
+                        try { downloadService.setCombinedFilter(currentSidebarFilterKey, (searchField == null ? "" : searchField.getText())); } catch (Exception ignored) {}
+                        try { if (historyService != null) historyService.attachAutoSave(r); } catch (Exception ignored) {}
+                        try { startDownloadRow(r, false); } catch (Exception ignored) {}
+                    } catch (Exception ignored) {}
+                });
+                return r;
+            };
+
+            // extract youtube id from URL
+            cb.extractYoutubeId = MainController::extractYouTubeId;
+
+            // persist history after adding rows
+            cb.scheduleHistorySave = () -> {
+                try { if (historyService != null) historyService.scheduleSave(); } catch (Exception ignored) {}
+            };
+
+            // status text
+            cb.setStatusText = (txt) -> {
+                if (statusText != null && txt != null) {
+                    Platform.runLater(() -> statusText.setText(txt));
+                }
+            };
+
+            playlistBatchService = new PlaylistBatchService(cb);
+
+        } catch (Exception ex) {
+            playlistBatchService = null; // خليه يشتغل حتى لو السيرفس مش جاهز
+        }
     }
 
     private static boolean probeVideoQualitiesAsync(
@@ -403,7 +610,7 @@ public class MainController {
         try {
             PLAYLIST_PROBE_EXEC.execute(() -> {
                 try {
-                    ProbeQualitiesResult pr = probeQualitiesWithSizes(videoUrl);
+                    ProbeQualitiesResult pr = probeQualitiesHeightsOnly(videoUrl);
                     PLAYLIST_PROBE_CACHE.put(videoId, pr);
                     Platform.runLater(() -> onDone.accept(pr));
                 } finally {
@@ -416,6 +623,29 @@ public class MainController {
             PLAYLIST_PROBE_INFLIGHT.remove(videoId);
             return false;
         }
+    }
+
+    /**
+     * Lightweight probe for playlist UI: detect available heights only (NO size probing).
+     * This avoids the very slow yt-dlp call: --skip-download ... --print %(filesize,filesize_approx)s
+     */
+    private static ProbeQualitiesResult probeQualitiesHeightsOnly(String url) {
+        long now = System.currentTimeMillis();
+        Set<Integer> heights = new HashSet<>();
+        Map<Integer, String> sizeByHeight = new HashMap<>();
+        Map<Integer, Long> bytesByHeight = new HashMap<>();
+
+        if (url == null || url.isBlank()) {
+            return new ProbeQualitiesResult(heights, bytesByHeight, sizeByHeight, -1L, now);
+        }
+
+        try {
+            heights = probeHeightsFastJson(url);
+            heights = normalizeHeights(heights);
+        } catch (Exception ignored) {}
+
+        // bestBytes intentionally unknown here
+        return new ProbeQualitiesResult(heights, bytesByHeight, sizeByHeight, -1L, now);
     }
 
 
@@ -438,95 +668,52 @@ public class MainController {
     }
 
     @FXML
-    public void onCanseleAll(ActionEvent actionEvent) {
-        cancelAllActiveDownloads();
-        scheduleHistorySave();
+    public void onCanseleAll(ActionEvent e) {
+        int affected = (downloadStateCoordinator == null) ? 0 : downloadStateCoordinator.cancelAll();
+        if (statusText != null) statusText.setText(affected > 0 ? ("Cancelled " + affected + " item(s)") : "Nothing to cancel");
     }
 
     @FXML
-    public void onPauseAll(ActionEvent actionEvent) {
-        int affected = 0;
-
-        for (DownloadRow row : downloadItems) {
-            if (row == null) continue;
-
-            DownloadRow.State st;
-            try { st = row.state.get(); } catch (Exception ignored) { continue; }
-
-            // Pause only active ones
-            if (st == DownloadRow.State.DOWNLOADING || st == DownloadRow.State.QUEUED ) {
-                Process p = activeProcesses.get(row);
-                try {
-                    if (p != null && p.isAlive()) {
-                        stopReasons.put(row, "PAUSE");
-                        p.destroy(); // stop process (simple pause behavior)
-                    }
-                } catch (Exception ignored) {}
-
-                row.setState(DownloadRow.State.PAUSED);
-                affected++;
-            }
-        }
-
-        if (statusText != null) {
-            statusText.setText(affected > 0 ? ("Paused " + affected + " item(s)") : "Nothing to pause");
-        }
-
-        scheduleHistorySave();
+    public void onPauseAll(ActionEvent e) {
+        int affected = (downloadStateCoordinator == null) ? 0 : downloadStateCoordinator.pauseAll();
+        if (statusText != null) statusText.setText(affected > 0 ? ("Paused " + affected + " item(s)") : "Nothing to pause");
     }
 
     @FXML
-    public void onResumeAll(ActionEvent actionEvent) {
-        int affected = 0;
-
-        for (DownloadRow row : downloadItems) {
-            if (row == null) continue;
-
-            DownloadRow.State st;
-            try { st = row.state.get(); } catch (Exception ignored) { continue; }
-
-            if (st == DownloadRow.State.PAUSED || st == DownloadRow.State.QUEUED) {
-                try {
-                    startDownloadRow(row, true);
-                    affected++;
-                } catch (Exception ignored) {
-                    row.setState(DownloadRow.State.PAUSED);
-                }
-            }
-        }
-
-        if (statusText != null) {
-            statusText.setText(affected > 0 ? ("Resumed " + affected + " item(s)") : "Nothing to resume");
-        }
-
-        scheduleHistorySave();
+    public void onResumeAll(ActionEvent e) {
+        int affected = (downloadStateCoordinator == null) ? 0 : downloadStateCoordinator.resumeAll();
+        if (statusText != null) statusText.setText(affected > 0 ? ("Resumed " + affected + " item(s)") : "Nothing to resume");
     }
 
     @FXML
     public void onClearAll(ActionEvent actionEvent) {
-        // Clear from the UI only (do NOT delete files). Keep active downloads.
-        java.util.List<DownloadRow> toRemove = new java.util.ArrayList<>();
+        int removed = (clearAllService == null) ? 0 : clearAllService.clearNonActive();
 
-        for (DownloadRow row : downloadItems) {
-            if (row == null) continue;
-
-            DownloadRow.State st;
-            try { st = row.state.get(); } catch (Exception ignored) { continue; }
-
-            // Remove anything that is not actively downloading/queued
-            if (st != DownloadRow.State.DOWNLOADING && st != DownloadRow.State.QUEUED) {
-                toRemove.add(row);
-            }
-        }
-
-        if (!toRemove.isEmpty()) {
-            downloadItems.removeAll(toRemove);
+        if (removed > 0) {
             updateMissingSidebarItem();
-            scheduleHistorySave();
+
+            // keep current sidebar/search filter consistent
+            try {
+                downloadService.setCombinedFilter(
+                        currentSidebarFilterKey,
+                        (searchField == null ? "" : searchField.getText())
+                );
+            } catch (Exception ignored) {}
+
+            // ✅ مهم: ثبت التغيير على ملف الهيستوري
+            try {
+                if (historyService != null) {
+                    if (downloadItems == null || downloadItems.isEmpty()) {
+                        historyService.clearHistoryFile();  // <- جديد
+                    } else {
+                        historyService.scheduleSave();
+                    }
+                }
+            } catch (Exception ignored) {}
         }
 
         if (statusText != null) {
-            statusText.setText(toRemove.isEmpty() ? "Nothing to clear" : ("Cleared " + toRemove.size() + " item(s)"));
+            statusText.setText(removed == 0 ? "Nothing to clear" : ("Cleared " + removed + " item(s)"));
         }
     }
 
@@ -711,7 +898,7 @@ public class MainController {
         return Math.round(mb) + " MB";
     }
 
-    private static String buildMetaLine(com.grabx.app.grabx.ui.playlist.PlaylistEntry it) {
+    private static String buildMetaLine(PlaylistEntry it) {
         if (it == null) return "";
         String q = it.getQuality();
         String sz = it.getSizeForQuality(q);
@@ -768,6 +955,8 @@ public class MainController {
         Integer max = hs.get(hs.size() - 1);
         return labelByH.get(max);
     }
+
+
 
     private static ProbeQualitiesResult probeQualitiesWithSizes(String url) {
         long now = System.currentTimeMillis();
@@ -883,14 +1072,17 @@ public class MainController {
         // sidebar filter changed
         String k = (key == null) ? "ALL" : key.trim().toUpperCase(java.util.Locale.ROOT);
         currentSidebarFilterKey = k;
-        applyCombinedFilters();
+        downloadService.setCombinedFilter(currentSidebarFilterKey,
+                (searchField == null ? "" : searchField.getText()));
     }
 
     private void setupSearchFilter() {
         if (searchField == null) return;
 
         // As-you-type filtering (auto-complete feel)
-        searchField.textProperty().addListener((obs, oldV, newV) -> applyCombinedFilters());
+        searchField.textProperty().addListener((obs, oldV, newV) ->
+                downloadService.setCombinedFilter(currentSidebarFilterKey,
+                        (searchField == null ? "" : searchField.getText()))        );
 
         // Optional: ESC clears search quickly
         searchField.setOnKeyPressed(e -> {
@@ -905,66 +1097,7 @@ public class MainController {
         });
     }
 
-    private void applyCombinedFilters() {
-        if (filteredDownloadItems == null) return;
 
-        final String sidebarKey = (currentSidebarFilterKey == null)
-                ? "ALL"
-                : currentSidebarFilterKey.trim().toUpperCase(java.util.Locale.ROOT);
-
-        final String q = (searchField == null || searchField.getText() == null)
-                ? ""
-                : searchField.getText().trim().toLowerCase(java.util.Locale.ROOT);
-
-        filteredDownloadItems.setPredicate(row -> {
-            if (row == null) return false;
-
-            // 1) sidebar filter (state)
-            DownloadRow.State st = null;
-            try { st = row.state.get(); } catch (Exception ignored) {}
-
-            boolean passSidebar;
-            if ("ALL".equals(sidebarKey)) {
-                // In your UI you hide Missing from ALL
-                passSidebar = st != DownloadRow.State.MISSING;
-            } else if ("DOWNLOADING".equals(sidebarKey)) {
-                // Treat queued/pending as part of "Downloading"
-                passSidebar = st == DownloadRow.State.DOWNLOADING
-                        || st == DownloadRow.State.QUEUED
-                        || st == DownloadRow.State.PENDING;
-            } else if ("PAUSED".equals(sidebarKey)) {
-                passSidebar = st == DownloadRow.State.PAUSED;
-            } else if ("COMPLETED".equals(sidebarKey)) {
-                passSidebar = st == DownloadRow.State.COMPLETED;
-            } else if ("CANCELLED".equals(sidebarKey)) {
-                // Cancelled + Failed together (as agreed)
-                passSidebar = st == DownloadRow.State.CANCELLED || st == DownloadRow.State.FAILED;
-            } else if ("MISSING".equals(sidebarKey)) {
-                passSidebar = st == DownloadRow.State.MISSING;
-            } else {
-                passSidebar = true;
-            }
-
-            if (!passSidebar) return false;
-
-            // 2) search filter (title / quality / url / mode)
-            if (q.isEmpty()) return true;
-
-            String title = safeLower(safeGet(row.title));
-            String quality = safeLower(row.quality);
-            String url = safeLower(row.url);
-            String mode = safeLower(row.mode);
-
-            // Also allow searching by state text (optional)
-            String stateTxt = (st == null) ? "" : st.name().toLowerCase(java.util.Locale.ROOT);
-
-            return containsAny(title, q)
-                    || containsAny(quality, q)
-                    || containsAny(url, q)
-                    || containsAny(mode, q)
-                    || containsAny(stateTxt, q);
-        });
-    }
 
     private static boolean containsAny(String haystack, String needle) {
         if (haystack == null || haystack.isEmpty()) return false;
@@ -977,60 +1110,6 @@ public class MainController {
         return s.trim().toLowerCase(java.util.Locale.ROOT);
     }
 
-    private void startMissingFileWatcher() {
-        try {
-            if (missingWatcherTl != null) return;
-        } catch (Exception ignored) {}
-
-        missingWatcherTl = new javafx.animation.Timeline(
-                new javafx.animation.KeyFrame(javafx.util.Duration.seconds(2), ev -> {
-                    try { refreshMissingFromDisk(); } catch (Exception ignored) {}
-                })
-        );
-        missingWatcherTl.setCycleCount(javafx.animation.Animation.INDEFINITE);
-        try { missingWatcherTl.play(); } catch (Exception ignored) {}
-
-        // فحص سريع بعد الإقلاع مباشرة
-        UI_DELAY_EXEC.schedule(() -> javafx.application.Platform.runLater(() -> {
-            try { refreshMissingFromDisk(); } catch (Exception ignored) {}
-        }), 350, java.util.concurrent.TimeUnit.MILLISECONDS);
-    }
-
-    private void refreshMissingFromDisk() {
-        if (downloadItems == null || downloadItems.isEmpty()) return;
-
-        boolean anyChanged = false;
-
-        for (DownloadRow r : downloadItems) {
-            if (r == null) continue;
-
-            DownloadRow.State st;
-            try { st = r.state.get(); } catch (Exception e) { continue; }
-
-            // فقط: Completed -> Missing إذا الملف اختفى
-            if (st != DownloadRow.State.COMPLETED) continue;
-
-            boolean ok;
-            try {
-                java.nio.file.Path p = (r.outputFile == null) ? null : r.outputFile.get();
-                ok = p != null && java.nio.file.Files.exists(p) && java.nio.file.Files.size(p) > 0;
-            } catch (Exception ignored) {
-                ok = false;
-            }
-
-            if (!ok) {
-                r.setState(DownloadRow.State.MISSING);
-                anyChanged = true;
-            }
-        }
-
-        if (anyChanged) {
-            applyCombinedFilters();
-        }
-        if (anyChanged) {
-            Platform.runLater(this::updateMissingSidebarItem);
-        }
-    }
 
     // ========= AddLink open helpers (safe showAndWait) =========
 
@@ -1094,7 +1173,7 @@ public class MainController {
                     || st == DownloadRow.State.PAUSED
                     || st == DownloadRow.State.QUEUED) {
 
-                cancelDownloadRow(row);
+                downloadStateCoordinator.cancel(row);
             }
         }
         if (statusText != null) {
@@ -1128,134 +1207,12 @@ public class MainController {
         row.progress.set(Math.max(prev, newPct));
     }
 
-    // ========= Tooltips (stable + no flicker) =========
-    private void installTooltips() {
-        installTooltip(pauseAllButton, "Pause all");
-        installTooltip(resumeAllButton, "Resume all");
-        installTooltip(clearAllButton, "Clear all");
-        installTooltip(addLinkButton, "Add link");
-        installTooltip(settingsButton, "Settings");
-        installTooltip(cancelAllBtn, "Cancel All");
 
-    }
 
-    private void installTooltip(Button btn, String text) {
-        if (btn == null) return;
 
-        // If bubble not ready yet, queue it and apply once the scene is ready.
-        if (hoverBubble == null || !hoverBubbleReady) {
-            // keep latest text on the button
-            btn.getProperties().put("gx-hover-text", text);
-            pendingTooltips.add(new javafx.util.Pair<>(btn, text));
-            Platform.runLater(this::flushPendingTooltips);
-            return;
-        }
-
-        hoverBubble.install(btn, text);
-    }
-
-    private void flushPendingTooltips() {
-        if (hoverBubble == null) return;
-        hoverBubbleReady = true;
-
-        // Install queued tooltips (dedupe by using the latest text stored on the button)
-        for (var p : pendingTooltips) {
-            Button b = p.getKey();
-            if (b == null) continue;
-            String txt = (String) b.getProperties().get("gx-hover-text");
-            if (txt == null) txt = p.getValue();
-            try {
-                hoverBubble.install(b, txt);
-            } catch (Exception ignored) {
-            }
-        }
-        pendingTooltips.clear();
-    }
 
     // ========= Custom in-scene tooltip bubble (no Popup/Tooltip jitter) =========
-    private void setupHoverBubbleLayer() {
-        if (root == null) return;
 
-        // Scene may be null during initialize, so listen once.
-        root.sceneProperty().addListener((obs, oldSc, newSc) -> {
-            // Scene can be null during transitions / rebuilds
-            if (newSc == null) return;
-
-            // Ensure tooltip CSS is available (do this AFTER null-check)
-            try {
-                var cssUrl = getClass().getResource("/com/grabx/app/grabx/styles/buttons.css");
-                if (cssUrl != null) {
-                    String css = cssUrl.toExternalForm();
-                    if (!newSc.getStylesheets().contains(css)) {
-                        newSc.getStylesheets().add(css);
-                    }
-                }
-            } catch (Exception ignored) {
-            }
-
-            Platform.runLater(() -> {
-                try {
-                    // If we already created the overlay & bubble, do nothing
-                    if (hoverLayer != null && hoverBubble != null) {
-                        // Still make sure queued tooltips are flushed once scene becomes ready
-                        hoverBubbleReady = true;
-                        flushPendingTooltips();
-                        return;
-                    }
-
-                    javafx.scene.Parent currentRoot = newSc.getRoot();
-                    if (currentRoot instanceof javafx.scene.layout.StackPane sp) {
-                        hoverLayer = new Pane();
-                        // Do NOT participate in layout; we only use it as an overlay.
-                        hoverLayer.setManaged(false);
-                        // Make the layer always cover the whole scene (prevents being behind/under other nodes)
-                        hoverLayer.prefWidthProperty().bind(sp.widthProperty());
-                        hoverLayer.prefHeightProperty().bind(sp.heightProperty());
-                        hoverLayer.setMinSize(0, 0);
-                        hoverLayer.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
-                        javafx.scene.layout.StackPane.setAlignment(hoverLayer, javafx.geometry.Pos.TOP_LEFT);
-                        hoverLayer.setPickOnBounds(false);
-                        hoverLayer.setMouseTransparent(true);
-                        hoverLayer.getStyleClass().add("gx-hover-layer");
-                        // Ensure it is ALWAYS on top
-                        sp.getChildren().add(hoverLayer);
-                        hoverLayer.toFront();
-                        hoverLayer.setViewOrder(-10_000);
-                    } else {
-                        javafx.scene.layout.StackPane wrapper = new javafx.scene.layout.StackPane();
-                        wrapper.getChildren().add(currentRoot);
-
-                        hoverLayer = new Pane();
-                        // Do NOT participate in layout; we only use it as an overlay.
-                        hoverLayer.setManaged(false);
-                        // Make the layer always cover the whole scene (prevents being behind/under other nodes)
-                        hoverLayer.prefWidthProperty().bind(wrapper.widthProperty());
-                        hoverLayer.prefHeightProperty().bind(wrapper.heightProperty());
-                        hoverLayer.setMinSize(0, 0);
-                        hoverLayer.setMaxSize(Double.MAX_VALUE, Double.MAX_VALUE);
-                        javafx.scene.layout.StackPane.setAlignment(hoverLayer, javafx.geometry.Pos.TOP_LEFT);
-                        hoverLayer.setPickOnBounds(false);
-                        hoverLayer.setMouseTransparent(true);
-                        hoverLayer.getStyleClass().add("gx-hover-layer");
-                        // Ensure it is ALWAYS on top
-                        wrapper.getChildren().add(hoverLayer);
-                        hoverLayer.toFront();
-                        hoverLayer.setViewOrder(-10_000);
-
-                        newSc.setRoot(wrapper);
-                    }
-
-                    hoverBubble = new HoverBubble(hoverLayer);
-                    hoverBubbleReady = true;
-                    flushPendingTooltips();
-
-                    // Ensure topbar tooltips are installed too (they can be queued during initialize)
-                    installTooltips();
-                } catch (Exception ignored) {
-                }
-            });
-        });
-    }
 
     private static ContentType analyzeUrlType(String url) {
         if (url == null) return ContentType.UNSUPPORTED;
@@ -1440,35 +1397,6 @@ public class MainController {
         } catch (Exception ignored) {}
     }
 
-//    // هذه الدوال عشان يعرض المجلد الأخير أو مجلد التنزيلات الافتراضي
-//    private String getLastDownloadFolderOrDefault() {
-//        try {
-//            String v = PREFS.get(PREF_LAST_FOLDER, null);
-//            if (v != null && !v.isBlank()) {
-//                java.nio.file.Path p = java.nio.file.Paths.get(v);
-//                if (java.nio.file.Files.exists(p) && java.nio.file.Files.isDirectory(p)) {
-//                    return p.toAbsolutePath().toString();
-//                }
-//            }
-//        } catch (Exception ignored) {}
-//        return System.getProperty("user.home") + java.io.File.separator + "Downloads";
-//    }
-
-//    private void saveLastDownloadFolder(String folder) {
-//        try {
-//            if (folder == null) return;
-//            String v = folder.trim();
-//            if (v.isEmpty()) return;
-//
-//            java.nio.file.Path p = java.nio.file.Paths.get(v);
-//
-//            // لو موجود وملف (مش فولدر) لا تحفظه
-//            if (java.nio.file.Files.exists(p) && !java.nio.file.Files.isDirectory(p)) return;
-//
-//            PREFS.put(PREF_LAST_FOLDER, p.toAbsolutePath().toString());
-//        } catch (Exception ignored) {}
-//    }
-
     private static String esc(String s) {
         if (s == null) return "";
         return s.replace("\\", "\\\\")
@@ -1479,272 +1407,6 @@ public class MainController {
     private static String unesc(String s) {
         if (s == null) return "";
         return s.replace("\\\\", "\\");
-    }
-
-    private int getHistoryDays() {
-        try {
-            int v = PREFS.getInt(PREF_HISTORY_DAYS, DEFAULT_HISTORY_DAYS);
-            if (v < 1) v = 1;
-            if (v > 365) v = 365;
-            return v;
-        } catch (Exception ignored) {
-            return DEFAULT_HISTORY_DAYS;
-        }
-    }
-
-    private void ensureHistoryDir() {
-        try {
-            java.nio.file.Path dir = DOWNLOAD_HISTORY_FILE.getParent();
-            if (dir != null) java.nio.file.Files.createDirectories(dir);
-        } catch (Exception ignored) {}
-    }
-
-    private void saveDownloadHistoryAsync() {
-        new Thread(() -> {
-            try {
-                ensureHistoryDir();
-
-                int keepDays = getHistoryDays();
-                long cutoff = System.currentTimeMillis() - (long) keepDays * 24L * 60L * 60L * 1000L;
-
-                // snapshot
-                java.util.List<DownloadRow> snap = new java.util.ArrayList<>();
-                try {
-                    javafx.application.Platform.runLater(() -> {
-                        try { snap.addAll(downloadItems); } catch (Exception ignored) {}
-                    });
-                    try { Thread.sleep(30); } catch (Exception ignored) {}
-                } catch (Exception ignored) {}
-
-                java.util.List<String> lines = new java.util.ArrayList<>();
-
-                for (DownloadRow r : snap) {
-                    if (r == null) continue;
-                    if (r.url == null || r.url.isBlank()) continue;
-
-                    String title = safeGet(r.title);
-                    String state = "QUEUED";
-                    try { state = String.valueOf(r.state.get()); } catch (Exception ignored) {}
-
-                    String outPath = "";
-                    try {
-                        java.nio.file.Path p = (r.outputFile == null) ? null : r.outputFile.get();
-                        if (p != null) outPath = p.toAbsolutePath().normalize().toString();
-                    } catch (Exception ignored) {}
-
-                    long lastUpdated = r.completedAt > 0
-                            ? r.completedAt
-                            : System.currentTimeMillis();
-
-                    if (lastUpdated < cutoff) continue;
-
-                    lines.add(
-                            esc(r.url) + "\t" +
-                                    esc(title) + "\t" +
-                                    esc(r.folder) + "\t" +
-                                    esc(r.mode) + "\t" +
-                                    esc(r.quality) + "\t" +
-                                    esc(state) + "\t" +
-                                    esc(outPath) + "\t" +
-                                    lastUpdated
-                    );
-                }
-
-                java.nio.file.Files.write(
-                        DOWNLOAD_HISTORY_FILE,
-                        lines,
-                        java.nio.charset.StandardCharsets.UTF_8,
-                        java.nio.file.StandardOpenOption.CREATE,
-                        java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
-                        java.nio.file.StandardOpenOption.WRITE
-                );
-
-            } catch (Exception ignored) {}
-        }, "grabx-save-history").start();
-    }
-
-    private void loadDownloadHistoryOnce() {
-        if (downloadHistoryLoaded) return;
-        downloadHistoryLoaded = true;
-
-        try {
-            if (!java.nio.file.Files.exists(DOWNLOAD_HISTORY_FILE)) return;
-
-            int keepDays = getHistoryDays();
-            long cutoff = System.currentTimeMillis() - (long) keepDays * 24L * 60L * 60L * 1000L;
-
-            java.util.List<String> lines = java.nio.file.Files.readAllLines(
-                    DOWNLOAD_HISTORY_FILE,
-                    java.nio.charset.StandardCharsets.UTF_8
-            );
-
-            java.util.List<DownloadRow> restored = new java.util.ArrayList<>();
-
-            for (String line : lines) {
-                if (line == null || line.isBlank()) continue;
-                String[] c = line.split("\t", -1);
-                if (c.length < 8) continue;
-
-                String url = unesc(c[0]);
-                String title = unesc(c[1]);
-                String folder = unesc(c[2]);
-                String mode = unesc(c[3]);
-                String quality = unesc(c[4]);
-                String state = unesc(c[5]);
-                String outPath = unesc(c[6]);
-                long lastUpdated = 0L;
-                try { lastUpdated = Long.parseLong(c[7].trim()); } catch (Exception ignored) {}
-
-                if (lastUpdated > 0 && lastUpdated < cutoff) continue;
-                if (url == null || url.isBlank()) continue;
-
-                DownloadRow r = new DownloadRow(
-                        url,
-                        (title == null || title.isBlank()) ? shorten(url) : title,
-                        downloadOrderSeq.getAndIncrement(),
-                        folder == null ? "" : folder,
-                        (mode == null || mode.isBlank()) ? MODE_VIDEO : mode,
-                        (quality == null || quality.isBlank()) ? QUALITY_BEST : quality
-                );
-
-                // Restore thumbnail from disk cache only (no HTTP at startup)
-                try {
-                    java.nio.file.Path tp = ThumbnailCacheManager.getCachedPath(url);
-                    if (tp != null) {
-                        r.thumbUrl.set(tp.toUri().toString()); // file://... يظهر فورًا
-                    } else {
-                        r.thumbUrl.set(null); // لا تعمل HTTP وقت الإقلاع
-                    }
-                } catch (Exception ignored) {}
-
-                // لو العنوان فاضي لكن عندنا ملف فعلي، اشتقه من اسم الملف
-                try {
-                    if ((title == null || title.isBlank()) && outPath != null && !outPath.isBlank()) {
-                        java.nio.file.Path p = java.nio.file.Paths.get(outPath);
-                        String fn = (p.getFileName() == null) ? "" : p.getFileName().toString();
-                        if (!fn.isBlank()) {
-                            int dot = fn.lastIndexOf('.');
-                            String base = (dot > 0) ? fn.substring(0, dot) : fn;
-                            if (!base.isBlank()) r.setTitleOnce(base);
-                        }
-                    }
-                } catch (Exception ignored) {}
-
-                if (outPath != null && !outPath.isBlank()) {
-                    try { r.outputFile.set(java.nio.file.Paths.get(outPath)); } catch (Exception ignored) {}
-                }
-
-                // Detect if the output file is actually present on disk
-                boolean fileOk = false;
-                try {
-                    if (outPath != null && !outPath.isBlank()) {
-                        Path p = Paths.get(outPath);
-                        fileOk = Files.exists(p) && Files.size(p) > 0;
-                        if (fileOk) {
-                            // If the file is present, force COMPLETED
-                            state = "COMPLETED";
-                        } else {
-                            // If history says COMPLETED but file is gone -> mark as MISSING
-                            String ss = (state == null) ? "" : state.trim().toUpperCase(java.util.Locale.ROOT);
-                            if ("COMPLETED".equals(ss)) {
-                                state = "MISSING";
-                            }
-                        }
-                    } else {
-                        // No output path: cannot be opened; if it was completed, treat as missing
-                        String ss = (state == null) ? "" : state.trim().toUpperCase(java.util.Locale.ROOT);
-                        if ("COMPLETED".equals(ss)) {
-                            state = "MISSING";
-                        }
-                    }
-                } catch (Exception ignored) {
-                    // On any unexpected error, still avoid showing it as COMPLETED if we can't verify the file
-                    String ss = (state == null) ? "" : state.trim().toUpperCase(java.util.Locale.ROOT);
-                    if ("COMPLETED".equals(ss)) {
-                        state = "MISSING";
-                    }
-                }
-
-                try {
-                    String norm = (state == null) ? "QUEUED" : state.trim().toUpperCase(java.util.Locale.ROOT);
-                    DownloadRow.State st = DownloadRow.State.valueOf(norm);
-
-                    // لا نرجّعها DOWNLOADING بعد إعادة تشغيل البرنامج
-                    if (st == DownloadRow.State.DOWNLOADING) {
-                        st = DownloadRow.State.PAUSED;
-                    }
-
-                    // Safety: if something is marked COMPLETED but file isn't OK, downgrade to MISSING
-                    if (st == DownloadRow.State.COMPLETED) {
-                        try {
-                            java.nio.file.Path p = (r.outputFile == null) ? null : r.outputFile.get();
-                            boolean ok = p != null && java.nio.file.Files.exists(p) && java.nio.file.Files.size(p) > 0;
-                            if (!ok) st = DownloadRow.State.MISSING;
-                        } catch (Exception ignored2) {
-                            st = DownloadRow.State.MISSING;
-                        }
-                    }
-
-                    r.setState(st);
-
-                    // Keep completedAt for COMPLETED, and also keep lastUpdated for MISSING (so it keeps its original date)
-                    if ((st == DownloadRow.State.COMPLETED || st == DownloadRow.State.MISSING) && lastUpdated > 0) {
-                        r.completedAt = lastUpdated;
-                    }
-                } catch (Exception ignored) {
-                    r.setState(DownloadRow.State.QUEUED);
-                }
-
-                try {
-                    DownloadRow.State st = r.state.get();
-                    if (st == DownloadRow.State.COMPLETED) {
-                        java.nio.file.Path p = r.outputFile.get();
-                        if (p != null && java.nio.file.Files.exists(p)) {
-                            long sz = java.nio.file.Files.size(p);
-                            r.size.set(formatBytesDecimal(sz));
-                        }
-                        r.progress.set(1.0);
-                    } else if (st == DownloadRow.State.MISSING) {
-                        r.size.set("");
-                        r.progress.set(0.0);
-                    } else {
-                        r.progress.set(0.0);
-                    }
-                } catch (Exception ignored) {}
-
-                restored.add(r);
-            }
-
-            if (!restored.isEmpty()) {
-                javafx.application.Platform.runLater(() -> {
-                    try {
-                        // نخلي العناصر الجديدة تضل فوق (add 0) … والقديمة تحت
-                        downloadItems.addAll(restored);
-
-                        // ✅ IMPORTANT: reconcile persisted states with actual disk files after restore
-                        reconcileLoadedRowsWithDisk();
-
-                        if (filteredDownloadItems != null) {
-                            filteredDownloadItems.setPredicate(filteredDownloadItems.getPredicate());
-                        }
-                        warmMissingThumbnailsAsync(restored);
-                        updateMissingSidebarItem();
-                    } catch (Exception ignored) {}
-                });
-            }
-        } catch (Exception ignored) {}
-    }
-
-    private void forceRefilterAndRefresh() {
-        try {
-            if (filteredDownloadItems != null) {
-                filteredDownloadItems.setPredicate(filteredDownloadItems.getPredicate());
-            }
-        } catch (Exception ignored) {}
-
-        try {
-            if (downloadsList != null) downloadsList.refresh();
-        } catch (Exception ignored) {}
     }
 
     private void warmMissingThumbnailsAsync(java.util.List<DownloadRow> rows) {
@@ -1819,743 +1481,16 @@ public class MainController {
     private static final java.util.Set<String> VIDEO_SIZE_INFLIGHT =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
 
-    /**
-     * Ensures that the size for the given playlist entry is computed and updated once.
-     * This method avoids blocking the UI and uses caching and async probing.
-     */
-    private void ensurePlaylistSizeOnce(PlaylistEntry it, String mode, String qLabel, Runnable refresh) {
-        if (it == null || it.isUnavailable()) return;
-
-        String vid = null;
-        try { vid = it.getId(); } catch (Exception ignored) {}
-        if (vid == null || vid.isBlank()) return;
-
-        String m = (mode == null || mode.isBlank()) ? MODE_VIDEO : mode;
-        if (MODE_AUDIO.equals(m)) return;
-
-        String q = (qLabel == null || qLabel.isBlank()) ? QUALITY_BEST : qLabel;
-        if (QUALITY_SEPARATOR.equals(q) || QUALITY_CUSTOM.equals(q)) return;
-
-        // ---------- helpers ----------
-        final String videoUrl = youtubeWatchUrl(vid);
-        if (videoUrl == null || videoUrl.isBlank()) return;
-
-        // Keep SIZE_CACHE keys consistent with the rest of the app
-        final String sizeCacheKey = videoUrl + "|" + MODE_VIDEO + "|" + q;
-
-        // Update the PlaylistEntry size map + refresh UI
-        final java.util.function.Consumer<Long> applyBytesToEntry = (bytes) -> {
-            if (bytes == null || bytes <= 0) return;
-            try {
-                var map = new HashMap<String, String>();
-                var cur = it.getSizeByQuality();
-                if (cur != null) map.putAll(cur);
-                map.put(q, formatBytesDecimal(bytes));
-                it.setSizeByQuality(map);
-            } catch (Exception ignored) {}
-            try { if (refresh != null) refresh.run(); } catch (Exception ignored) {}
-        };
-
-        // 1) If we already computed exact bytes for (url|video|quality) -> show instantly
-        try {
-            Long cachedBytes = SIZE_CACHE.get(sizeCacheKey);
-            if (cachedBytes != null && cachedBytes > 0) {
-                applyBytesToEntry.accept(cachedBytes);
-                return;
-            }
-        } catch (Exception ignored) {}
-
-        // 2) If we have a cached ProbeQualitiesResult for this video -> use it
-        //    (Best bytes OR any height bytes already known)
-        try {
-            ProbeQualitiesResult pr = PLAYLIST_PROBE_CACHE.get(vid);
-            if (pr != null) {
-                Long bytesFromProbe = null;
-
-                if (QUALITY_BEST.equals(q)) {
-                    try {
-                        long bb = pr.bestBytes;
-                        if (bb > 0) bytesFromProbe = bb;
-                    } catch (Exception ignored) {}
-
-                    // fallback: if bestBytes not present, try highest known height in pr
-                    if (bytesFromProbe == null) {
-                        try {
-                            Integer bestH = null;
-                            if (pr.heights != null) {
-                                for (Integer h : pr.heights) {
-                                    if (h == null || h <= 0) continue;
-                                    if (bestH == null || h > bestH) bestH = h;
-                                }
-                            }
-                            if (bestH != null && pr.bytesByHeight != null) {
-                                Long b = pr.bytesByHeight.get(bestH);
-                                if (b != null && b > 0) bytesFromProbe = b;
-                            }
-                        } catch (Exception ignored) {}
-                    }
-                } else {
-                    // Try exact bytes for the selected height if already available
-                    int h = parseHeightFromLabel(q);
-                    if (h > 0) {
-                        try {
-                            if (pr.bytesByHeight != null) {
-                                Long b = pr.bytesByHeight.get(h);
-                                if (b != null && b > 0) bytesFromProbe = b;
-                            }
-                        } catch (Exception ignored) {}
-                    }
-                }
-
-                if (bytesFromProbe != null && bytesFromProbe > 0) {
-                    // seed global size cache so future UI is instant
-                    try { SIZE_CACHE.put(sizeCacheKey, bytesFromProbe); } catch (Exception ignored) {}
-                    applyBytesToEntry.accept(bytesFromProbe);
-                    return;
-                }
-            }
-        } catch (Exception ignored) {}
-
-        // 3) If best-quality size is requested but no probe is cached yet:
-        //    run ONE probe for this videoId (heights + bestBytes) and cache it.
-        //    IMPORTANT: do NOT block UI.
-        if (QUALITY_BEST.equals(q)) {
-            // NOTE: probeVideoQualitiesAsync uses PLAYLIST_PROBE_CACHE (videoId -> ProbeQualitiesResult)
-            // and PLAYLIST_PROBE_INFLIGHT (videoId) already.
-            boolean scheduled = probeVideoQualitiesAsync(videoUrl, vid, (pr) -> {
-                if (pr == null) return;
-
-                Long bb = null;
-                try {
-                    if (pr.bestBytes > 0) bb = pr.bestBytes;
-                } catch (Exception ignored) {}
-
-                if (bb == null) {
-                    try {
-                        Integer bestH = null;
-                        if (pr.heights != null) {
-                            for (Integer hh : pr.heights) {
-                                if (hh == null || hh <= 0) continue;
-                                if (bestH == null || hh > bestH) bestH = hh;
-                            }
-                        }
-                        if (bestH != null && pr.bytesByHeight != null) {
-                            Long b = pr.bytesByHeight.get(bestH);
-                            if (b != null && b > 0) bb = b;
-                        }
-                    } catch (Exception ignored) {}
-                }
-
-                if (bb != null && bb > 0) {
-                    try { SIZE_CACHE.put(sizeCacheKey, bb); } catch (Exception ignored) {}
-                    applyBytesToEntry.accept(bb);
-                }
-            });
-
-            // If the probe queue is full, just skip for now; next refresh will try again.
-            if (!scheduled) {
-                try { if (refresh != null) refresh.run(); } catch (Exception ignored) {}
-            }
-            return;
-        }
-
-        // 4) For non-best quality: compute exact bytes ON-DEMAND, once per (videoUrl|quality).
-        //    We reuse PLAYLIST_PROBE_INFLIGHT but with a different key prefix so it NEVER
-        //    collides with videoId in-flight used by probeVideoQualitiesAsync.
-        final String inflightKey = "SIZE|" + pKey(vid, MODE_VIDEO, q);
-        if (!PLAYLIST_PROBE_INFLIGHT.add(inflightKey)) return;
-
-        Runnable job = () -> {
-            Long bytes = null;
-            try {
-                String selector;
-                int h = parseHeightFromLabel(q);
-                if (h > 0) {
-                    selector = buildFormatSelectorForHeight(h);
-                } else {
-                    selector = "bv*+ba/b";
-                }
-
-                bytes = fetchCombinedSizeBytesWithYtDlpPrint(videoUrl, selector);
-                if (bytes != null && bytes > 0) {
-                    try { SIZE_CACHE.put(sizeCacheKey, bytes); } catch (Exception ignored) {}
-                }
-            } catch (Exception ignored) {
-            } finally {
-                PLAYLIST_PROBE_INFLIGHT.remove(inflightKey);
-            }
-
-            final Long f = bytes;
-            Platform.runLater(() -> {
-                applyBytesToEntry.accept(f);
-            });
-        };
-
-        try {
-            VIDEO_SIZE_EXEC.execute(job);
-        } catch (Exception ex) {
-            new Thread(job, "playlist-size-probe").start();
-        }
-    }
 
     private void showAddLinkDialog(String prefillUrl) {
-        if (addLinkDialogOpen) {
-            // If already open, just update the field if we can.
-            if (prefillUrl != null && isHttpUrl(prefillUrl) && activeAddLinkUrlField != null) {
-                activeAddLinkUrlField.setText(prefillUrl.trim());
-                activeAddLinkUrlField.positionCaret(activeAddLinkUrlField.getText().length());
-                Platform.runLater(activeAddLinkUrlField::requestFocus);
-            }
+        if (addLinkDialogService == null) {
+            // fallback: لو ما انعمل init لأي سبب
+            try { addLinkDialogService.show(prefillUrl); } catch (Exception ignored) {}
             return;
         }
-
-        addLinkDialogOpen = true;
-        activeAddLinkUrlField = null;
-
-//        Dialog<ButtonType> dialog = new Dialog<>();
-        Dialog<ButtonType> dialog = new Dialog<>();
-        activeAddLinkDialog = dialog;
-        dialog.setTitle("Add Link");
-        dialog.setHeaderText(null);
-
-        try {
-            if (root != null && root.getScene() != null && root.getScene().getWindow() != null) {
-                dialog.initOwner(root.getScene().getWindow());
-                dialog.initModality(javafx.stage.Modality.WINDOW_MODAL);
-            }
-        } catch (Exception ignored) {}
-
-
-        DialogPane pane = dialog.getDialogPane();
-
-        installClickToDefocus(pane);
-
-        // ✅ class + inline fallback (prevents white flash even if CSS applies late)
-        pane.getStyleClass().add("gx-dialog");
-        pane.setStyle("-fx-background-color: #121826;");
-        pane.setPadding(Insets.EMPTY);
-
-        // ✅ Load CSS (same as app)
-        pane.getStylesheets().addAll(
-                getClass().getResource("/com/grabx/app/grabx/styles/theme-base.css").toExternalForm(),
-                getClass().getResource("/com/grabx/app/grabx/styles/layout.css").toExternalForm(),
-                getClass().getResource("/com/grabx/app/grabx/styles/buttons.css").toExternalForm(),
-                getClass().getResource("/com/grabx/app/grabx/styles/sidebar.css").toExternalForm()
-        );
-
-        // ✅ Fix initial white flash: apply CSS/layout BEFORE first render
-        dialog.setOnShowing(ev -> {
-            Scene sc = pane.getScene();
-            if (sc != null) {
-                sc.setFill(Color.web("#121826"));
-                sc.getRoot().setStyle("-fx-background-color: #121826;");
-            }
-            pane.applyCss();
-            pane.layout();
-        });
-
-        // Primary button = Add & Start (no checkbox)
-        //       Add & Start / addStartBtn
-        ButtonType downLoadBtn = new ButtonType("DownLoad", ButtonBar.ButtonData.OK_DONE);
-
-        pane.getButtonTypes().setAll(ButtonType.CANCEL, downLoadBtn);
-                // addStartButton
-        Button downLoadButton = (Button) pane.lookupButton(downLoadBtn);
-        downLoadButton.getStyleClass().addAll("gx-btn", "gx-btn-primary");
-
-        GridPane grid = new GridPane();
-        grid.getStyleClass().add("gx-dialog-grid");
-        grid.setHgap(12);
-        grid.setVgap(12);
-        grid.setPadding(Insets.EMPTY);
-
-        // URL
-        TextField urlField = new TextField();
-        urlField.setPromptText("Paste URL...");
-        urlField.getStyleClass().add("gx-input");
-        activeAddLinkUrlField = urlField;
-
-        // GET button (analyze)
-        Button getBtn = new Button("Get");
-        getBtn.getStyleClass().addAll("gx-btn", "gx-btn-ghost");//gx-input
-
-        getBtn.setMinWidth(90);
-
-        // Mode + Quality (disabled until analyzed as VIDEO)
-        ComboBox<String> modeCombo = new ComboBox<>();
-        // Use the same constants everywhere so comparisons never break
-        modeCombo.getItems().setAll(MODE_VIDEO, MODE_AUDIO);
-        modeCombo.getSelectionModel().select(MODE_VIDEO);
-//        modeCombo.getStyleClass().add("gx-combo");
-        modeCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality");
-
-        ComboBox<String> qualityCombo = new ComboBox<>();
-//        qualityCombo.getStyleClass().add("gx-combo");
-        qualityCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality");
-        fillQualityCombo(qualityCombo);
-        qualityCombo.setCellFactory(lv -> new ListCell<>() {
-            @Override
-            protected void updateItem(String item, boolean empty) {
-                super.updateItem(item, empty);
-                setText(empty ? null : item);
-                setDisable(QUALITY_SEPARATOR.equals(item));
-                setOpacity(QUALITY_SEPARATOR.equals(item) ? 0.55 : 1.0);
-            }
-        });
-        // also for the button cell (selected display)
-        qualityCombo.setButtonCell(new ListCell<>() {
-            @Override
-            protected void updateItem(String item, boolean empty) {
-                super.updateItem(item, empty);
-                setText(empty ? null : item);
-            }
-        });
-
-        // Track last probed video heights so we can restore the quality list when switching modes.
-        final java.util.Set<Integer>[] lastProbedHeights = new java.util.Set[]{null};
-        // Store probed size TEXT per quality label (video) so switching is instant (no yt-dlp calls on selection change)
-        final java.util.Map<String, String>[] lastProbedSizeTextByQualityLabel =
-                new java.util.Map[]{new java.util.HashMap<>()};
-
-        // Folder
-//        TextField folderField = new TextField(System.getProperty("user.home") + File.separator + "Downloads");
-        TextField folderField = new TextField(getLastDownloadFolderOrDefault());
-
-        folderField.setEditable(false);
-        folderField.getStyleClass().add("gx-input");
-
-        Button browseBtn = new Button("Browse");
-        browseBtn.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
-        browseBtn.setOnAction(e -> {
-            DirectoryChooser chooser = new DirectoryChooser();
-            chooser.setTitle("Select Download Folder");
-            File selected = chooser.showDialog(pane.getScene().getWindow());
-            if (selected != null) {
-                folderField.setText(selected.getAbsolutePath());
-                saveLastDownloadFolder(selected.getAbsolutePath());
-            }
-        });
-
-        // Info / status line inside dialog
-        Label info = new Label("Paste a link then click Get.");
-        info.getStyleClass().add("gx-text-muted");
-        info.setWrapText(true);
-        // Keep a consistent default color; errors will override temporarily
-        info.setTextFill(Color.web("#9aa4b2"));
-
-        Label sizeInfo = new Label("Estimated size: —");
-        sizeInfo.getStyleClass().add("gx-text-muted");
-        sizeInfo.setWrapText(true);
-        sizeInfo.setTextFill(Color.web("#9aa4b2"));
-
-        // Size loading animation (dots) + request token to ignore late results
-        final long[] sizeReqId = {0};
-        final boolean[] dialogAlive = { true };
-        final int[] sizeDots = {0};
-
-        javafx.animation.Timeline sizeLoadingTl = new javafx.animation.Timeline(
-                new javafx.animation.KeyFrame(javafx.util.Duration.millis(280), ev2 -> {
-                    sizeDots[0] = (sizeDots[0] % 3) + 1; // 1..3
-                    String dots = switch (sizeDots[0]) {
-                        case 1 -> ".";
-                        case 2 -> ". .";
-                        default -> ". . .";
-                    };
-                    sizeInfo.setText("Estimating: " + dots);
-                })
-        );
-        sizeLoadingTl.setCycleCount(javafx.animation.Animation.INDEFINITE);
-
-        Runnable stopSizeLoading = () -> {
-            try { sizeLoadingTl.stop(); } catch (Exception ignored) {}
-            sizeDots[0] = 0;
-        };
-
-        java.util.function.Consumer<String> setSizeText = (txt) -> {
-            stopSizeLoading.run();
-            sizeInfo.setText(txt);
-        };
-
-        Runnable startSizeLoading = () -> {
-            stopSizeLoading.run();
-            sizeInfo.setText("Estimating: .");
-            try { sizeLoadingTl.playFromStart(); } catch (Exception ignored) {}
-        };
-
-        // Rows
-        int r = 0;
-        grid.add(new Label("URL"), 0, r);
-        grid.add(urlField, 1, r);
-        grid.add(getBtn, 2, r);
-        GridPane.setHgrow(urlField, Priority.ALWAYS);
-
-        r++;
-        Label modeLbl = new Label("Mode");
-        grid.add(modeLbl, 0, r);
-        grid.add(modeCombo, 1, r);
-        GridPane.setHgrow(modeCombo, Priority.ALWAYS);
-
-        r++;
-        Label qualityLbl = new Label("Quality");
-        grid.add(qualityLbl, 0, r);
-        grid.add(qualityCombo, 1, r);
-        GridPane.setHgrow(qualityCombo, Priority.ALWAYS);
-
-        r++;
-        grid.add(new Label("Folder"), 0, r);
-        grid.add(folderField, 1, r);
-        grid.add(browseBtn, 2, r);
-        GridPane.setHgrow(folderField, Priority.ALWAYS);
-        r++;
-        grid.add(info, 1, r, 2, 1);
-        r++;
-        grid.add(sizeInfo, 1, r, 2, 1);
-
-        // Default: hide/disable mode+quality until analysis says VIDEO
-        modeCombo.setDisable(true);
-        qualityCombo.setDisable(true);
-        setManagedVisible(modeLbl, true);
-        setManagedVisible(modeCombo, true);
-        setManagedVisible(qualityLbl, true);
-        setManagedVisible(qualityCombo, true);
-
-        // Disable Add & Start until we have analyzed successfully
-        Button okBtn = (Button) pane.lookupButton(downLoadBtn);
-        okBtn.setDisable(true);
-
-        // keep last analysis
-        final ContentType[] lastType = {ContentType.UNSUPPORTED};
-
-        // Outer updateSizeAsync runnable (for use in listeners)
-        Runnable updateSizeAsync = () -> {
-            if (!dialogAlive[0]) return;
-            String u = urlField.getText() == null ? "" : urlField.getText().trim();
-            if (u.isBlank()) {
-                setSizeText.accept("Estimated size: —");
-                return;
-            }
-            // Build a stable cache key (include mode + quality)
-            String modeV = modeCombo.getValue() == null ? "" : modeCombo.getValue();
-            String qV = qualityCombo.getValue() == null ? "" : qualityCombo.getValue();
-            String key = u + "|" + modeV + "|" + qV;
-
-            // If cached -> show immediately and stop (no probing)
-            Long cached = SIZE_CACHE.get(key);
-            if (cached != null && cached > 0) {
-                setSizeText.accept("Estimated size: " + formatBytesDecimal(cached));
-                return;
-            }
-            setSizeText.accept("Estimated size: — ");
-
-            // New request id so late background results won't override newer selections
-            final long rid = ++sizeReqId[0];
-
-            if (lastType[0] == ContentType.DIRECT_FILE) {
-                startSizeLoading.run();
-                new Thread(() -> {
-                    Long bytes = probeContentLength(u);
-                    if (bytes != null && bytes > 0) SIZE_CACHE.put(key, bytes);
-                    Platform.runLater(() -> {
-                        if (rid != sizeReqId[0]) return;
-                        if (bytes != null && bytes > 0) setSizeText.accept("Estimated size: " + formatBytesDecimal(bytes));
-                        else{
-                            if (!dialogAlive[0]) return;
-                            setSizeText.accept("Estimated size: — ");
-                        }
-                    });
-                }, "probe-size-head").start();
-                return;
-            }
-
-            if (lastType[0] == ContentType.VIDEO) {
-                // Ignore separator selection
-                if (QUALITY_SEPARATOR.equals(qV)) {
-                    setSizeText.accept("Estimated size: — ");
-                    return;
-                }
-
-                // ✅ Instant: if we probed size text on Get, show immediately (no yt-dlp call here)
-                if (MODE_VIDEO.equals(modeV)) {
-                    String qLabel = (qV == null || qV.isBlank()) ? QUALITY_BEST : qV;
-                    String txt = lastProbedSizeTextByQualityLabel[0].get(qLabel);
-                    if (txt != null && !txt.isBlank()) {
-                        String t = txt.trim();
-                        setSizeText.accept("Estimated size: " + txt.trim());
-                        return;
-                    }
-                }
-
-                startSizeLoading.run();
-                // Compute EXACT size for the currently selected quality (single yt-dlp call),
-                // and cache it so future switches are instant.
-                final String qLabel = (qV == null || qV.isBlank()) ? QUALITY_BEST : qV;
-                final String inflightKey = u + "||" + modeV + "||" + qLabel;
-
-                if (!VIDEO_SIZE_INFLIGHT.add(inflightKey)) return; // already running
-
-                try {
-                    VIDEO_SIZE_EXEC.execute(() -> {
-                        Long bytes = null;
-                        try {
-                            if (MODE_VIDEO.equals(modeV)) {
-                                if (QUALITY_BEST.equals(qLabel)) {
-                                    bytes = fetchCombinedSizeBytesWithYtDlpPrint(u, "bv*+ba/b");
-                                } else {
-                                    int h = parseHeightFromLabel(qLabel);
-                                    String selector = (h > 0) ? buildFormatSelectorForHeight(h) : "bv*+ba/b";
-                                    bytes = fetchCombinedSizeBytesWithYtDlpPrint(u, selector);
-                                }
-                            } else {
-                                // Audio mode keeps existing behavior
-                                bytes = fetchSizeWithYtDlp(u, modeV, qV);
-                            }
-
-                            if (bytes != null && bytes > 0) {
-                                SIZE_CACHE.put(key, bytes);
-                            }
-                        } catch (Exception ignored) {
-                        } finally {
-                            VIDEO_SIZE_INFLIGHT.remove(inflightKey);
-                        }
-
-                        final Long fbytes = bytes;
-                        Platform.runLater(() -> {
-                            if (rid != sizeReqId[0]) return;
-                            if (fbytes != null && fbytes > 0) setSizeText.accept("Estimated size: " + formatBytesDecimal(fbytes));
-                            else {
-                                if (!dialogAlive[0]) return;
-                                setSizeText.accept("Estimated size: —");
-
-                            }
-                        });
-                    });
-                } catch (RejectedExecutionException rex) {
-                    // Pool is full; cannot probe now
-                    VIDEO_SIZE_INFLIGHT.remove(inflightKey);
-                    Platform.runLater(() -> {
-                        if (rid != sizeReqId[0]) return;
-                        setSizeText.accept("Estimated size: —");
-                    });
-                }
-                return;
-            }
-            // PLAYLIST / UNSUPPORTED
-            setSizeText.accept("Estimated size: —");
-        };
-
-        // When mode changes, swap the Quality dropdown contents accordingly.
-        modeCombo.valueProperty().addListener((obsM, oldM, newM) -> {
-            if (newM == null) return;
-            if (MODE_AUDIO.equals(newM)) {
-                qualityCombo.getItems().setAll(buildAudioOptions());
-                // Default audio format in UI
-                qualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
-            } else {
-                // Restore video qualities (prefer the ones we probed; otherwise safe fallback)
-                fillQualityComboFromHeights(qualityCombo, lastProbedHeights[0]);
-                qualityCombo.getSelectionModel().select(QUALITY_BEST);
-            }
-
-            // If Get already succeeded for a video, refresh the estimated size
-            if (!okBtn.isDisabled() && lastType[0] == ContentType.VIDEO) {
-                updateSizeAsync.run();
-            }
-        });
-
-        qualityCombo.valueProperty().addListener((obsQ, oldQ, newQ) -> {
-            if (okBtn.isDisabled()) return;            // فقط بعد ما Get ينجح
-            if (lastType[0] != ContentType.VIDEO) return;
-            if (newQ == null) return;
-            if (QUALITY_SEPARATOR.equals(newQ)) return;
-            updateSizeAsync.run();
-        });
-
-        Runnable applyTypeToUi = () -> {
-            ContentType t = lastType[0];
-
-            if (t == ContentType.VIDEO) {
-                modeCombo.setDisable(false);
-                qualityCombo.setDisable(false);
-                // Ensure Quality list matches current Mode
-                if (MODE_AUDIO.equals(modeCombo.getValue())) {
-                    qualityCombo.getItems().setAll(buildAudioOptions());
-                    if (qualityCombo.getValue() == null || qualityCombo.getValue().isBlank()
-                            || QUALITY_SEPARATOR.equals(qualityCombo.getValue())
-                            || QUALITY_BEST.equals(qualityCombo.getValue())) {
-                        qualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
-                    }
-                }
-                info.setText("Detected: Video. Choose mode/quality then Add & Start.");
-                info.setTextFill(Color.web("#9aa4b2"));
-                okBtn.setDisable(false);
-            } else if (t == ContentType.PLAYLIST) {
-                modeCombo.setDisable(true);
-                qualityCombo.setDisable(true);
-                info.setText("Detected: Playlist. Opening Playlist screen...");
-                info.setTextFill(Color.web("#9aa4b2"));
-                // Add is handled from the Playlist screen
-                okBtn.setDisable(true);
-            } else if (t == ContentType.DIRECT_FILE) {
-                modeCombo.setDisable(true);
-                qualityCombo.setDisable(true);
-                info.setText("Detected: Direct file/link. Ready to Add & Start.");
-                info.setTextFill(Color.web("#9aa4b2"));
-                okBtn.setDisable(false);
-            } else {
-                // Unsupported / invalid / empty
-                modeCombo.setDisable(true);
-                qualityCombo.setDisable(true);
-                info.setText("Unsupported or invalid URL.");
-                info.setTextFill(Color.web("#ff4d4d"));
-                okBtn.setDisable(true);
-            }
-        };
-
-        getBtn.setOnAction(e -> {
-            String url = urlField.getText() == null ? "" : urlField.getText().trim();
-            if (url.isBlank()) {
-                // Empty URL -> guide the user and STOP (do not probe)
-                lastType[0] = ContentType.UNSUPPORTED;
-
-                modeCombo.setDisable(true);
-                qualityCombo.setDisable(true);
-
-                // Reset quality list based on current mode
-                if (MODE_AUDIO.equals(modeCombo.getValue())) {
-                    qualityCombo.getItems().setAll(buildAudioOptions());
-                    qualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
-                } else {
-                    fillQualityCombo(qualityCombo);
-                }
-
-                info.setText("Paste a link then click Get.");
-                info.setTextFill(Color.web("#ff4d4d"));
-                okBtn.setDisable(true);
-                setSizeText.accept("Estimated size: —");
-                return;
-            }
-            System.out.println("Before analyze:  " + url+"\n");
-            lastType[0] = analyzeUrlType(url);
-            System.out.println("After analyze:  " + url+"\n");
-
-            if (lastType[0] == ContentType.VIDEO) {
-                info.setText("Analyzing formats...");
-                info.setTextFill(Color.web("#9aa4b2"));
-
-                new Thread(() -> {
-                    VideoInfo vi = probeOnceFast(url); // one call only
-
-                    Platform.runLater(() -> {
-                        if (vi == null || vi.heights == null || vi.heights.isEmpty()) {
-                            fillQualityCombo(qualityCombo);
-                        } else {
-                            fillQualityComboFromHeights(qualityCombo, vi.heights);
-                            lastProbedHeights[0] = vi.heights;
-                        }
-
-                        applyTypeToUi.run();
-                        okBtn.setDisable(false);
-                    });
-                }, "probe-fast").start();
-
-                return;
-            }
-
-
-            if (lastType[0] == ContentType.PLAYLIST) {
-
-                // We are jumping to Playlist UI from Add Link
-                reopenAddLinkAfterPlaylist = true;
-                reopenAddLinkPrefillUrl = url; // restore same playlist URL when coming back
-
-                saveLastDownloadFolder(folderField.getText());
-
-
-                try {
-                    if (activeAddLinkDialog != null) activeAddLinkDialog.hide();
-                } catch (Exception ignored) {}
-
-                openPlaylistWindow(url, folderField.getText());
-
-                return;
-            }
-
-            applyTypeToUi.run();
-            updateSizeAsync.run();
-        });
-
-        // UX: pressing Enter in URL triggers Get
-        urlField.setOnAction(e -> getBtn.fire());
-
-        // If user edits URL after Get, require Get again
-        urlField.textProperty().addListener((obs, oldV, newV) -> {
-            lastType[0] = ContentType.UNSUPPORTED;
-            lastProbedSizeTextByQualityLabel[0].clear();
-            okBtn.setDisable(true);
-            modeCombo.setDisable(true);
-            qualityCombo.setDisable(true);
-            // Reset quality list according to the currently selected mode
-            if (MODE_AUDIO.equals(modeCombo.getValue())) {
-                qualityCombo.getItems().setAll(buildAudioOptions());
-                qualityCombo.getSelectionModel().select(AUDIO_DEFAULT_FORMAT);
-            } else {
-                fillQualityCombo(qualityCombo);
-            }
-            info.setText("Paste a link then click Get.");
-            info.setTextFill(Color.web("#9aa4b2"));
-            setSizeText.accept("Estimated size: — ");
-        });
-
-        pane.setContent(grid);
-        pane.setPrefWidth(760);
-
-        final String effectivePrefill = (prefillUrl != null && !prefillUrl.isBlank())
-                ? prefillUrl.trim()
-                : (pendingAddLinkPrefillUrl != null && !pendingAddLinkPrefillUrl.isBlank()
-                ? pendingAddLinkPrefillUrl.trim()
-                : null);
-
-        if (effectivePrefill != null) {
-            urlField.setText(effectivePrefill);
-            pendingAddLinkPrefillUrl = null; // consume once
-        }
-
-
-        dialog.setOnShown(ev -> Platform.runLater(() -> {
-            bringWindowToFront(pane.getScene() == null ? null : pane.getScene().getWindow());
-            urlField.requestFocus();
-            urlField.positionCaret(urlField.getText() == null ? 0 : urlField.getText().length());
-        }));
-
-        dialog.setOnHidden(ev -> {
-            dialogAlive[0] = false;
-            sizeReqId[0]++;
-            addLinkDialogOpen = false;
-            activeAddLinkUrlField = null;
-            activeAddLinkDialog = null;
-        });
-
-        dialog.setResultConverter(btn -> btn);
-        dialog.resultProperty().addListener((obs, oldRes, res) -> {
-            if (res != downLoadBtn) return;
-            String url = urlField.getText() == null ? "" : urlField.getText().trim();
-            ContentType t = lastType[0];
-            saveLastDownloadFolder(folderField.getText());
-            // Temporary behavior until we wire the real downloader engine:
-            if (t == ContentType.VIDEO) {
-                addDownloadItemToList(url, folderField.getText(), modeCombo.getValue(), qualityCombo.getValue());
-                saveDownloadHistoryAsync();
-            } else if (t == ContentType.DIRECT_FILE) {
-                addDownloadItemToList(url, folderField.getText(), "Direct", "Auto");
-                saveDownloadHistoryAsync();
-            } else if (t == ContentType.PLAYLIST) {
-                if (statusText != null) statusText.setText("Playlist detected (UI next): " + shorten(url));
-            } else {
-                if (statusText != null) statusText.setText("Unsupported: " + shorten(url));
-            }
-        });
-        dialog.show();
+        addLinkDialogService.show(prefillUrl);
     }
+
     private void closeActiveAddLinkDialogIfOpen() {
         try {
             if (activeAddLinkDialog != null) {
@@ -2837,41 +1772,9 @@ public class MainController {
 
 
     private void ensureDownloadsListView() {
-        // If FXML did not inject it, create it and mount it in the center.
-        if (downloadsList == null) {
-            downloadsList = new ListView<>();
-            downloadsList.getStyleClass().add("gx-task-list");
-            downloadsList.setStyle("-fx-background-color: transparent;");
-            // If root is BorderPane and center is empty, mount it.
-            try {
-                if (root instanceof BorderPane bp && bp.getCenter() == null) {
-                    bp.setCenter(downloadsList);
-                }
-            } catch (Exception ignored) {
-            }
-        }
+        if (downloadsList == null) return;
 
-//        downloadsList.setItems(downloadItems);
-
-        // Stable, fixed ordering: never re-order when state changes (Completed stays in place)
-        FilteredList<DownloadRow> filtered = new FilteredList<>(downloadItems, r -> true);
-        SortedList<DownloadRow> sorted = new SortedList<>(filtered);
-
-        // ✅ Fixed order by creation order (newest first)
-        sorted.setComparator(java.util.Comparator.comparingLong((DownloadRow r) -> r.orderIndex).reversed());
-
-        // IMPORTANT: use the actual ListView variable name you have:
-        downloadsList.setItems(sorted);
-        // or: downloadsListView.setItems(sorted);
-
-        // Prewarm yt-dlp binary in background at startup
-        com.grabx.app.grabx.util.YtDlpManager.prewarmAsync();
-        if (filteredDownloadItems == null) {
-            filteredDownloadItems = new FilteredList<>(downloadItems, r -> true);
-        }
-        downloadsList.setItems(filteredDownloadItems);
-
-        downloadsList.setFocusTraversable(false);
+        downloadsList.setItems(downloadService.view());
 
         downloadsList.setCellFactory(lv -> new ListCell<>() {
             private final Label title = new Label();
@@ -3251,7 +2154,7 @@ public class MainController {
 
                 meta.getStyleClass().add("gx-task-meta");
 
-        // Footer / metrics: unify font + color + size
+                // Footer / metrics: unify font + color + size
                 status.getStyleClass().addAll("gx-task-status", "gx-task-metric");
                 speed.getStyleClass().addAll("gx-task-status", "gx-task-metric");
                 eta.getStyleClass().addAll("gx-task-status", "gx-task-metric");
@@ -3402,19 +2305,19 @@ public class MainController {
                 pauseBtn.setOnAction(e -> {
                     DownloadRow it = getItem();
                     if (it == null) return;
-                    pauseDownloadRow(it);
+                    downloadStateCoordinator.pause(it);
                 });
 
                 resumeBtn.setOnAction(e -> {
                     DownloadRow it = getItem();
                     if (it == null) return;
-                    resumeDownloadRow(it);
+                    downloadStateCoordinator.resume(it);
                 });
 
                 cancelBtn.setOnAction(e -> {
                     DownloadRow it = getItem();
                     if (it == null) return;
-                    cancelDownloadRow(it);
+                    downloadStateCoordinator.cancel(it);
                 });
 
                 clearBtn.setOnAction(e -> {
@@ -3529,7 +2432,6 @@ public class MainController {
                             downloadItems.remove(it);
                             updateMissingSidebarItem();
                         } catch (Exception ignored) {}
-                        try { scheduleHistorySave(); } catch (Exception ignored) {}
                     });
                 });
 
@@ -3572,18 +2474,13 @@ public class MainController {
                             // Mark as missing (file was removed from disk)
                             try {
                                 it.setState(DownloadRow.State.MISSING);
-                                if (filteredDownloadItems != null) {
-                                    filteredDownloadItems.setPredicate(filteredDownloadItems.getPredicate());
-                                }
                             } catch (Exception ignored) {}
 
                             Platform.runLater(() -> {
                                 try { updateMissingSidebarItem(); } catch (Exception ignored) {}
-                                try { scheduleHistorySave(); } catch (Exception ignored) {}
-                                try { forceRefilterAndRefresh(); } catch (Exception ignored) {}
+                                try { downloadService.refilter(); } catch (Exception ignored) {}
                             });
                         }
-
                     } catch (Exception ignored) {}
                 });
 
@@ -3592,7 +2489,7 @@ public class MainController {
                     if (it == null) return;
 
                     // أوقف أي Process شغال
-                    try { cancelDownloadRow(it); } catch (Exception ignored) {}
+                    try { downloadStateCoordinator.cancel(it); } catch (Exception ignored) {}
 
                     // Reset
                     it.progress.set(0);
@@ -3895,6 +2792,14 @@ public class MainController {
         }
     }
 
+    /** Backwards-compatible helper so existing code can keep calling installTooltip(...) */
+    private void installTooltip(javafx.scene.control.Button btn, String text) {
+        try {
+            if (hoverTooltipService != null) {
+                hoverTooltipService.install(btn, text);
+            }
+        } catch (Exception ignored) {}
+    }
 
     private void addDownloadItemToList(String url, String folder, String mode, String quality) {
         ensureDownloadsListView();
@@ -3903,6 +2808,7 @@ public class MainController {
         if (initialTitle == null || initialTitle.isBlank()) initialTitle = "New item";
 
         DownloadRow row = new DownloadRow(url, initialTitle,downloadOrderSeq.getAndIncrement(),folder, mode, quality);
+        if (historyService != null) historyService.attachAutoSave(row);
         // خَلّي “Loading/Preparing” في status مش في العنوان
         row.status.set("Preparing");
 
@@ -3945,17 +2851,13 @@ public class MainController {
         } catch (Exception ignored) {}
 
         // ✅ أي تغيير مهم = احفظ التاريخ (العنوان/الحالة/مسار الملف)
-        try {
-            row.title.addListener((o, a, b) -> scheduleHistorySave());
-            row.state.addListener((o, a, b) -> scheduleHistorySave());
-            row.outputFile.addListener((o, a, b) -> scheduleHistorySave());
-        } catch (Exception ignored) {
-        }
+
 
         Platform.runLater(() -> {
             downloadItems.add(0, row);
+            if (historyService != null) historyService.scheduleSave();
+
             startDownloadRow(row, false);
-            scheduleHistorySave();
         });
 
         if (statusText != null) statusText.setText("Queued: " + row.title.get());
@@ -3977,7 +2879,6 @@ public class MainController {
                         row.setTitleOnce(makeUniqueUiTitle(fallback, row));
                         if (statusText != null) statusText.setText("Queued: " + fallback);
                     }
-                    scheduleHistorySave();
                 });
             }, "title-oembed").start();
         }
@@ -4474,6 +3375,8 @@ public class MainController {
                         row.size.set("");
                         row.speed.set("");
                         row.eta.set("");
+                        try { if (historyService != null) historyService.scheduleSave(); } catch (Exception ignored) {}
+
                         return;
                     }
 
@@ -4484,12 +3387,13 @@ public class MainController {
                         row.size.set("");
                         row.speed.set("");
                         row.eta.set("");
+                        try { if (historyService != null) historyService.scheduleSave(); } catch (Exception ignored) {}
+
                         return;
                     }
 
                     if (code == 0) {
                         row.setState(DownloadRow.State.COMPLETED);
-                        try { scheduleHistorySave(); } catch (Exception ignored) {}
                         // CHANGED: set final size from disk if possible
                         try {
                             java.nio.file.Path out = null;
@@ -4507,6 +3411,8 @@ public class MainController {
                         lastProgressMap.put(row, 1.0);
                         row.speed.set("");
                         row.eta.set("");
+                        try { if (historyService != null) historyService.scheduleSave(); } catch (Exception ignored) {}
+
                     } else {
                         row.setState(DownloadRow.State.FAILED);
                         String err = lastError[0];
@@ -4522,6 +3428,8 @@ public class MainController {
                         row.size.set("");
                         row.speed.set("");
                         row.eta.set("");
+                        try { if (historyService != null) historyService.scheduleSave(); } catch (Exception ignored) {}
+
                     }
                 });
 
@@ -4535,6 +3443,8 @@ public class MainController {
                     row.size.set("");
                     row.speed.set("");
                     row.eta.set("");
+                    try { if (historyService != null) historyService.scheduleSave(); } catch (Exception ignored) {}
+
                 });
             }
         }, "yt-dlp-download").start();
@@ -4872,78 +3782,6 @@ public class MainController {
         return String.format(java.util.Locale.US, "%.1f %s", value, unit);
     }
 
-    private void pauseDownloadRow(DownloadRow row) {
-        if (row == null) return;
-
-        final Process p = activeProcesses.get(row);
-
-        if (p == null || !p.isAlive()) {
-            Platform.runLater(() -> {
-                row.setState(DownloadRow.State.PAUSED);
-                row.status.set("Paused");
-                row.speed.set("");
-                row.eta.set("");
-            });
-            return;
-        }
-
-        // مهم: عشان waitFor ما يعتبرها FAILED
-        stopReasons.put(row, "PAUSE");
-
-        // اقتل yt-dlp + ffmpeg children
-        killProcessTree(p);
-
-        Platform.runLater(() -> {
-            row.setState(DownloadRow.State.PAUSED);
-            row.status.set("Paused");
-            row.speed.set("");
-            row.eta.set("");
-        });
-    }
-
-    private void cancelDownloadRow(DownloadRow row) {
-        if (row == null) return;
-
-        // مهم: عشان waitFor ما يعتبرها FAILED
-        stopReasons.put(row, "CANCEL");
-
-        final Process p = activeProcesses.get(row);
-
-        // حدّث UI فورًا
-        Platform.runLater(() -> {
-            row.setState(DownloadRow.State.CANCELLED);
-            updateMissingSidebarItem();
-            row.status.set("Cancelled");
-            row.speed.set("");
-            row.eta.set("");
-            // خلي progress زي ما هو (setState بتتعامل مع indeterminate)
-        });
-
-        // لو ما في process شغّال
-        if (p == null || !p.isAlive()) {
-            activeProcesses.remove(row);
-            return;
-        }
-
-        // اقتل yt-dlp + ffmpeg children (cross-platform)
-        try {
-            killProcessTree(p);
-        } catch (Exception ignored) {}
-
-        // تنظيف سريع (حتى لو waitFor كمان رح يشيله)
-        try { activeProcesses.remove(row); } catch (Exception ignored) {}
-    }
-
-    private void resumeDownloadRow(DownloadRow row) {
-        if (row == null) return;
-        DownloadRow.State st;
-        try { st = row.state.get(); } catch (Exception e) { st = DownloadRow.State.QUEUED; }
-        if (st == DownloadRow.State.DOWNLOADING) return;
-
-        stopReasons.remove(row);
-        startDownloadRow(row, true); // --continue
-    }
-
     // --- Thumbnail helpers and cache ---
     private static final java.util.Map<String, javafx.scene.image.Image> MAIN_THUMB_CACHE =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -5006,7 +3844,7 @@ public class MainController {
         return null;
     }
 
-    public static String thumbFromUrl(String url) {
+    public String thumbFromUrl(String url) {
         String id = extractYoutubeId(url);
         if (id == null || id.isBlank()) return null;
         return "https://img.youtube.com/vi/" + id + "/hqdefault.jpg";
@@ -5111,9 +3949,8 @@ public class MainController {
             } catch (Exception ignored) {}
 
             // refresh view + sidebar
-            try { forceRefilterAndRefresh(); } catch (Exception ignored) {}
+            try { downloadService.refilter();} catch (Exception ignored) {}
             try { updateMissingSidebarItem(); } catch (Exception ignored) {}
-            try { scheduleHistorySave(); } catch (Exception ignored) {}
         });
     }
 
@@ -5181,7 +4018,7 @@ public class MainController {
         calcSize.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
         calcSize.setDisable(true);
 
-            // Sequential probing (top -> bottom)
+        // Sequential probing (top -> bottom)
         final java.util.Set<String> qualitiesInflight = java.util.concurrent.ConcurrentHashMap.newKeySet();
         final java.util.concurrent.atomic.AtomicInteger probeIndex = new java.util.concurrent.atomic.AtomicInteger(0);
         final java.util.concurrent.atomic.AtomicBoolean probingNow = new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -5511,638 +4348,766 @@ public class MainController {
             userQualityInteracted.set(true);
         });
 
-            Runnable startNextProbe = new Runnable() {
-                @Override
-                public void run() {
-                    if (probingNow.getAndSet(true)) return; // already running
+        Runnable startNextProbe = new Runnable() {
+            @Override
+            public void run() {
+                if (probingNow.getAndSet(true)) return; // already running
 
-                    // find next item to probe
-                    int i = probeIndex.get();
-                    while (i < items.size()) {
-                        PlaylistEntry it = items.get(i);
-                        i++;
+                // find next item to probe
+                int i = probeIndex.get();
+                while (i < items.size()) {
+                    PlaylistEntry it = items.get(i);
+                    i++;
 
-                        if (it == null || it.isUnavailable()) continue;
-                        if (it.isQualitiesLoaded()) continue; // already ready
+                    if (it == null || it.isUnavailable()) continue;
+                    if (it.isQualitiesLoaded()) continue; // already ready
 
-                        String vid = it.getId();
-                        if (vid == null || vid.isBlank()) continue;
+                    // ✅ Probe only selected rows
+                    if (!it.isSelected()) continue;
 
-                        // de-dupe inflight
-                        if (!qualitiesInflight.add(vid)) continue;
+                    String vid = it.getId();
+                    if (vid == null || vid.isBlank()) continue;
 
-                        probeIndex.set(i); // next position for later
+                    // de-dupe inflight
+                    if (!qualitiesInflight.add(vid)) continue;
 
-                        String url = youtubeWatchUrl(vid);
+                    probeIndex.set(i); // next position for later
 
-                        boolean queued = probeVideoQualitiesAsync(url, vid, pr -> {
-                            try {
-                                java.util.Set<Integer> heights = (pr == null) ? java.util.Set.of() : pr.heights;
-                                java.util.Set<Integer> norm = normalizeHeights(heights);
+                    String url = youtubeWatchUrl(vid);
 
-                                if (norm != null && !norm.isEmpty()) {
-                                    globalHeightsUnion.addAll(norm);
+                    boolean queued = probeVideoQualitiesAsync(url, vid, pr -> {
+                        try {
+                            java.util.Set<Integer> heights = (pr == null) ? java.util.Set.of() : pr.heights;
+                            java.util.Set<Integer> norm = normalizeHeights(heights);
+
+                            if (norm != null && !norm.isEmpty()) {
+                                globalHeightsUnion.addAll(norm);
+                            }
+                            Platform.runLater(updateGlobalQualityCombo);
+
+                            java.util.ArrayList<String> labels = new java.util.ArrayList<>();
+                            labels.add(QUALITY_BEST);
+                            labels.add(QUALITY_SEPARATOR);
+
+                            java.util.List<Integer> sorted = (norm == null)
+                                    ? new java.util.ArrayList<>()
+                                    : new java.util.ArrayList<>(norm);
+                            sorted.sort(java.util.Comparator.reverseOrder());
+                            for (Integer h : sorted) labels.add(formatHeightLabel(h));
+
+                            it.setAvailableQualities(labels);
+
+                            // don't compute sizes here; keep empty map
+                            if (it.getSizeByQuality() == null) it.setSizeByQuality(new java.util.HashMap<>());
+
+                            // apply desired (video)
+                            if (!MODE_AUDIO.equals(globalDesiredMode.get())) {
+                                String desired = it.getQuality();
+                                if (!it.isManualQuality()) {
+                                    desired = globalDesiredQuality.get();
+                                    if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
                                 }
-                                Platform.runLater(updateGlobalQualityCombo);
+                                String supported = pickClosestSupportedQuality(desired, it.getAvailableQualities());
+                                it.setQuality(supported);
+                            }
 
-                                java.util.ArrayList<String> labels = new java.util.ArrayList<>();
-                                labels.add(QUALITY_BEST);
-                                labels.add(QUALITY_SEPARATOR);
+                            // ✅ READY now
+                            it.setQualitiesLoaded(true);
 
-                                java.util.List<Integer> sorted = (norm == null)
-                                        ? new java.util.ArrayList<>()
-                                        : new java.util.ArrayList<>(norm);
-                                sorted.sort(java.util.Comparator.reverseOrder());
-                                for (Integer h : sorted) labels.add(formatHeightLabel(h));
+                        } catch (Exception ignored) {
+                            it.setQualitiesLoaded(false); // allow retry
+                        } finally {
+                            qualitiesInflight.remove(vid);
+                            Platform.runLater(() -> {
+                                requestRefreshSafe.run();
+                                probingNow.set(false);
+                                // continue with next item
+                                this.run();
+                            });
+                        }
+                    });
 
-                                it.setAvailableQualities(labels);
+                    if (!queued) {
+                        qualitiesInflight.remove(vid);
+                        probingNow.set(false);
+                        // try again later / move on
+                        Platform.runLater(this);
+                    }
+                    return;
+                }
 
-                                // don't compute sizes here; keep empty map
-                                if (it.getSizeByQuality() == null) it.setSizeByQuality(new java.util.HashMap<>());
+                // done
+                probingNow.set(false);
+            }
+        };
 
-                                // apply desired (video)
-                                if (!MODE_AUDIO.equals(globalDesiredMode.get())) {
-                                    String desired = it.getQuality();
-                                    if (!it.isManualQuality()) {
-                                        desired = globalDesiredQuality.get();
-                                        if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
-                                    }
-                                    String supported = pickClosestSupportedQuality(desired, it.getAvailableQualities());
-                                    it.setQuality(supported);
-                                }
+        // Probe qualities sequentially (NO size) - kick the queue only
+        java.util.function.Consumer<PlaylistEntry> ensureProbed = (PlaylistEntry it) -> {
+            if (it == null) return;
+            if (it.isUnavailable()) return;
+            // لا تغيّر flags هنا — startNextProbe هو المسؤول الوحيد
+            Platform.runLater(startNextProbe);
+        };
 
-                                // ✅ READY now
-                                it.setQualitiesLoaded(true);
 
-                            } catch (Exception ignored) {
-                                it.setQualitiesLoaded(false); // allow retry
-                            } finally {
-                                qualitiesInflight.remove(vid);
+
+        list.setCellFactory(lv -> new ListCell<>() {
+
+            private final CheckBox cb = new CheckBox();
+            private final Label title = new Label();
+            private final javafx.scene.control.Tooltip titleTip = new javafx.scene.control.Tooltip();
+            private final PauseTransition titleTipThrottle = new PauseTransition(Duration.millis(45));
+            private String lastTitleForTip = null;
+            private final Label meta = new Label();
+
+            private final VBox textBox = new VBox(4);
+
+            private final StackPane thumbBox = new StackPane();
+            private final ImageView thumb = new ImageView();
+            private final Label placeholder = new Label("NO PREVIEW");
+
+            private final ComboBox<String> qualityCombo = new ComboBox<>();
+            private boolean updatingRowCombo = false;
+            private boolean suppressQualityListener = false;
+            private boolean suppressCheckListener = false;
+
+            private final HBox card = new HBox(12);
+
+            private boolean isChildOf(javafx.scene.Node n, javafx.scene.Node parent) {
+                if (n == null || parent == null) return false;
+                javafx.scene.Node cur = n;
+                while (cur != null) {
+                    if (cur == parent) return true;
+                    cur = cur.getParent();
+                }
+                return false;
+            }
+
+            {
+                setStyle("-fx-background-color: transparent;");
+
+                cb.getStyleClass().addAll("gx-check", "gx-playlist-check");
+                cb.setFocusTraversable(false);
+
+                thumb.setFitWidth(96);
+                thumb.setFitHeight(54);
+                thumb.setPreserveRatio(true);
+                thumb.setSmooth(true);
+
+                placeholder.getStyleClass().add("gx-playlist-thumb-placeholder");
+
+                thumbBox.getStyleClass().add("gx-playlist-thumb");
+                thumbBox.getChildren().addAll(thumb, placeholder);
+
+                // Use the same typography as the main list (keep playlist class too)
+                title.getStyleClass().addAll("gx-task-title", "gx-playlist-title");
+                // Force numbering to stay on the left even when the title contains RTL text
+                title.setNodeOrientation(javafx.geometry.NodeOrientation.LEFT_TO_RIGHT);
+                title.setTextAlignment(javafx.scene.text.TextAlignment.LEFT);
+                title.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+
+                title.setWrapText(false);
+                // prevent long titles from expanding the row/card; show ellipsis + tooltip
+                title.setMinWidth(0);
+                title.setMaxWidth(Double.MAX_VALUE);
+                title.setPrefWidth(0);
+                title.setTextOverrun(javafx.scene.control.OverrunStyle.ELLIPSIS);
+
+                titleTip.setWrapText(true);
+                titleTip.setMaxWidth(520);
+
+                // UX timing – feels native & light
+                titleTip.setShowDelay(Duration.millis(300));
+                titleTip.setHideDelay(Duration.millis(80));
+                titleTip.setShowDuration(Duration.hours(1));
+
+                Runnable refreshTitleTooltip = () -> {
+                    try {
+                        PlaylistEntry it = getItem();
+                        if (it == null || isEmpty()) {
+                            title.setTooltip(null);
+                            return;
+                        }
+                        // Only show tooltip when the visible label text is actually truncated.
+                        boolean truncated = isLabelTextTruncated(title);
+                        title.setTooltip(truncated ? titleTip : null);
+                    } catch (Exception ignored) {
+                        try { title.setTooltip(null); } catch (Exception ignored2) {}
+                    }
+                };
+
+                titleTipThrottle.setOnFinished(ev -> refreshTitleTooltip.run());
+
+                // Re-evaluate when width changes (layout) or when text changes.
+                title.widthProperty().addListener((o, a, b) -> {
+                    titleTipThrottle.stop();
+                    titleTipThrottle.playFromStart();
+                });
+                title.textProperty().addListener((o, a, b) -> {
+                    titleTipThrottle.stop();
+                    titleTipThrottle.playFromStart();
+                });
+
+                // Hold ListView refresh while the user is hovering the title (prevents tooltip from disappearing due to cell refresh)
+                title.hoverProperty().addListener((o, was, isNow) -> anyTitleHoverHold.set(isNow));
+
+                // Do NOT install tooltip here; we install/uninstall per-row only when truncated (see updateItem)
+
+                meta.getStyleClass().addAll("gx-task-meta", "gx-playlist-meta");
+
+                textBox.getChildren().addAll(title, meta);
+                HBox.setHgrow(textBox, Priority.ALWAYS);
+                textBox.setMinWidth(0);
+                textBox.setMaxWidth(Double.MAX_VALUE);
+                // Allow the VBox to shrink (so the row doesn't force horizontal expansion)
+                textBox.setPrefWidth(0);
+
+                qualityCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality", "gx-playlist-item-combo");
+                qualityCombo.setPrefWidth(PLAYLIST_Q_COMBO_W);
+                qualityCombo.setMinWidth(PLAYLIST_Q_COMBO_W);
+                qualityCombo.setMaxWidth(240);
+                qualityCombo.setDisable(true);
+
+                qualityCombo.setCellFactory(x -> new ListCell<>() {
+                    @Override
+                    protected void updateItem(String item, boolean empty) {
+                        super.updateItem(item, empty);
+                        setText(empty ? null : item);
+                        setDisable(QUALITY_SEPARATOR.equals(item));
+                        setOpacity(QUALITY_SEPARATOR.equals(item) ? 0.55 : 1.0);
+                    }
+                });
+                qualityCombo.setButtonCell(new ListCell<>() {
+                    @Override
+                    protected void updateItem(String item, boolean empty) {
+                        super.updateItem(item, empty);
+                        setText(empty ? null : item);
+                    }
+                });
+
+                qualityCombo.showingProperty().addListener((obs, was, isNow) -> anyQualityPopupOpen.set(isNow));
+
+                qualityCombo.valueProperty().addListener((obs, old, val) -> {
+                    if (updatingRowCombo || suppressQualityListener) return;
+                    if (val == null) return;
+                    if (QUALITY_SEPARATOR.equals(val) || QUALITY_CUSTOM.equals(val)) return;
+
+                    PlaylistEntry it = getItem();
+                    if (it == null || it.isUnavailable()) return;
+
+                    userQualityInteracted.set(true);
+
+                    it.setQuality(val);
+
+                    String modeNow = globalDesiredMode.get();
+                    if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
+
+                    // Playlist screen: no size probing (sizes appear in main downloads list)
+                    String desired = globalDesiredQuality.get();
+                    if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
+
+                    String globalMapped;
+                    if (MODE_AUDIO.equals(modeNow)) {
+                        globalMapped = desired;
+                    } else {
+                        java.util.List<String> avail = it.getAvailableQualities();
+                        globalMapped = (avail == null || avail.isEmpty())
+                                ? desired
+                                : pickClosestSupportedQuality(desired, avail);
+                    }
+
+                    boolean manual = !val.equals(globalMapped);
+                    it.setManualQuality(manual);
+
+                    meta.setText(buildMetaLine(it)); // (will no longer show sizes because we never fill size map)
+                    Platform.runLater(updateGlobalMixedState);
+                });
+
+                card.getStyleClass().add("gx-playlist-card");
+                card.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+                card.getChildren().addAll(cb, thumbBox, textBox, qualityCombo);
+                // Force each cell/card to fit the ListView viewport width (prevents horizontal growth)
+                setMaxWidth(Double.MAX_VALUE);
+                prefWidthProperty().bind(lv.widthProperty().subtract(20));
+                card.setMinWidth(0);
+                card.setMaxWidth(Double.MAX_VALUE);
+                card.prefWidthProperty().bind(prefWidthProperty());
+
+                card.setOnMouseClicked(e -> {
+                    if (isEmpty() || getItem() == null) return;
+
+                    javafx.scene.Node target = (e.getTarget() instanceof javafx.scene.Node)
+                            ? (javafx.scene.Node) e.getTarget()
+                            : null;
+                    if (isChildOf(target, qualityCombo) || isChildOf(target, cb)) {
+                        return;
+                    }
+                    cb.setSelected(!cb.isSelected());
+                });
+
+                cb.selectedProperty().addListener((obs, was, isNow) -> {
+                    if (suppressCheckListener) return;
+                    PlaylistEntry it = getItem();
+                    if (it == null) return;
+
+                    if (it.isUnavailable()) {
+                        cb.setSelected(false);
+                        it.setSelected(false);
+                        return;
+                    }
+
+                    if (isNow && !updatingSelection.get()) {
+                        int cur = selectedCount.getAsInt();
+                        if (cur >= PLAYLIST_MAX_SELECTED) {
+                            cb.setSelected(false);
+                            it.setSelected(false);
+                            syncCardSelectedStyle(it, card);
+                            try { if (status != null) status.setText("Selection limit: " + PLAYLIST_MAX_SELECTED + " items"); } catch (Exception ignored) {}
+                            return;
+                        }
+                    }
+
+                    it.setSelected(isNow);
+                    syncCardSelectedStyle(it, card);
+
+                    if (isNow && !updatingSelection.get()) {
+                        // شغّل التحليل التسلسلي من فوق لتحت
+                        Platform.runLater(startNextProbe);
+                    }
+
+                    if (!updatingSelection.get()) {
+                        userQualityInteracted.set(true);
+                        Platform.runLater(updateGlobalMixedState);
+                    }
+
+                    try { refreshAddState.run(); } catch (Exception ignored) {}
+                });
+            }
+
+            @Override
+            protected void updateItem(PlaylistEntry item, boolean empty) {
+                super.updateItem(item, empty);
+
+                if (empty || item == null) {
+                    // avoid stale tooltip on reused cells
+                    try { title.setTooltip(null); } catch (Exception ignored) {}
+                    setText(null);
+                    setGraphic(null);
+                    return;
+                }
+
+                // Prefix with LTR mark to keep "1." at the left edge for RTL titles
+                String dt = item.displayTitle();
+                if (dt == null) dt = "";
+                title.setText("\u200E" + dt);
+
+                // Keep full title in tooltip (but only attach tooltip when truncated)
+                titleTip.setText(dt);
+                // Force a re-check after the cell is laid out (virtualized list can report width=0 early)
+                if (!dt.equals(lastTitleForTip)) {
+                    lastTitleForTip = dt;
+                }
+                title.setTooltip(null);
+                titleTipThrottle.stop();
+                titleTipThrottle.playFromStart();
+                Platform.runLater(() -> {
+                    titleTipThrottle.stop();
+                    titleTipThrottle.playFromStart();
+                });
+
+                meta.setText(buildMetaLine(item));
+
+                suppressCheckListener = true;
+                try {
+                    cb.setSelected(item.isSelected());
+                } finally {
+                    suppressCheckListener = false;
+                }
+                syncCardSelectedStyle(item, card);
+
+                cb.setDisable(false);
+                qualityCombo.setDisable(true); // الافتراضي معطّل
+                // Show the combo, but keep it disabled until qualities are ready
+                qualityCombo.setVisible(true);
+                qualityCombo.setManaged(true);
+
+                // ===== UNAVAILABLE =====
+                if (item.isUnavailable()) {
+                    cb.setDisable(true);
+                    qualityCombo.setDisable(true);
+                    placeholder.setText("UNAVAILABLE");
+                    placeholder.setVisible(true);
+                    thumb.setImage(null);
+                    meta.setText("Unavailable");
+                    card.setOpacity(0.55);
+                    setGraphic(card);
+                    return;
+                } else {
+                    card.setOpacity(1.0);
+                }
+
+                // ===== THUMBNAIL =====
+                placeholder.setText("NO PREVIEW");
+
+                String tid = item.getId();
+                Image cachedThumb = (tid == null) ? null : PLAYLIST_THUMB_CACHE.get(tid);
+
+                if (cachedThumb != null) {
+                    thumb.setImage(cachedThumb);
+                    placeholder.setVisible(false);
+
+                } else if (item.getThumbUrl() != null && !item.getThumbUrl().isBlank()) {
+                    placeholder.setVisible(true);
+
+                    if (tid != null && PLAYLIST_THUMB_INFLIGHT.add(tid)) {
+                        Image img = new Image(item.getThumbUrl(), true);
+                        PLAYLIST_THUMB_CACHE.put(tid, img);
+
+                        img.progressProperty().addListener((o, oldP, newP) -> {
+                            if (newP != null && newP.doubleValue() >= 1.0) {
+                                PLAYLIST_THUMB_INFLIGHT.remove(tid);
                                 Platform.runLater(() -> {
-                                    requestRefreshSafe.run();
-                                    probingNow.set(false);
-                                    // continue with next item
-                                    this.run();
+                                    PlaylistEntry now = getItem();
+                                    if (now != null && tid.equals(now.getId()) && img.getException() == null) {
+                                        placeholder.setVisible(false);
+                                    }
                                 });
                             }
                         });
 
-                        if (!queued) {
-                            qualitiesInflight.remove(vid);
-                            probingNow.set(false);
-                            // try again later / move on
-                            Platform.runLater(this);
-                        }
-                        return;
+                        img.exceptionProperty().addListener((o, oldEx, ex) ->
+                                PLAYLIST_THUMB_INFLIGHT.remove(tid)
+                        );
                     }
 
-                    // done
-                    probingNow.set(false);
-                }
-            };
-
-            // Probe qualities sequentially (NO size) - kick the queue only
-            java.util.function.Consumer<PlaylistEntry> ensureProbed = (PlaylistEntry it) -> {
-                if (it == null) return;
-                if (it.isUnavailable()) return;
-                // لا تغيّر flags هنا — startNextProbe هو المسؤول الوحيد
-                Platform.runLater(startNextProbe);
-            };
-
-
-
-            list.setCellFactory(lv -> new ListCell<>() {
-
-                private final CheckBox cb = new CheckBox();
-                private final Label title = new Label();
-                private final javafx.scene.control.Tooltip titleTip = new javafx.scene.control.Tooltip();
-                private final PauseTransition titleTipThrottle = new PauseTransition(Duration.millis(45));
-                private String lastTitleForTip = null;
-                private final Label meta = new Label();
-
-                private final VBox textBox = new VBox(4);
-
-                private final StackPane thumbBox = new StackPane();
-                private final ImageView thumb = new ImageView();
-                private final Label placeholder = new Label("NO PREVIEW");
-
-                private final ComboBox<String> qualityCombo = new ComboBox<>();
-                private boolean updatingRowCombo = false;
-                private boolean suppressQualityListener = false;
-                private boolean suppressCheckListener = false;
-
-                private final HBox card = new HBox(12);
-
-                private boolean isChildOf(javafx.scene.Node n, javafx.scene.Node parent) {
-                    if (n == null || parent == null) return false;
-                    javafx.scene.Node cur = n;
-                    while (cur != null) {
-                        if (cur == parent) return true;
-                        cur = cur.getParent();
-                    }
-                    return false;
+                    thumb.setImage(PLAYLIST_THUMB_CACHE.get(tid));
                 }
 
-                {
-                    setStyle("-fx-background-color: transparent;");
-
-                    cb.getStyleClass().addAll("gx-check", "gx-playlist-check");
-                    cb.setFocusTraversable(false);
-
-                    thumb.setFitWidth(96);
-                    thumb.setFitHeight(54);
-                    thumb.setPreserveRatio(true);
-                    thumb.setSmooth(true);
-
-                    placeholder.getStyleClass().add("gx-playlist-thumb-placeholder");
-
-                    thumbBox.getStyleClass().add("gx-playlist-thumb");
-                    thumbBox.getChildren().addAll(thumb, placeholder);
-
-                    // Use the same typography as the main list (keep playlist class too)
-                    title.getStyleClass().addAll("gx-task-title", "gx-playlist-title");
-                    // Force numbering to stay on the left even when the title contains RTL text
-                    title.setNodeOrientation(javafx.geometry.NodeOrientation.LEFT_TO_RIGHT);
-                    title.setTextAlignment(javafx.scene.text.TextAlignment.LEFT);
-                    title.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
-
-                    title.setWrapText(false);
-                    // prevent long titles from expanding the row/card; show ellipsis + tooltip
-                    title.setMinWidth(0);
-                    title.setMaxWidth(Double.MAX_VALUE);
-                    title.setPrefWidth(0);
-                    title.setTextOverrun(javafx.scene.control.OverrunStyle.ELLIPSIS);
-
-                    titleTip.setWrapText(true);
-                    titleTip.setMaxWidth(520);
-
-                    // UX timing – feels native & light
-                    titleTip.setShowDelay(Duration.millis(300));
-                    titleTip.setHideDelay(Duration.millis(80));
-                    titleTip.setShowDuration(Duration.hours(1));
-
-                    Runnable refreshTitleTooltip = () -> {
-                        try {
-                            PlaylistEntry it = getItem();
-                            if (it == null || isEmpty()) {
-                                title.setTooltip(null);
-                                return;
-                            }
-                            // Only show tooltip when the visible label text is actually truncated.
-                            boolean truncated = isLabelTextTruncated(title);
-                            title.setTooltip(truncated ? titleTip : null);
-                        } catch (Exception ignored) {
-                            try { title.setTooltip(null); } catch (Exception ignored2) {}
-                        }
-                    };
-
-                    titleTipThrottle.setOnFinished(ev -> refreshTitleTooltip.run());
-
-                    // Re-evaluate when width changes (layout) or when text changes.
-                    title.widthProperty().addListener((o, a, b) -> {
-                        titleTipThrottle.stop();
-                        titleTipThrottle.playFromStart();
-                    });
-                    title.textProperty().addListener((o, a, b) -> {
-                        titleTipThrottle.stop();
-                        titleTipThrottle.playFromStart();
-                    });
-
-                    // Hold ListView refresh while the user is hovering the title (prevents tooltip from disappearing due to cell refresh)
-                    title.hoverProperty().addListener((o, was, isNow) -> anyTitleHoverHold.set(isNow));
-
-                    // Do NOT install tooltip here; we install/uninstall per-row only when truncated (see updateItem)
-
-                    meta.getStyleClass().addAll("gx-task-meta", "gx-playlist-meta");
-
-                    textBox.getChildren().addAll(title, meta);
-                    HBox.setHgrow(textBox, Priority.ALWAYS);
-                    textBox.setMinWidth(0);
-                    textBox.setMaxWidth(Double.MAX_VALUE);
-                    // Allow the VBox to shrink (so the row doesn't force horizontal expansion)
-                    textBox.setPrefWidth(0);
-
-                    qualityCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality", "gx-playlist-item-combo");
-                    qualityCombo.setPrefWidth(PLAYLIST_Q_COMBO_W);
-                    qualityCombo.setMinWidth(PLAYLIST_Q_COMBO_W);
-                    qualityCombo.setMaxWidth(240);
-                    qualityCombo.setDisable(true);
-
-                    qualityCombo.setCellFactory(x -> new ListCell<>() {
-                        @Override
-                        protected void updateItem(String item, boolean empty) {
-                            super.updateItem(item, empty);
-                            setText(empty ? null : item);
-                            setDisable(QUALITY_SEPARATOR.equals(item));
-                            setOpacity(QUALITY_SEPARATOR.equals(item) ? 0.55 : 1.0);
-                        }
-                    });
-                    qualityCombo.setButtonCell(new ListCell<>() {
-                        @Override
-                        protected void updateItem(String item, boolean empty) {
-                            super.updateItem(item, empty);
-                            setText(empty ? null : item);
-                        }
-                    });
-
-                    qualityCombo.showingProperty().addListener((obs, was, isNow) -> anyQualityPopupOpen.set(isNow));
-
-                    qualityCombo.valueProperty().addListener((obs, old, val) -> {
-                        if (updatingRowCombo || suppressQualityListener) return;
-                        if (val == null) return;
-                        if (QUALITY_SEPARATOR.equals(val) || QUALITY_CUSTOM.equals(val)) return;
-
-                        PlaylistEntry it = getItem();
-                        if (it == null || it.isUnavailable()) return;
-
-                        userQualityInteracted.set(true);
-
-                        it.setQuality(val);
-
-                        String modeNow = globalDesiredMode.get();
-                        if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
-
-                        // Playlist screen: no size probing (sizes appear in main downloads list)
-                        String desired = globalDesiredQuality.get();
-                        if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
-
-                        String globalMapped;
-                        if (MODE_AUDIO.equals(modeNow)) {
-                            globalMapped = desired;
-                        } else {
-                            java.util.List<String> avail = it.getAvailableQualities();
-                            globalMapped = (avail == null || avail.isEmpty())
-                                    ? desired
-                                    : pickClosestSupportedQuality(desired, avail);
-                        }
-
-                        boolean manual = !val.equals(globalMapped);
-                        it.setManualQuality(manual);
-
-                        meta.setText(buildMetaLine(it)); // (will no longer show sizes because we never fill size map)
-                        Platform.runLater(updateGlobalMixedState);
-                    });
-
-                    card.getStyleClass().add("gx-playlist-card");
-                    card.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
-                    card.getChildren().addAll(cb, thumbBox, textBox, qualityCombo);
-                    // Force each cell/card to fit the ListView viewport width (prevents horizontal growth)
-                    setMaxWidth(Double.MAX_VALUE);
-                    prefWidthProperty().bind(lv.widthProperty().subtract(20));
-                    card.setMinWidth(0);
-                    card.setMaxWidth(Double.MAX_VALUE);
-                    card.prefWidthProperty().bind(prefWidthProperty());
-
-                    card.setOnMouseClicked(e -> {
-                        if (isEmpty() || getItem() == null) return;
-
-                        javafx.scene.Node target = (e.getTarget() instanceof javafx.scene.Node)
-                                ? (javafx.scene.Node) e.getTarget()
-                                : null;
-                        if (isChildOf(target, qualityCombo) || isChildOf(target, cb)) {
-                            return;
-                        }
-                        cb.setSelected(!cb.isSelected());
-                    });
-
-                    cb.selectedProperty().addListener((obs, was, isNow) -> {
-                        if (suppressCheckListener) return;
-                        PlaylistEntry it = getItem();
-                        if (it == null) return;
-
-                        if (it.isUnavailable()) {
-                            cb.setSelected(false);
-                            it.setSelected(false);
-                            return;
-                        }
-
-                        if (isNow && !updatingSelection.get()) {
-                            int cur = selectedCount.getAsInt();
-                            if (cur >= PLAYLIST_MAX_SELECTED) {
-                                cb.setSelected(false);
-                                it.setSelected(false);
-                                syncCardSelectedStyle(it, card);
-                                try { if (status != null) status.setText("Selection limit: " + PLAYLIST_MAX_SELECTED + " items"); } catch (Exception ignored) {}
-                                return;
-                            }
-                        }
-
-                        it.setSelected(isNow);
-                        syncCardSelectedStyle(it, card);
-
-                        if (isNow && !updatingSelection.get()) {
-                            // شغّل التحليل التسلسلي من فوق لتحت
-                            Platform.runLater(startNextProbe);
-                        }
-
-                        if (!updatingSelection.get()) {
-                            userQualityInteracted.set(true);
-                            Platform.runLater(updateGlobalMixedState);
-                        }
-
-                        try { refreshAddState.run(); } catch (Exception ignored) {}
-                    });
-                }
-
-                @Override
-                protected void updateItem(PlaylistEntry item, boolean empty) {
-                    super.updateItem(item, empty);
-
-                    if (empty || item == null) {
-                        // avoid stale tooltip on reused cells
-                        try { title.setTooltip(null); } catch (Exception ignored) {}
-                        setText(null);
-                        setGraphic(null);
-                        return;
-                    }
-
-                    // Prefix with LTR mark to keep "1." at the left edge for RTL titles
-                    String dt = item.displayTitle();
-                    if (dt == null) dt = "";
-                    title.setText("\u200E" + dt);
-
-                    // Keep full title in tooltip (but only attach tooltip when truncated)
-                    titleTip.setText(dt);
-                    // Force a re-check after the cell is laid out (virtualized list can report width=0 early)
-                    if (!dt.equals(lastTitleForTip)) {
-                        lastTitleForTip = dt;
-                    }
-                    title.setTooltip(null);
-                    titleTipThrottle.stop();
-                    titleTipThrottle.playFromStart();
-                    Platform.runLater(() -> {
-                        titleTipThrottle.stop();
-                        titleTipThrottle.playFromStart();
-                    });
-
-                    meta.setText(buildMetaLine(item));
-
-                    suppressCheckListener = true;
-                    try {
-                        cb.setSelected(item.isSelected());
-                    } finally {
-                        suppressCheckListener = false;
-                    }
-                    syncCardSelectedStyle(item, card);
-
-                    cb.setDisable(false);
-                    qualityCombo.setDisable(true); // الافتراضي معطّل
-                    // Show the combo, but keep it disabled until qualities are ready
-                    qualityCombo.setVisible(true);
-                    qualityCombo.setManaged(true);
-
-                    // ===== UNAVAILABLE =====
-                    if (item.isUnavailable()) {
-                        cb.setDisable(true);
-                        qualityCombo.setDisable(true);
-                        placeholder.setText("UNAVAILABLE");
-                        placeholder.setVisible(true);
-                        thumb.setImage(null);
-                        meta.setText("Unavailable");
-                        card.setOpacity(0.55);
-                        setGraphic(card);
-                        return;
-                    } else {
-                        card.setOpacity(1.0);
-                    }
-
-                    // ===== THUMBNAIL =====
-                    placeholder.setText("NO PREVIEW");
-
-                    String tid = item.getId();
-                    Image cachedThumb = (tid == null) ? null : PLAYLIST_THUMB_CACHE.get(tid);
-
-                    if (cachedThumb != null) {
-                        thumb.setImage(cachedThumb);
-                        placeholder.setVisible(false);
-
-                    } else if (item.getThumbUrl() != null && !item.getThumbUrl().isBlank()) {
-                        placeholder.setVisible(true);
-
-                        if (tid != null && PLAYLIST_THUMB_INFLIGHT.add(tid)) {
-                            Image img = new Image(item.getThumbUrl(), true);
-                            PLAYLIST_THUMB_CACHE.put(tid, img);
-
-                            img.progressProperty().addListener((o, oldP, newP) -> {
-                                if (newP != null && newP.doubleValue() >= 1.0) {
-                                    PLAYLIST_THUMB_INFLIGHT.remove(tid);
-                                    Platform.runLater(() -> {
-                                        PlaylistEntry now = getItem();
-                                        if (now != null && tid.equals(now.getId()) && img.getException() == null) {
-                                            placeholder.setVisible(false);
-                                        }
-                                    });
-                                }
-                            });
-
-                            img.exceptionProperty().addListener((o, oldEx, ex) ->
-                                    PLAYLIST_THUMB_INFLIGHT.remove(tid)
-                            );
-                        }
-
-                        thumb.setImage(PLAYLIST_THUMB_CACHE.get(tid));
-                    }
-
-                    // ===== MODE =====
-                    String modeNow = globalDesiredMode.get();
-                    if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
-
-                    // ===== AUDIO MODE =====
-                    if (MODE_AUDIO.equals(modeNow)) {
-                        updatingRowCombo = true;
-                        try {
-                            qualityCombo.getItems().setAll(buildAudioOptions());
-                            qualityCombo.setDisable(false);
-
-                            String cur = item.getQuality();
-                            if (cur == null || cur.isBlank() || QUALITY_BEST.equals(cur)) {
-                                cur = globalDesiredQuality.get();
-                            }
-                            if (cur == null || cur.isBlank()) cur = AUDIO_DEFAULT_FORMAT;
-
-                            suppressQualityListener = true;
-                            try {
-                                qualityCombo.getSelectionModel().select(cur);
-                            } finally {
-                                suppressQualityListener = false;
-                            }
-                        } finally {
-                            updatingRowCombo = false;
-                        }
-
-                        // Always visible in the row
-                        qualityCombo.setVisible(true);
-                        qualityCombo.setManaged(true);
-
-                        setGraphic(card);
-                        return;
-                    }
-
-                    // ===== VIDEO MODE – LOADING =====
-                    if (!item.isQualitiesLoaded()) {
-                        updatingRowCombo = true;
-                        try {
-                            qualityCombo.getItems().setAll("Loading qualities...");
-                            qualityCombo.setDisable(true);
-
-                            suppressQualityListener = true;
-                            try {
-                                qualityCombo.getSelectionModel().select(0);
-                            } finally {
-                                suppressQualityListener = false;
-                            }
-                        } finally {
-                            updatingRowCombo = false;
-                        }
-
-                        // Keep combo visible but disabled while probing
-                        qualityCombo.setVisible(true);
-                        qualityCombo.setManaged(true);
-
-                        Platform.runLater(startNextProbe);
-                        setGraphic(card);
-                        return;
-                    }
-
-                    // ===== VIDEO MODE – READY =====
-                    java.util.List<String> q = item.getAvailableQualities();
-                    if (q != null && q.size() >= 2) {
-                        updatingRowCombo = true;
-                        try {
-                            qualityCombo.getItems().setAll(q);
-                            qualityCombo.setDisable(false);
-
-                            String cur = item.getQuality();
-                            if (cur == null || cur.isBlank()) cur = QUALITY_BEST;
-
-                            if (!q.contains(cur)) {
-                                cur = pickClosestSupportedQuality(cur, q);
-                                item.setQuality(cur);
-                            }
-
-                            suppressQualityListener = true;
-                            try {
-                                qualityCombo.getSelectionModel().select(cur);
-                            } finally {
-                                suppressQualityListener = false;
-                            }
-                            // Always visible once ready
-                            qualityCombo.setVisible(true);
-                            qualityCombo.setManaged(true);
-                        } finally {
-                            updatingRowCombo = false;
-                        }
-                    } else {
-                        // fallback
-                        qualityCombo.setDisable(true);
-                        qualityCombo.setVisible(true);
-                        qualityCombo.setManaged(true);
-                    }
-
-                    setGraphic(card);
-                }
-            });
-
-            HBox actions = new HBox(10);
-            actions.setPadding(new Insets(10, 0, 0, 0));
-
-            Button selectAll = new Button("Select all");
-            selectAll.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
-
-            Button clearSel = new Button("Clear");
-            clearSel.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
-
-
-            Region spacer = new Region();
-            HBox.setHgrow(spacer, Priority.ALWAYS);
-
-            Button cancel = new Button("Back");
-            cancel.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
-
-            final java.util.concurrent.atomic.AtomicBoolean didDownload =
-                    new java.util.concurrent.atomic.AtomicBoolean(false);
-
-            actions.getChildren().addAll(selectAll, clearSel, calcSize, spacer, cancel, download);
-            rootBox.getChildren().addAll(header, sub, globalRow, list, status, actions);
-
-            // slightly wider playlist window for long titles
-            Scene scene = new Scene(rootBox, 920, 560);
-            stage.setMinWidth(880);
-            stage.setMinHeight(520);
-            scene.setFill(Color.web("#121826"));
-            scene.getRoot().setStyle("-fx-background-color: #121826;");
-
-            scene.getStylesheets().addAll(
-                    getClass().getResource("/com/grabx/app/grabx/styles/theme-base.css").toExternalForm(),
-                    getClass().getResource("/com/grabx/app/grabx/styles/layout.css").toExternalForm(),
-                    getClass().getResource("/com/grabx/app/grabx/styles/buttons.css").toExternalForm(),
-                    getClass().getResource("/com/grabx/app/grabx/styles/sidebar.css").toExternalForm()
-            );
-
-            rootBox.applyCss();
-            rootBox.layout();
-            stage.setScene(scene);
-
-            globalQualityCombo.valueProperty().addListener((obs, old, val) -> {
-                if (val == null) return;
-                if (QUALITY_SEPARATOR.equals(val)) return;
-                if (QUALITY_CUSTOM.equals(val)) return;
-                if (updatingGlobalCombo.get()) return;
-
-                userQualityInteracted.set(true);
-                globalDesiredQuality.set(val);
-
+                // ===== MODE =====
                 String modeNow = globalDesiredMode.get();
                 if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
 
+                // ===== AUDIO MODE =====
+                if (MODE_AUDIO.equals(modeNow)) {
+                    updatingRowCombo = true;
+                    try {
+                        qualityCombo.getItems().setAll(buildAudioOptions());
+                        qualityCombo.setDisable(false);
+
+                        String cur = item.getQuality();
+                        if (cur == null || cur.isBlank() || QUALITY_BEST.equals(cur)) {
+                            cur = globalDesiredQuality.get();
+                        }
+                        if (cur == null || cur.isBlank()) cur = AUDIO_DEFAULT_FORMAT;
+
+                        suppressQualityListener = true;
+                        try {
+                            qualityCombo.getSelectionModel().select(cur);
+                        } finally {
+                            suppressQualityListener = false;
+                        }
+                    } finally {
+                        updatingRowCombo = false;
+                    }
+
+                    // Always visible in the row
+                    qualityCombo.setVisible(true);
+                    qualityCombo.setManaged(true);
+
+                    setGraphic(card);
+                    return;
+                }
+
+                // ===== VIDEO MODE – LOADING =====
+                if (!item.isQualitiesLoaded()) {
+                    updatingRowCombo = true;
+                    try {
+                        qualityCombo.getItems().setAll("Loading qualities...");
+                        qualityCombo.setDisable(true);
+
+                        suppressQualityListener = true;
+                        try {
+                            qualityCombo.getSelectionModel().select(0);
+                        } finally {
+                            suppressQualityListener = false;
+                        }
+                    } finally {
+                        updatingRowCombo = false;
+                    }
+
+                    // Keep combo visible but disabled while probing
+                    qualityCombo.setVisible(true);
+                    qualityCombo.setManaged(true);
+
+                    if (item.isSelected()) Platform.runLater(startNextProbe);
+
+                    setGraphic(card);
+                    return;
+                }
+
+                // ===== VIDEO MODE – READY =====
+                java.util.List<String> q = item.getAvailableQualities();
+                if (q != null && q.size() >= 2) {
+                    updatingRowCombo = true;
+                    try {
+                        qualityCombo.getItems().setAll(q);
+                        qualityCombo.setDisable(false);
+
+                        String cur = item.getQuality();
+                        if (cur == null || cur.isBlank()) cur = QUALITY_BEST;
+
+                        if (!q.contains(cur)) {
+                            cur = pickClosestSupportedQuality(cur, q);
+                            item.setQuality(cur);
+                        }
+
+                        suppressQualityListener = true;
+                        try {
+                            qualityCombo.getSelectionModel().select(cur);
+                        } finally {
+                            suppressQualityListener = false;
+                        }
+                        // Always visible once ready
+                        qualityCombo.setVisible(true);
+                        qualityCombo.setManaged(true);
+                    } finally {
+                        updatingRowCombo = false;
+                    }
+                } else {
+                    // fallback
+                    qualityCombo.setDisable(true);
+                    qualityCombo.setVisible(true);
+                    qualityCombo.setManaged(true);
+                }
+
+                setGraphic(card);
+            }
+        });
+
+        HBox actions = new HBox(10);
+        actions.setPadding(new Insets(10, 0, 0, 0));
+
+        Button selectAll = new Button("Select all");
+        selectAll.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
+
+        Button clearSel = new Button("Clear");
+        clearSel.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
+
+
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        Button cancel = new Button("Back");
+        cancel.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
+
+        final java.util.concurrent.atomic.AtomicBoolean didDownload =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        actions.getChildren().addAll(selectAll, clearSel, calcSize, spacer, cancel, download);
+        rootBox.getChildren().addAll(header, sub, globalRow, list, status, actions);
+
+        // slightly wider playlist window for long titles
+        Scene scene = new Scene(rootBox, 920, 560);
+        stage.setMinWidth(880);
+        stage.setMinHeight(520);
+        scene.setFill(Color.web("#121826"));
+        scene.getRoot().setStyle("-fx-background-color: #121826;");
+
+        scene.getStylesheets().addAll(
+                getClass().getResource("/com/grabx/app/grabx/styles/theme-base.css").toExternalForm(),
+                getClass().getResource("/com/grabx/app/grabx/styles/layout.css").toExternalForm(),
+                getClass().getResource("/com/grabx/app/grabx/styles/buttons.css").toExternalForm(),
+                getClass().getResource("/com/grabx/app/grabx/styles/sidebar.css").toExternalForm()
+        );
+
+        rootBox.applyCss();
+        rootBox.layout();
+        stage.setScene(scene);
+
+        globalQualityCombo.valueProperty().addListener((obs, old, val) -> {
+            if (val == null) return;
+            if (QUALITY_SEPARATOR.equals(val)) return;
+            if (QUALITY_CUSTOM.equals(val)) return;
+            if (updatingGlobalCombo.get()) return;
+
+            userQualityInteracted.set(true);
+            globalDesiredQuality.set(val);
+
+            String modeNow = globalDesiredMode.get();
+            if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
+
+            for (PlaylistEntry it : items) {
+                if (it == null || it.isUnavailable()) continue;
+
+                it.setManualQuality(false);
+
+                if (MODE_AUDIO.equals(modeNow)) {
+                    it.setQuality(val);
+                } else {
+                    java.util.List<String> avail = it.getAvailableQualities();
+                    String mapped = (avail == null || avail.isEmpty())
+                            ? val
+                            : pickClosestSupportedQuality(val, avail);
+                    it.setQuality(mapped);
+                    // ✅ NO size probing
+                }
+            }
+
+            requestRefreshSafe.run();
+            Platform.runLater(updateGlobalMixedState);
+        });
+
+        selectAll.setOnAction(e -> {
+            updatingSelection.set(true);
+            try {
+                int c = 0;
                 for (PlaylistEntry it : items) {
                     if (it == null || it.isUnavailable()) continue;
-
-                    it.setManualQuality(false);
-
-                    if (MODE_AUDIO.equals(modeNow)) {
-                        it.setQuality(val);
-                    } else {
-                        java.util.List<String> avail = it.getAvailableQualities();
-                        String mapped = (avail == null || avail.isEmpty())
-                                ? val
-                                : pickClosestSupportedQuality(val, avail);
-                        it.setQuality(mapped);
-                        // ✅ NO size probing
+                    if (c >= PLAYLIST_MAX_SELECTED) {
+                        it.setSelected(false);
+                        continue;
                     }
+                    it.setSelected(true);
+                    c++;
                 }
-
-                requestRefreshSafe.run();
-                Platform.runLater(updateGlobalMixedState);
-            });
-
-            selectAll.setOnAction(e -> {
-                updatingSelection.set(true);
-                try {
-                    int c = 0;
-                    for (PlaylistEntry it : items) {
-                        if (it == null || it.isUnavailable()) continue;
-                        if (c >= PLAYLIST_MAX_SELECTED) {
-                            it.setSelected(false);
-                            continue;
-                        }
-                        it.setSelected(true);
-                        c++;
-                    }
-                } finally {
-                    updatingSelection.set(false);
-                }
-                try { if (status != null) status.setText("Selected up to " + PLAYLIST_MAX_SELECTED + " items"); } catch (Exception ignored) {}
-                requestRefreshSafe.run();
-                refreshAddState.run();
+            } finally {
+                updatingSelection.set(false);
+            }
+            try { if (status != null) status.setText("Selected up to " + PLAYLIST_MAX_SELECTED + " items"); } catch (Exception ignored) {}
+            requestRefreshSafe.run();
+            refreshAddState.run();
+            list.refresh();
+            Platform.runLater(() -> {
                 list.refresh();
-                Platform.runLater(() -> {
-                    list.refresh();
-                    list.scrollTo(0);
-                });
+                list.scrollTo(0);
             });
+        });
 
-            clearSel.setOnAction(e -> {
+        clearSel.setOnAction(e -> {
+            updatingSelection.set(true);
+            try {
+                for (PlaylistEntry it : items) {
+                    if (it == null) continue;
+                    it.setSelected(false);
+                }
+            } finally {
+                updatingSelection.set(false);
+            }
+            requestRefreshSafe.run();
+            refreshAddState.run();
+        });
+        calcSize.setOnAction(e -> {
+            String modeNow = globalDesiredMode.get();
+            if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
+
+            // AUDIO: ما بنحسب حجم هون (خليه يظهر بالواجهة الرئيسية عند بدء التحميل)
+            if (MODE_AUDIO.equals(modeNow)) {
+                try { if (status != null) status.setText("Size is not calculated in Audio mode."); } catch (Exception ignored) {}
+                return;
+            }
+
+            int scheduled = 0;
+            for (PlaylistEntry it : items) {
+                if (it == null || it.isUnavailable()) continue;
+                if (!it.isSelected()) continue;
+
+                String qNow = it.getQuality();
+                if (qNow == null || qNow.isBlank() || QUALITY_BEST.equals(qNow)) {
+                    qNow = globalDesiredQuality.get();
+                }
+                if (qNow == null || qNow.isBlank()) qNow = QUALITY_BEST;
+
+                // تأكد إن الماب موجود
+                try {
+                    if (it.getSizeByQuality() == null) it.setSizeByQuality(new java.util.HashMap<>());
+                } catch (Exception ignored) {}
+
+                ensurePlaylistSizeAsync(it, qNow, requestRefreshSafe);
+                scheduled++;
+            }
+
+            try {
+                if (status != null) {
+                    status.setText(scheduled > 0
+                            ? ("Computing sizes for " + scheduled + " selected item(s)...")
+                            : "No items selected.");
+                }
+            } catch (Exception ignored) {}
+        });
+
+        cancel.setOnAction(e -> {
+            stage.close();
+
+            if (!didDownload.get() && reopenAddLinkAfterPlaylist) {
+                final String u = reopenAddLinkPrefillUrl;
+
+                reopenAddLinkAfterPlaylist = false;
+                reopenAddLinkPrefillUrl = null;
+
+                javafx.application.Platform.runLater(() -> openOrUpdateAddLinkDialog(u));
+            }
+        });
+
+        download.setOnAction(e -> {
+            saveLastDownloadFolder(playlistFolder);
+
+            didDownload.set(true);
+            try {
+                if (activeAddLinkDialog != null) activeAddLinkDialog.hide();
+            } catch (Exception ignored) {}
+
+            java.util.List<PlaylistEntry> batch = items.stream()
+                    .filter(it -> it != null && it.isSelected() && !it.isUnavailable())
+                    .sorted(java.util.Comparator.comparingInt(PlaylistEntry::getIndex))
+                    .toList();
+
+            if (batch.isEmpty()) {
+                if (statusText != null) statusText.setText("No items selected.");
+                return;
+            }
+
+            String modeNow = globalDesiredMode.get();
+            String desiredNow = globalDesiredQuality.get();
+
+            if (playlistBatchService != null) {
+                // ✅ لازم يكون عندك في PlaylistBatchService دالة اسمها enqueue(...)
+                playlistBatchService.enqueue(batch, modeNow, desiredNow);
+            } else {
+                // fallback مؤقت لحد ما نضمن السيرفس
+                enqueuePlaylistBatch(batch, modeNow, desiredNow);
+            }
+
+
+            if (statusText != null) {
+                statusText.setText("Queued playlist: " + batch.size() + " items");
+            }
+
+            reopenAddLinkAfterPlaylist = false;
+            reopenAddLinkPrefillUrl = null;
+
+            stage.close();
+        });
+
+        // Load playlist entries asynchronously
+        new Thread(() -> {
+            java.util.List<PlaylistEntry> loaded;
+            try {
+                // Phase 1 move: flat playlist probing is owned by PlaylistService
+                loaded = new com.grabx.app.grabx.core.service.PlaylistService()
+                        .loadFlatPlaylist(playlistUrl);
+            } catch (Exception ignored) {
+                loaded = java.util.List.of();
+            }
+            List<PlaylistEntry> finalLoaded = loaded;
+            Platform.runLater(() -> {
+                items.setAll(finalLoaded);
+                if (finalLoaded.isEmpty()) {
+                    status.setText("Could not load playlist (yt-dlp missing?)");
+                } else {
+                    long bad = finalLoaded.stream().filter(PlaylistEntry::isUnavailable).count();
+                    status.setText("Loaded " + finalLoaded.size() + " items" + (bad > 0 ? (" • " + bad + " unavailable") : ""));
+                }
+
                 updatingSelection.set(true);
                 try {
                     for (PlaylistEntry it : items) {
@@ -6152,132 +5117,23 @@ public class MainController {
                 } finally {
                     updatingSelection.set(false);
                 }
+
+                updatingGlobalCombo.set(true);
+                try {
+                    globalQualityCombo.getSelectionModel().select(QUALITY_BEST);
+                } finally {
+                    updatingGlobalCombo.set(false);
+                }
+                globalDesiredQuality.set(QUALITY_BEST);
+
                 requestRefreshSafe.run();
                 refreshAddState.run();
+                probeIndex.set(0);
+
             });
-            calcSize.setOnAction(e -> {
-                String modeNow = globalDesiredMode.get();
-                if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
+        }, "probe-playlist").start();
 
-                // AUDIO: ما بنحسب حجم هون (خليه يظهر بالواجهة الرئيسية عند بدء التحميل)
-                if (MODE_AUDIO.equals(modeNow)) {
-                    try { if (status != null) status.setText("Size is not calculated in Audio mode."); } catch (Exception ignored) {}
-                    return;
-                }
-
-                int scheduled = 0;
-                for (PlaylistEntry it : items) {
-                    if (it == null || it.isUnavailable()) continue;
-                    if (!it.isSelected()) continue;
-
-                    String qNow = it.getQuality();
-                    if (qNow == null || qNow.isBlank() || QUALITY_BEST.equals(qNow)) {
-                        qNow = globalDesiredQuality.get();
-                    }
-                    if (qNow == null || qNow.isBlank()) qNow = QUALITY_BEST;
-
-                    // تأكد إن الماب موجود
-                    try {
-                        if (it.getSizeByQuality() == null) it.setSizeByQuality(new java.util.HashMap<>());
-                    } catch (Exception ignored) {}
-
-                    ensurePlaylistSizeAsync(it, qNow, requestRefreshSafe);
-                    scheduled++;
-                }
-
-                try {
-                    if (status != null) {
-                        status.setText(scheduled > 0
-                                ? ("Computing sizes for " + scheduled + " selected item(s)...")
-                                : "No items selected.");
-                    }
-                } catch (Exception ignored) {}
-            });
-
-            cancel.setOnAction(e -> {
-                stage.close();
-
-                if (!didDownload.get() && reopenAddLinkAfterPlaylist) {
-                    final String u = reopenAddLinkPrefillUrl;
-
-                    reopenAddLinkAfterPlaylist = false;
-                    reopenAddLinkPrefillUrl = null;
-
-                    javafx.application.Platform.runLater(() -> openOrUpdateAddLinkDialog(u));
-                }
-            });
-
-            download.setOnAction(e -> {
-                saveLastDownloadFolder(playlistFolder);
-
-                didDownload.set(true);
-                try {
-                    if (activeAddLinkDialog != null) activeAddLinkDialog.hide();
-                } catch (Exception ignored) {}
-
-                java.util.List<PlaylistEntry> batch = items.stream()
-                        .filter(it -> it != null && it.isSelected() && !it.isUnavailable())
-                        .sorted(java.util.Comparator.comparingInt(PlaylistEntry::getIndex))
-                        .toList();
-
-                if (batch.isEmpty()) {
-                    if (statusText != null) statusText.setText("No items selected.");
-                    return;
-                }
-
-                String modeNow = globalDesiredMode.get();
-                String desiredNow = globalDesiredQuality.get();
-                enqueuePlaylistBatch(batch, modeNow, desiredNow);
-
-                if (statusText != null) {
-                    statusText.setText("Queued playlist: " + batch.size() + " items");
-                }
-
-                reopenAddLinkAfterPlaylist = false;
-                reopenAddLinkPrefillUrl = null;
-
-                stage.close();
-            });
-
-            // Load playlist entries asynchronously
-            new Thread(() -> {
-                java.util.List<PlaylistEntry> loaded = probePlaylistFlat(playlistUrl);
-                Platform.runLater(() -> {
-                    items.setAll(loaded);
-                    if (loaded.isEmpty()) {
-                        status.setText("Could not load playlist (yt-dlp missing?)");
-                    } else {
-                        long bad = loaded.stream().filter(PlaylistEntry::isUnavailable).count();
-                        status.setText("Loaded " + loaded.size() + " items" + (bad > 0 ? (" • " + bad + " unavailable") : ""));
-                    }
-
-                    updatingSelection.set(true);
-                    try {
-                        for (PlaylistEntry it : items) {
-                            if (it == null) continue;
-                            it.setSelected(false);
-                        }
-                    } finally {
-                        updatingSelection.set(false);
-                    }
-
-                    updatingGlobalCombo.set(true);
-                    try {
-                        globalQualityCombo.getSelectionModel().select(QUALITY_BEST);
-                    } finally {
-                        updatingGlobalCombo.set(false);
-                    }
-                    globalDesiredQuality.set(QUALITY_BEST);
-
-                    requestRefreshSafe.run();
-                    refreshAddState.run();
-                    // Start probing sequentially from top -> bottom
-                    probeIndex.set(0);
-                    Platform.runLater(startNextProbe);
-                });
-            }, "probe-playlist").start();
-
-            stage.showAndWait();
+        stage.showAndWait();
     }
 
     // Show tooltip only when title is truncated (for playlist rows)
@@ -6425,6 +5281,14 @@ public class MainController {
         }
     }
     private void enqueuePlaylistBatch(java.util.List<PlaylistEntry> batch, String batchMode, String batchDefaultQuality) {
+        try {
+            if (playlistBatchService != null) {
+                playlistBatchService.enqueue(batch, batchMode, batchDefaultQuality);
+                return;
+            }
+        } catch (Exception ignored) {}
+
+        // fallback only if service wiring failed for any reason
         String modeNow = (batchMode == null || batchMode.isBlank()) ? MODE_VIDEO : batchMode;
 
         playlistBatchMode = modeNow;
@@ -6437,7 +5301,6 @@ public class MainController {
             playlistDownloadQueue.addLast(it);
         }
 
-        // هنا نعرضهم فورًا كـ Pending في الـ main listview
         for (PlaylistEntry it : batch) {
             String url = youtubeWatchUrl(it.getId());
             String q = it.getQuality();
@@ -6453,22 +5316,7 @@ public class MainController {
     }
 
     private void startNextPlaylistDownload() {
-        PlaylistEntry next = playlistDownloadQueue.pollFirst();
-        if (next == null) {
-            playlistBatchRunning.set(false);
-            return;
-        }
-
-        String url = youtubeWatchUrl(next.getId());
-        String modeNow = (playlistBatchMode == null || playlistBatchMode.isBlank()) ? MODE_VIDEO : playlistBatchMode;
-        String q = next.getQuality();
-        if (q == null || q.isBlank()) q = playlistBatchDefaultQuality;
-
-        DownloadRow existing = playlistRowByVideoId.get(next.getId());
-
-        startSingleDownloadFromPlaylist(url, modeNow, q, next.displayTitle(), existing, () ->
-                javafx.application.Platform.runLater(this::startNextPlaylistDownload)
-        );
+        // moved to PlaylistBatchService
     }
 
     private void startSingleDownloadFromPlaylist(String url,
@@ -6477,36 +5325,7 @@ public class MainController {
                                                  String title,
                                                  DownloadRow existingRow,
                                                  Runnable onDone) {
-
-        DownloadRow row = existingRow;
-
-        if (row == null) {
-            // fallback لو لأي سبب ما كان موجود
-            row = startDownloadForUrl(url, mode, quality, title);
-        } else {
-            DownloadRow rFinal = row;
-            javafx.application.Platform.runLater(() -> {
-                try { rFinal.setState(DownloadRow.State.QUEUED); } catch (Exception ignored) {}
-                startDownloadRow(rFinal, false);     // ✅ شغّل المحرك على نفس الصف
-                scheduleHistorySave();
-            });
-        }
-
-        final DownloadRow finalRow = row;
-        finalRow.stateProperty().addListener((obs, oldS, newS) -> {
-            if (newS == DownloadRow.State.COMPLETED
-                    || newS == DownloadRow.State.FAILED
-                    || newS == DownloadRow.State.CANCELLED) {
-
-                // نظّف الماب
-                try {
-                    String id = extractYoutubeId(finalRow.url);
-                    if (id != null) playlistRowByVideoId.remove(id);
-                } catch (Exception ignored) {}
-
-                if (onDone != null) onDone.run();
-            }
-        });
+        // moved to PlaylistBatchService
     }
 
     private DownloadRow startDownloadForUrl(String url, String mode, String quality, String title) {
@@ -6514,8 +5333,10 @@ public class MainController {
         applyThumbForRow(r, url);
         Platform.runLater(() -> {
             downloadItems.add(0, r);
+            if (historyService != null) historyService.scheduleSave();
+
             startDownloadRow(r, false);   // ✅ محرك التحميل الحقيقي عندك
-            scheduleHistorySave();
+
         });
 
         return r;
@@ -6528,7 +5349,7 @@ public class MainController {
 
         Platform.runLater(() -> {
             downloadItems.add(0, r);
-            scheduleHistorySave();
+            if (historyService != null) historyService.scheduleSave();
         });
 
         return r;
@@ -6605,82 +5426,6 @@ public class MainController {
     }
 
 
-private static java.util.List<PlaylistEntry> probePlaylistFlat(String playlistUrl) {
-    java.util.List<PlaylistEntry> out = new java.util.ArrayList<>();
-    if (playlistUrl == null || playlistUrl.isBlank()) return out;
-
-    try {
-        // Build yt-dlp command
-        java.util.List<String> cmd = new java.util.ArrayList<>();
-        cmd.add("yt-dlp");
-
-        // If ffmpeg is available, tell yt-dlp where it is.
-        // This helps on fresh machines where ffmpeg isn't installed system-wide.
-        java.nio.file.Path ffmpeg = com.grabx.app.grabx.util.FfmpegManager.ensureAvailable();
-        if (ffmpeg != null) {
-            cmd.add("--ffmpeg-location");
-            cmd.add(ffmpeg.toAbsolutePath().toString());
-            System.out.println("[FFMPEG] probePlaylistFlat: using ffmpeg at: " + ffmpeg);
-        } else {
-            System.out.println("[FFMPEG] probePlaylistFlat: ffmpeg not available, yt-dlp will try system ffmpeg (if any)." );
-        }
-
-        // Flat playlist to avoid heavy metadata; print: ID|TITLE
-        cmd.add("--flat-playlist");
-        cmd.add("--no-warnings");
-        cmd.add("--print");
-        cmd.add("%(id)s|%(title)s");
-        cmd.add(playlistUrl);
-
-        ProcessBuilder pb = new ProcessBuilder(cmd);
-        pb.redirectErrorStream(true);
-        pb.environment().putIfAbsent("PYTHONIOENCODING", "utf-8");
-
-        Process p = pb.start();
-
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                line = line.trim();
-                if (line.isEmpty()) continue;
-
-                int idx = line.indexOf('|');
-                String id = idx >= 0 ? line.substring(0, idx).trim() : line;
-                if (id.isBlank()) continue;
-
-                String title = idx >= 0 ? line.substring(idx + 1).trim() : "";
-                int index = out.size() + 1;
-
-                PlaylistEntry entry = new PlaylistEntry(index, id, title, youtubeThumbUrl(id), true);
-
-                // yt-dlp flat playlist returns these special titles for unavailable items
-                String t = (title == null) ? "" : title.trim();
-                boolean unavailable = t.equalsIgnoreCase("[Private video]")
-                        || t.equalsIgnoreCase("[Deleted video]")
-                        || t.toLowerCase().contains("private video")
-                        || t.toLowerCase().contains("deleted video");
-
-                if (unavailable) {
-                    entry.setUnavailable(true);
-                    entry.setUnavailableReason(t);
-                    entry.setSelected(false); // do not auto-select
-                }
-
-                out.add(entry);
-            }
-        }
-
-        int code = p.waitFor();
-        if (code != 0) {
-            System.out.println("[yt-dlp] probePlaylistFlat exit code: " + code);
-        }
-
-    } catch (Exception e) {
-        System.out.println("[yt-dlp] probePlaylistFlat failed: " + e.getMessage());
-    }
-
-    return out;
-}
 
     private static String youtubeThumbUrl(String videoId) {
         if (videoId == null || videoId.isBlank()) return null;
@@ -6696,120 +5441,6 @@ private static java.util.List<PlaylistEntry> probePlaylistFlat(String playlistUr
 
     // ========= Clipboard auto-paste (v1) =========
     private String lastClipboardText = "";
-
-    private void setupClipboardAutoPaste() {
-        if (root == null) return;
-
-        // Only run once
-        if (Boolean.TRUE.equals(root.getProperties().get("gx-clip-listener"))) return;
-        root.getProperties().put("gx-clip-listener", Boolean.TRUE);
-
-        // Window focus: fire when app is focused (to catch when user returns from copying a URL)
-        root.sceneProperty().addListener((o1, oldScene, newScene) -> {
-            if (newScene == null) return;
-            newScene.windowProperty().addListener((o2, oldW, newW) -> {
-                if (newW == null) return;
-                newW.focusedProperty().addListener((o3, was, isNow) -> {
-                    if (!isNow) return;
-
-                    String clip = readClipboardTextSafe();
-                    if (addLinkDialogOpen && activeAddLinkUrlField != null && clip.equals(activeAddLinkUrlField.getText())) {
-                        return;
-                    }
-                    if (clip.equals(lastClipboardText)) return;
-                    lastClipboardText = clip;
-
-                    if (!isHttpUrl(clip)) return;
-
-                    // If dialog is open -> update field and focus it.
-                    if (addLinkDialogOpen) {
-                        pendingAddLinkPrefillUrl = clip;
-                        if (activeAddLinkUrlField != null) {
-                            activeAddLinkUrlField.setText(clip);
-                            activeAddLinkUrlField.positionCaret(activeAddLinkUrlField.getText().length());
-                            Platform.runLater(activeAddLinkUrlField::requestFocus);
-                        }
-                        return;
-                    }
-
-                    // If dialog is NOT open -> auto-open it on app focus with the new clipboard URL.
-                    openOrUpdateAddLinkDialog(clip);
-                });
-            });
-
-        });
-
-        // One-time startup: if clipboard already has a URL when the window is first shown, open Add Link (slight delay)
-        if (root.getProperties().get("gx-clip-startup") == null) {
-            root.getProperties().put("gx-clip-startup", Boolean.TRUE);
-
-            root.sceneProperty().addListener((sx, oldS, newS) -> {
-                if (newS == null) return;
-                newS.windowProperty().addListener((wx, oldW, newW) -> {
-                    if (newW == null) return;
-
-                    newW.showingProperty().addListener((shx, wasShowing, isShowing) -> {
-                        if (!isShowing) return;
-                        if (Boolean.TRUE.equals(newW.getProperties().get("gx-clip-startup-done"))) return;
-                        newW.getProperties().put("gx-clip-startup-done", Boolean.TRUE);
-
-                        String clip = readClipboardTextSafe();
-                        lastClipboardText = clip;
-                        if (!isHttpUrl(clip)) return;
-
-                        // slight delay so main UI finishes layout before show
-                        PauseTransition pt = new PauseTransition(Duration.millis(260));
-                        pt.setOnFinished(e -> openOrUpdateAddLinkDialog(clip));
-                        pt.playFromStart();
-                    });
-                });
-            });
-        }
-
-        // Timeline polling: keep this for live update if dialog is open, and for auto-open while app is focused
-        try {
-            if (clipboardPollTimeline != null) {
-                clipboardPollTimeline.stop();
-            }
-        } catch (Exception ignored) {}
-
-        clipboardPollTimeline = new javafx.animation.Timeline(
-                new javafx.animation.KeyFrame(Duration.millis(900), ev -> {
-                    String clip = readClipboardTextSafe();
-                    if (clip.equals(lastClipboardText)) return;
-                    lastClipboardText = clip;
-
-                    // If Add Link dialog is open -> live update its URL field ONLY when clipboard is a URL.
-                    if (addLinkDialogOpen) {
-                        if (isHttpUrl(clip)) {
-                            pendingAddLinkPrefillUrl = clip;
-                            if (activeAddLinkUrlField != null) {
-                                activeAddLinkUrlField.setText(clip);
-                                activeAddLinkUrlField.positionCaret(activeAddLinkUrlField.getText().length());
-                            }
-                        }
-                        return;
-                    }
-
-                    // If dialog is NOT open and the main window is currently focused,
-                    // auto-open Add Link dialog when user copies a NEW URL while app is in foreground.
-                    if (isHttpUrl(clip)) {
-                        try {
-                            var sc = root.getScene();
-                            var w = (sc == null) ? null : sc.getWindow();
-                            boolean focused = (w != null) && w.isFocused();
-                            if (focused) {
-                                openOrUpdateAddLinkDialog(clip);
-                            }
-                        } catch (Exception ignored) {
-                        }
-                    }
-                })
-        );
-        clipboardPollTimeline.setCycleCount(javafx.animation.Animation.INDEFINITE);
-        clipboardPollTimeline.play();
-    }
-
 
 
     // ================== Safe deferred open for Add Link dialog ==================
