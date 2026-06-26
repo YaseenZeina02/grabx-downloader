@@ -1,5 +1,5 @@
 package com.grabx.app.grabx;
-
+import com.grabx.app.grabx.ui.components.DownloadRowActions;
 import com.grabx.app.grabx.core.model.DownloadRow;
 import com.grabx.app.grabx.core.service.DownloadStateCoordinator;
 import com.grabx.app.grabx.core.service.ClearAllService;
@@ -8,6 +8,7 @@ import com.grabx.app.grabx.ui.components.HoverBubble;
 import com.grabx.app.grabx.ui.components.NoSelectionModel;
 import com.grabx.app.grabx.ui.dialogs.NativeDialogs;
 import com.grabx.app.grabx.thumbs.ThumbnailCacheManager;
+import com.grabx.app.grabx.core.service.DownloadRunner;
 import com.grabx.app.grabx.util.YtDlpManager;
 import javafx.animation.*;
 import javafx.collections.transformation.FilteredList;
@@ -58,6 +59,7 @@ import javafx.beans.property.StringProperty;
 import java.io.File;
 
 import static com.grabx.app.grabx.util.YtDlpManager.*;
+import com.grabx.app.grabx.ui.components.DownloadRowCell;
 
 public class MainController {
     @FXML
@@ -120,22 +122,22 @@ public class MainController {
     private static final String ICON_PLUS =
             "M19 11H13V5h-2v6H5v2h6v6h2v-6h6v-2z";
 
-    private static final String ICON_FOLDER_OPEN =
+    public static final String ICON_FOLDER_OPEN =
             "M3 6.5C3 5.12 4.12 4 5.5 4H10L12 6H18.5C19.88 6 21 7.12 21 8.5V17.5C21 18.88 19.88 20 18.5 20H5.5C4.12 20 3 18.88 3 17.5V6.5Z";
 
-    private static final String ICON_PAUSE =
+    public static final String ICON_PAUSE =
             "M6 5h4v14H6V5zm8 0h4v14h-4V5z";
 
-    private static final String ICON_PLAY =
+    public static final String ICON_PLAY =
             "M8 5v14l11-7L8 5z";
 
-    private static final String ICON_CANCEL =
+    public static final String ICON_CANCEL =
             "M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.29 9.17 12 2.89 5.71 4.3 4.29 10.59 10.6 16.89 4.29z";
 
-    private static final String ICON_RETRY =
+    public static final String ICON_RETRY =
             "M12 5a7 7 0 1 1-6.32 4H3l3.5-3.5L10 9H7.76A5.5 5.5 0 1 0 12 6.5V5z";
 
-    private static final String ICON_CLEAR =
+    public static final String ICON_CLEAR =
             "M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z";
 
     private static final String ICON_SETTINGS =
@@ -152,7 +154,7 @@ public class MainController {
                     "M12 15.5c-1.93 0-3.5-1.57-3.5-3.5S10.07 8.5 12 8.5" +
                     "s3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z";
 
-    private static final String ICON_LINK=
+    public static final String ICON_LINK=
             "M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3z";
 
 
@@ -173,7 +175,7 @@ public class MainController {
     private final java.util.Map<DownloadRow, Process> activeProcesses = new java.util.concurrent.ConcurrentHashMap<>();
 
     private DownloadStateCoordinator downloadStateCoordinator;
-
+    private DownloadRunner downloadRunner;
     private final java.util.concurrent.ConcurrentHashMap<DownloadRow, Double> lastProgressMap =
             new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -242,14 +244,14 @@ public class MainController {
 
     // ========= In-scene hover tooltip (no jitter) =========
 
-    private static final String QUALITY_BEST = "Best quality (Recommended)";
-    private static final String QUALITY_SEPARATOR = "──────────────";
+    public static final String QUALITY_BEST = "Best quality (Recommended)";
+    public static final String QUALITY_SEPARATOR = "──────────────";
     private static final String QUALITY_CUSTOM = "Custom (Mixed)";
     private static final String MODE_VIDEO = "Video";
-    private static final String MODE_AUDIO = "Audio only";
+    public static final String MODE_AUDIO = "Audio only";
 
-    private static final String AUDIO_BEST = "Best audio (Recommended)";
-    private static final String AUDIO_DEFAULT_FORMAT = "mp3";
+    public static final String AUDIO_BEST = "Best audio (Recommended)";
+    public static final String AUDIO_DEFAULT_FORMAT = "mp3";
     private static final List<String> AUDIO_FORMATS = List.of(
             "m4a", "mp3", "opus", "aac", "wav", "flac"
     );
@@ -343,16 +345,61 @@ public class MainController {
         normalizeIconButton(addLinkButton);
         normalizeIconButton(settingsButton);
 
-        // Main downloads list (center)
-        ensureDownloadsListView();
-
+        // Main downloads list will be initialized after DownloadStateCoordinator is ready.
         downloadStateCoordinator = new DownloadStateCoordinator(
                 downloadItems,
                 activeProcesses,
                 stopReasons,
                 (row, isResume) -> startDownloadRow(row, isResume),
-                this::updateMissingSidebarItem
+                () -> {
+                    try { updateMissingSidebarItem(); } catch (Exception ignored) {}
+                    try {
+                        if (downloadService != null) {
+                            downloadService.setCombinedFilter(
+                                    currentSidebarFilterKey,
+                                    (searchField == null ? "" : searchField.getText())
+                            );
+                        }
+                    } catch (Exception ignored) {}
+                }
         );
+
+        downloadRunner = new DownloadRunner(
+                activeProcesses,
+                stopReasons,
+                lastProgressMap,
+                () -> {
+                    try { if (historyService != null) historyService.scheduleSave(); } catch (Exception ignored) {}
+                },
+                this::updateMissingSidebarItem,
+                () -> {
+                    try {
+                        if (downloadService != null) {
+                            downloadService.setCombinedFilter(
+                                    currentSidebarFilterKey,
+                                    (searchField == null ? "" : searchField.getText())
+                            );
+                        }
+                    } catch (Exception ignored) {}
+                },
+                label -> parseHeightFromLabel(String.valueOf(label)),
+                (yt, url, selector, outDir, outTpl) -> probeOutputFilename(yt, url, selector, outDir, outTpl),
+                fmt -> supportsAudioThumbnailEmbedding(fmt),
+                line -> isAudioStreamFromDestinationLine(line),
+                value -> parseLongSafe(value),
+                bytes -> formatBytesDecimal(bytes),
+                value -> normalizeSpeedUnit(value),
+                (row, progress) -> applyProgressMonotonic(row, progress),
+                process -> killProcessTree(process),
+                MODE_AUDIO,
+                QUALITY_BEST,
+                QUALITY_SEPARATOR,
+                AUDIO_BEST,
+                AUDIO_DEFAULT_FORMAT
+        );
+
+        // Main downloads list (center) - initialize after coordinator is ready
+        ensureDownloadsListView();
 
         applyFilter("ALL");
         setupSearchFilter();
@@ -906,7 +953,7 @@ public class MainController {
         return q + " \u2022 " + sz; // "•"
     }
 
-    private static int parseHeightFromLabel(String label) {
+    public static int parseHeightFromLabel(String label) {
         if (label == null) return -1;
         Matcher mp = YTDLP_HEIGHT_P.matcher(label);
         if (mp.find()) return safeParseInt(mp.group(1));
@@ -1484,10 +1531,10 @@ public class MainController {
 
     private void showAddLinkDialog(String prefillUrl) {
         if (addLinkDialogService == null) {
-            // fallback: لو ما انعمل init لأي سبب
-            try { addLinkDialogService.show(prefillUrl); } catch (Exception ignored) {}
+            if (statusText != null) statusText.setText("Add link service is not ready");
             return;
         }
+
         addLinkDialogService.show(prefillUrl);
     }
 
@@ -1737,7 +1784,7 @@ public class MainController {
         return -1;
     }
 
-    private static Node svgIcon(String path, double boxSize) {
+    public static Node svgIcon(String path, double boxSize) {
         javafx.scene.shape.SVGPath svg = new javafx.scene.shape.SVGPath();
         svg.setContent(path);
         svg.getStyleClass().add("gx-svg-icon");
@@ -1761,7 +1808,7 @@ public class MainController {
         return box;
     }
 
-    private static void setupSvgButton(Button b, String svgPath) {
+    public static void setupSvgButton(Button b, String svgPath) {
         // Match Topbar icon buttons look
         b.getStyleClass().addAll("gx-icon-btn", "gx-task-action");
         b.setFocusTraversable(false);
@@ -1776,970 +1823,47 @@ public class MainController {
 
         downloadsList.setItems(downloadService.view());
 
-        downloadsList.setCellFactory(lv -> new ListCell<>() {
-            private final Label title = new Label();
-            private final Label meta = new Label();
-            private final Label status = new Label();
-
-            private final Label speedDot = new Label("·");
-            private final Label speed = new Label();
-            private final Label etaDot = new Label("·");
-            private final Label eta = new Label();
-            // Thumbnail (left)
-            private final StackPane thumbBox = new StackPane();
-            private final ImageView thumb = new ImageView();
-            private final Label thumbPlaceholder = new Label("NO PREVIEW");
-
-            // Keep a listener so thumbnail updates after the row is already in the list
-            private javafx.beans.value.ChangeListener<String> thumbUrlListener;
-            private String lastThumbUrl;
-
-            // Keep a listener so action buttons update when state changes (cell reuse safe)
-            private javafx.beans.value.ChangeListener<DownloadRow.State> stateListener;
-
-            private void applyButtonsForState(DownloadRow.State st) {
-                // reset status style each time (because cells are reused)
-                try { status.setStyle(""); } catch (Exception ignored) {}
-                if (st == null) st = DownloadRow.State.QUEUED;
-
-                boolean isQueued      = st == DownloadRow.State.QUEUED;
-                boolean isDownloading = st == DownloadRow.State.DOWNLOADING;
-                boolean isPaused      = st == DownloadRow.State.PAUSED;
-                boolean isCompleted   = st == DownloadRow.State.COMPLETED;
-                boolean isMissing     = st == DownloadRow.State.MISSING;
-                boolean isFailed      = st == DownloadRow.State.FAILED || st == DownloadRow.State.CANCELLED;
-
-                java.util.function.BiConsumer<Button, Boolean> showBtn = (btn, show) -> {
-                    btn.setVisible(show);
-                    btn.setManaged(show);
-                };
-
-                // Default
-                showBtn.accept(pauseBtn, false);
-                showBtn.accept(resumeBtn, false);
-                showBtn.accept(cancelBtn, false);
-                showBtn.accept(openLinkBtn, false);
-                showBtn.accept(retryBtn, false);
-                showBtn.accept(folderBtn, true);
-                // default: enabled فقط لما يكون COMPLETED+file exists
-                folderBtn.setDisable(true);
-
-
-                if (isDownloading) {
-                    showBtn.accept(pauseBtn, true);
-                    showBtn.accept(cancelBtn, true);
-                    showBtn.accept(retryBtn, false);
-                    showBtn.accept(openLinkBtn, false);
-                } else if (isPaused) {
-                    showBtn.accept(resumeBtn, true);
-                    showBtn.accept(cancelBtn, true);
-                } else if (isQueued) {
-                    showBtn.accept(cancelBtn, true);
-                } else if (isMissing) {
-                    showBtn.accept(openLinkBtn, true);
-                    showBtn.accept(retryBtn, true);
-                    folderBtn.setDisable(true);
-                } else if (isFailed) {
-                    showBtn.accept(retryBtn, true);
-                } else if (isCompleted) {
-                    // folder only
-                }
-
-                // Safety
-                if (isDownloading) {
-                    showBtn.accept(retryBtn, false);
-                }
-
-                if (st == DownloadRow.State.FAILED) {
-                    try { status.setStyle("-fx-text-fill: #ff5b5b;"); } catch (Exception ignored) {}
-                }
-            }
-
-            private static final java.util.concurrent.ExecutorService THUMB_POOL =
-                    java.util.concurrent.Executors.newFixedThreadPool(
-                            4,
-                            r -> {
-                                Thread t = new Thread(r, "thumb-pool");
-                                t.setDaemon(true);
-                                return t;
-                            }
-                    );
-
-            // in-flight fetches so we don't start N threads for the same URL
-            private static final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CompletableFuture<Image>> THUMB_INFLIGHT =
-                    new java.util.concurrent.ConcurrentHashMap<>();
-
-            private void loadThumbUrl(String url) {
-                try {
-                    // Avoid re-doing work for the same URL (cells are reused)
-                    if (url != null && url.equals(lastThumbUrl)) {
-                        return;
-                    }
-                    lastThumbUrl = url;
-
-                    // No URL -> show placeholder
-                    if (url == null || url.isBlank()) {
-                        thumb.setImage(null);
-                        thumbPlaceholder.setVisible(true);
-                        return;
-                    }
-
-                    // Local cached file (file://...) -> load directly (no HTTP)
-                    if (url.startsWith("file:")) {
-                        try {
-                            Image img = MAIN_THUMB_CACHE.get(url);
-                            if (img == null) {
-                                img = new Image(url, true);
-                                MAIN_THUMB_CACHE.put(url, img);
-                            }
-
-                            thumb.setImage(img);
-                            thumbPlaceholder.setVisible(false);
-
-                            // apply viewport once loaded
-                            if (img.getWidth() > 0 && img.getHeight() > 0) {
-                                applyCoverViewport(thumb, img, 108, 66);
-                            } else {
-                                Image finalImg = img;
-                                img.progressProperty().addListener((o, ov, nv) -> {
-                                    try {
-                                        if (nv != null && nv.doubleValue() >= 1.0 && finalImg.getWidth() > 0 && finalImg.getHeight() > 0) {
-                                            applyCoverViewport(thumb, finalImg, 108, 66);
-                                        }
-                                    } catch (Exception ignored) {}
-                                });
-                            }
-                            return;
-                        } catch (Exception ignored) {
-                            thumb.setImage(null);
-                            thumbPlaceholder.setVisible(true);
-                            return;
-                        }
-                    }
-
-
-
-                    // Cache hit
-                    Image cached = MAIN_THUMB_CACHE.get(url);
-                    if (cached != null) {
-                        thumb.setImage(cached);
-                        thumbPlaceholder.setVisible(false);
-                        applyCoverViewport(thumb, cached, 108, 66);
-                        return;
-                    }
-
-                    // Cache miss -> show placeholder while fetching
-                    thumb.setImage(null);
-                    thumbPlaceholder.setVisible(true);
-
-                    // Reuse in-flight fetch if exists
-                    java.util.concurrent.CompletableFuture<Image> fut =
-                            THUMB_INFLIGHT.computeIfAbsent(url, key ->
-                                    java.util.concurrent.CompletableFuture.supplyAsync(() -> {
-                                        try {
-                                            // 1) Try cache first (no network)
-                                            Image img = ThumbnailCacheManager.loadCached(key);
-                                            if (img != null) {
-                                                MAIN_THUMB_CACHE.put(key, img);
-                                                return img;
-                                            }
-
-                                            // 2) Not cached -> download ONCE to disk (runs in THUMB_POOL thread)
-                                            ThumbnailCacheManager.fetchAndCacheBlocking(key, key);
-
-                                            // 3) Load from disk after download
-                                            Image loaded = ThumbnailCacheManager.loadCached(key);
-                                            if (loaded != null) {
-                                                MAIN_THUMB_CACHE.put(key, loaded);
-                                            }
-                                            return loaded;
-
-                                        } catch (Exception ignored) {
-                                            return null;
-                                        }
-                                    }, THUMB_POOL).whenComplete((img, ex) -> {
-                                        THUMB_INFLIGHT.remove(key);
-                                    })
-                            );
-
-                    fut.thenAccept(img -> {
-                        if (img == null) return;
-                        Platform.runLater(() -> {
-                            // Cell reuse safety: apply only if this cell still wants this url
-                            DownloadRow it = getItem();
-                            String cur = null;
-                            try { if (it != null && it.thumbUrl != null) cur = it.thumbUrl.get(); } catch (Exception ignored) {}
-                            if (cur == null || !cur.equals(url)) return;
-
-                            thumb.setImage(img);
-                            thumbPlaceholder.setVisible(false);
-                            applyCoverViewport(thumb, img, 108, 66);
-                        });
-                    });
-
-                } catch (Exception ignored) {
-                    thumb.setImage(null);
-                    thumbPlaceholder.setVisible(true);
-                }
-            }
-
-            private static byte[] fetchUrlBytes(String u) throws java.io.IOException {
-                java.net.HttpURLConnection conn = null;
-                try {
-                    java.net.URL uu = new java.net.URL(u);
-                    conn = (java.net.HttpURLConnection) uu.openConnection();
-                    conn.setInstanceFollowRedirects(true);
-                    conn.setConnectTimeout(7000);
-                    conn.setReadTimeout(12000);
-                    conn.setRequestProperty("User-Agent", "GrabX/1.0");
-
-                    int code = conn.getResponseCode();
-                    if (code < 200 || code >= 300) return null;
-
-                    try (java.io.InputStream in = conn.getInputStream()) {
-                        return in.readAllBytes();
-                    }
-                } finally {
-                    try { if (conn != null) conn.disconnect(); } catch (Exception ignored) {}
-                }
-            }
-
-
-            private final ProgressBar bar = new ProgressBar(0);
-
-            // Smooth visual progress (prevents jumping when yt-dlp updates in bursts)
-            private double targetProgress = 0.0;      // desired progress value (0..1) OR -1 for indeterminate
-            private double visualProgress = 0.0;      // what we actually show
-            private DownloadRow progressBoundRow;     // which row this cell is currently listening to
-            private javafx.beans.value.ChangeListener<Number> progressListener;
-
-            private final AnimationTimer progressSmoother = new AnimationTimer() {
-                private long lastNs = 0;
-
-                @Override
-                public void handle(long now) {
-                    if (lastNs == 0) { lastNs = now; return; }
-
-                    // Indeterminate
-                    if (targetProgress < 0) {
-                        if (bar.getProgress() != ProgressIndicator.INDETERMINATE_PROGRESS) {
-                            bar.progressProperty().unbind();
-                            bar.setProgress(ProgressIndicator.INDETERMINATE_PROGRESS);
-                        }
-                        return;
-                    }
-
-                    // If we were indeterminate before, snap to target first
-                    if (bar.getProgress() < 0) {
-                        visualProgress = clamp01(targetProgress);
-                        bar.progressProperty().unbind();
-                        bar.setProgress(visualProgress);
-                        return;
-                    }
-
-                    double tp = clamp01(targetProgress);
-
-                    // time-based smoothing so it feels consistent across machines
-                    double dt = (now - lastNs) / 1_000_000_000.0;
-                    lastNs = now;
-
-                    // smoothing speed (bigger = faster catch-up)
-                    double k = 12.0; // ~0.25s to settle; tweak 8..14
-                    double alpha = 1.0 - Math.exp(-k * dt);
-
-                    visualProgress = visualProgress + (tp - visualProgress) * alpha;
-
-                    if (Math.abs(tp - visualProgress) < 0.0015) {
-                        visualProgress = tp;
-                    }
-
-                    bar.progressProperty().unbind();
-                    bar.setProgress(clamp01(visualProgress));
-                }
-
-                @Override
-                public void stop() {
-                    super.stop();
-                    lastNs = 0;
-                }
-            };
-
-            private void bindSmoothProgress(DownloadRow row) {
-                // detach old
-                try {
-                    if (progressBoundRow != null && progressListener != null) {
-                        progressBoundRow.progress.removeListener(progressListener);
-                    }
-                } catch (Exception ignored) {}
-
-                progressBoundRow = row;
-
-                if (row == null) {
-                    targetProgress = 0.0;
-                    visualProgress = 0.0;
-                    bar.progressProperty().unbind();
-                    bar.setProgress(0);
-                    try { progressSmoother.stop(); } catch (Exception ignored) {}
-                    return;
-                }
-
-                if (progressListener == null) {
-                    progressListener = (obs, oldV, newV) -> {
-                        if (newV == null) return;
-                        targetProgress = newV.doubleValue();
-                    };
-                }
-
-                try { row.progress.addListener(progressListener); } catch (Exception ignored) {}
-
-                // init
-                try { targetProgress = row.progress.get(); } catch (Exception ignored) { targetProgress = 0.0; }
-                if (targetProgress < 0) {
-                    bar.progressProperty().unbind();
-                    bar.setProgress(ProgressIndicator.INDETERMINATE_PROGRESS);
-                } else {
-                    visualProgress = clamp01(targetProgress);
-                    bar.progressProperty().unbind();
-                    bar.setProgress(visualProgress);
-                }
-
-                // start smoother (idempotent)
-                try { progressSmoother.start(); } catch (Exception ignored) {}
-            }
-
-            private void unbindSmoothProgress() {
-                try {
-                    if (progressBoundRow != null && progressListener != null) {
-                        progressBoundRow.progress.removeListener(progressListener);
-                    }
-                } catch (Exception ignored) {}
-                progressBoundRow = null;
-                targetProgress = 0.0;
-                visualProgress = 0.0;
-                bar.progressProperty().unbind();
-                bar.setProgress(0);
-                try { progressSmoother.stop(); } catch (Exception ignored) {}
-            }
-
-            private double clamp01(double v) {
-                if (v < 0) return 0;
-                if (v > 1) return 1;
-                return v;
-            }
-
-            private final Button pauseBtn = new Button();
-            private final Button resumeBtn = new Button();
-            private final Button cancelBtn = new Button();
-            private final Button openLinkBtn = new Button();
-            private final Button folderBtn = new Button();
-            private final Button retryBtn = new Button();
-            private final Button clearBtn = new Button();
-
-            private final HBox actions = new HBox(8);
-            private final VBox textBox = new VBox(6);
-            private final HBox headerRow = new HBox(12);
-            private final HBox footerRow = new HBox(10);
-            private final VBox card = new VBox(10);
-
-            private final Label sizeLabel = new Label();
-
-
-
-            {
-                setStyle("-fx-background-color: transparent;");
-
-                title.getStyleClass().add("gx-task-title");
-                title.setWrapText(false);
-
-
-                meta.getStyleClass().add("gx-task-meta");
-
-                // Footer / metrics: unify font + color + size
-                status.getStyleClass().addAll("gx-task-status", "gx-task-metric");
-                speed.getStyleClass().addAll("gx-task-status", "gx-task-metric");
-                eta.getStyleClass().addAll("gx-task-status", "gx-task-metric");
-                sizeLabel.getStyleClass().addAll("gx-task-status", "gx-task-metric");
-
-                speedDot.getStyleClass().addAll("gx-task-status", "gx-task-metric");
-                etaDot.getStyleClass().addAll("gx-task-status", "gx-task-metric");
-
-                speedDot.setOpacity(0.6);
-                etaDot.setOpacity(0.6);
-
-                // dots tight
-                speedDot.setMinWidth(10);
-                speedDot.setPrefWidth(10);
-                etaDot.setMinWidth(10);
-                etaDot.setPrefWidth(10);
-
-
-
-                // Fixed width to avoid jitter when numbers change
-                sizeLabel.setMinWidth(180);
-                sizeLabel.setPrefWidth(180);
-                sizeLabel.setMaxWidth(180);
-                sizeLabel.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
-                // Monospace-like rendering so digits look stable
-                sizeLabel.setStyle("-fx-font-family: 'Monospaced';");
-
-                bar.getStyleClass().add("gx-task-progress");
-                bar.setMaxWidth(Double.MAX_VALUE);
-                bar.setPrefHeight(6);
-                bar.setMinHeight(6);
-
-                // Thumbnail
-                thumb.setFitWidth(108);
-                thumb.setFitHeight(66);
-                thumb.setPreserveRatio(true);
-                thumb.setPreserveRatio(true);
-                thumb.setSmooth(true);
-
-                thumbBox.getStyleClass().add("gx-task-thumb");
-                thumbPlaceholder.getStyleClass().add("gx-task-thumb-placeholder");
-                thumbBox.getChildren().addAll(thumb, thumbPlaceholder);
-
-                applyRoundedClip(thumbBox, 14);
-
-                // Icon buttons (SVG) — unified with topbar style
-                setupSvgButton(pauseBtn, ICON_PAUSE);
-                setupSvgButton(resumeBtn, ICON_PLAY);
-                setupSvgButton(cancelBtn, ICON_CANCEL);
-                cancelBtn.getStyleClass().add("cancel");
-                cancelBtn.setGraphic(svgIcon(ICON_CANCEL, 30));
-                setupSvgButton(openLinkBtn, ICON_LINK);
-                setupSvgButton(folderBtn, ICON_FOLDER_OPEN);
-                setupSvgButton(retryBtn, ICON_RETRY);
-                // Clear button (remove row) - SVG like other action buttons
-                setupSvgButton(clearBtn, ICON_CLEAR);
-
-//                clearBtn.setGraphic(svgIcon(ICON_CLEAR, 30)); // نفس حجم cancel تقريباً
-                MainController.this.installTooltip(clearBtn, "Clear item");
-
-                MainController.this.installTooltip(pauseBtn, "Pause download");
-                MainController.this.installTooltip(resumeBtn, "Resume download");
-                MainController.this.installTooltip(cancelBtn, "Cancel download");
-                MainController.this.installTooltip(openLinkBtn, "Open link");
-                MainController.this.installTooltip(retryBtn, "Retry download");
-                MainController.this.installTooltip(folderBtn, "Open folder");
-
-
-                actions.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
-                actions.setFillHeight(true);
-                actions.setMinHeight(40);
-                actions.getChildren().addAll(pauseBtn, resumeBtn, cancelBtn , openLinkBtn, retryBtn, folderBtn, clearBtn);
-
-                textBox.getChildren().addAll(title, meta);
-                HBox.setHgrow(textBox, Priority.ALWAYS);
-
-                headerRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
-                headerRow.getChildren().addAll(thumbBox, textBox, actions);
-
-                footerRow.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
-                footerRow.setSpacing(2);
-
-                // Use a spacer so metrics stay grouped on the far right without stretching the status text.
-                final Region footerSpacer = new Region();
-                HBox.setHgrow(footerSpacer, Priority.ALWAYS);
-
-                // Metrics styling (fixed width + monospace so numbers don't "jitter")
-                sizeLabel.getStyleClass().addAll("gx-task-status", "gx-task-metric");
-                speed.getStyleClass().addAll("gx-task-status", "gx-task-metric");
-
-                eta.getStyleClass().addAll("gx-task-status", "gx-task-metric");
-
-                // IMPORTANT: force LTR for numeric metrics to avoid RTL/bidi spacing artifacts
-                sizeLabel.setNodeOrientation(javafx.geometry.NodeOrientation.LEFT_TO_RIGHT);
-                speed.setNodeOrientation(javafx.geometry.NodeOrientation.LEFT_TO_RIGHT);
-                eta.setNodeOrientation(javafx.geometry.NodeOrientation.LEFT_TO_RIGHT);
-
-                // Use a monospace font for all numeric metrics (better on macOS)
-                String metricStyle = "-fx-font-family: 'Menlo', 'Consolas', 'Monospaced'; -fx-font-size: 14px; -fx-text-fill: rgba(255,255,255,0.78);";
-                sizeLabel.setStyle(metricStyle);
-                speed.setStyle(metricStyle);
-                eta.setStyle(metricStyle);
-
-                status.setStyle(metricStyle);
-                speedDot.setStyle(metricStyle);
-                etaDot.setStyle(metricStyle);
-
-                sizeLabel.setMinWidth(155);
-                sizeLabel.setPrefWidth(155);
-                sizeLabel.setMaxWidth(155);
-
-                speed.setMinWidth(85);
-                speed.setPrefWidth(85);
-                speed.setMaxWidth(85);
-
-                speed.setTextOverrun(OverrunStyle.CLIP);
-                speed.setNodeOrientation(NodeOrientation.LEFT_TO_RIGHT);
-                speed.setAlignment(Pos.CENTER_LEFT);
-
-                eta.setMinWidth(60);
-                eta.setPrefWidth(60);
-                eta.setMaxWidth(60);
-
-                // Right-align metrics
-                sizeLabel.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
-                speed.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
-                eta.setAlignment(javafx.geometry.Pos.CENTER_RIGHT);
-
-                // Avoid showing "..." if the width is tight; just clip
-                sizeLabel.setTextOverrun(javafx.scene.control.OverrunStyle.CLIP);
-                speed.setTextOverrun(javafx.scene.control.OverrunStyle.CLIP);
-                eta.setTextOverrun(javafx.scene.control.OverrunStyle.CLIP);
-
-                // Details on row downloading
-                footerRow.getChildren().setAll(
-                        status,
-                        speedDot,
-                        speed,
-                        footerSpacer,
-                        sizeLabel,
-                        eta
-                );
-                card.getStyleClass().add("gx-task-card");
-                card.getChildren().addAll(headerRow, bar, footerRow);
-                VBox.setVgrow(card, Priority.NEVER);
-
-                // Actions (UI-only for now)
-                pauseBtn.setOnAction(e -> {
-                    DownloadRow it = getItem();
-                    if (it == null) return;
-                    downloadStateCoordinator.pause(it);
-                });
-
-                resumeBtn.setOnAction(e -> {
-                    DownloadRow it = getItem();
-                    if (it == null) return;
-                    downloadStateCoordinator.resume(it);
-                });
-
-                cancelBtn.setOnAction(e -> {
-                    DownloadRow it = getItem();
-                    if (it == null) return;
-                    downloadStateCoordinator.cancel(it);
-                });
-
-                clearBtn.setOnAction(e -> {
-                    DownloadRow it = getItem();
-                    if (it == null) return;
-
-                    // ---- Determine if this download might have produced partial files (risk) ----
-                    // We show the confirm dialog for ANY non-completed row, even if progress==0,
-                    // because yt-dlp may already have created .part/.ytdl files before we parse outputFile.
-                    boolean risky = true;
+        DownloadRowActions rowActions = new DownloadRowActions(
+                downloadStateCoordinator,
+                activeProcesses,
+                stopReasons,
+                downloadItems,
+                statusText,
+                (row, isResume) -> startDownloadRow(row, isResume),
+                this::updateMissingSidebarItem,
+                () -> {
                     try {
-                        if (it.state != null && it.state.get() == DownloadRow.State.COMPLETED) {
-                            risky = false;
-                        }
+                        downloadService.setCombinedFilter(
+                                currentSidebarFilterKey,
+                                (searchField == null ? "" : searchField.getText())
+                        );
                     } catch (Exception ignored) {}
-
-                    // Resolve output path if known
-                    java.nio.file.Path absOut = null;
-                    try {
-                        java.nio.file.Path out = (it.outputFile != null) ? it.outputFile.get() : null;
-                        if (out != null) {
-                            absOut = out.toAbsolutePath().normalize();
-                            // if the final file exists, it's definitely a candidate for delete
-                            if (java.nio.file.Files.exists(absOut)) risky = true;
-                        }
-                    } catch (Exception ignored) {}
-
-                    // If there is a running process, it's risky
-                    try {
-                        Process pr = activeProcesses.get(it);
-                        if (pr != null && pr.isAlive()) risky = true;
-                    } catch (Exception ignored) {}
-
-                    // Also consider progress > 0 as risky
-                    try {
-                        if (it.progress != null && it.progress.get() > 0.0001) risky = true;
-                    } catch (Exception ignored) {}
-
-                    // Title/name for dialog
-                    String fileName = null;
-                    try {
-                        fileName = (it.title == null) ? null : it.title.get();
-                    } catch (Exception ignored) {}
-                    if (fileName == null || fileName.isBlank()) fileName = "this download";
-
-                    // ---- Native confirm only if risky ----
-                    boolean deleteFiles = false;
-                    if (risky) {
-                        // We can offer delete even if absOut is not known yet; we'll delete common partials from the folder.
-                        NativeDialogs.RemoveChoice choice = NativeDialogs.showRemoveConfirm(fileName, true);
-
-                        if (choice == null || choice == NativeDialogs.RemoveChoice.CANCEL) {
-                            return; // user cancelled
-                        }
-
-                        deleteFiles = (choice == NativeDialogs.RemoveChoice.REMOVE_AND_DELETE);
-                    }
-
-                    // ---- Cancel any running process AFTER confirmation ----
-                    try {
-                        Process p = activeProcesses.get(it);
-                        if (p != null && p.isAlive()) {
-                            stopReasons.put(it, "CANCEL");
-                            try { p.destroy(); } catch (Exception ignored) {}
-                            try { p.destroyForcibly(); } catch (Exception ignored) {}
-                        }
-                    } catch (Exception ignored) {}
-
-                    try { activeProcesses.remove(it); } catch (Exception ignored) {}
-                    try { stopReasons.remove(it); } catch (Exception ignored) {}
-
-                    // ---- Delete files if requested ----
-                    if (deleteFiles) {
-                        // 1) If we know the final output path, delete it and its common sidecars
-                        if (absOut != null) {
-                            try { java.nio.file.Files.deleteIfExists(absOut); } catch (Exception ignored) {}
-                            try { java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(absOut.toString() + ".part")); } catch (Exception ignored) {}
-                            try { java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(absOut.toString() + ".ytdl")); } catch (Exception ignored) {}
-                            try { java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(absOut.toString() + ".temp")); } catch (Exception ignored) {}
-                            try { java.nio.file.Files.deleteIfExists(java.nio.file.Paths.get(absOut.toString() + ".tmp")); } catch (Exception ignored) {}
-                        }
-
-                        // 2) Also delete common partial files inside the target folder (covers cases where outputFile isn't parsed yet)
-                        try {
-                            String folderStr = (it.folder == null) ? null : it.folder.trim();
-                            if (folderStr != null && !folderStr.isBlank()) {
-                                java.nio.file.Path dir = java.nio.file.Paths.get(folderStr).toAbsolutePath().normalize();
-                                if (java.nio.file.Files.exists(dir) && java.nio.file.Files.isDirectory(dir)) {
-                                    try (java.nio.file.DirectoryStream<java.nio.file.Path> ds = java.nio.file.Files.newDirectoryStream(dir)) {
-                                        for (java.nio.file.Path pth : ds) {
-                                            if (pth == null) continue;
-                                            String n = null;
-                                            try { n = pth.getFileName().toString().toLowerCase(java.util.Locale.ROOT); } catch (Exception ignored) {}
-                                            if (n == null) continue;
-
-                                            // delete known temp/partial patterns
-                                            boolean isPartial = n.endsWith(".part") || n.endsWith(".ytdl") || n.endsWith(".tmp") || n.endsWith(".temp") || n.endsWith(".part-frag") || n.endsWith(".f");
-
-                                            if (isPartial) {
-                                                try { java.nio.file.Files.deleteIfExists(pth); } catch (Exception ignored) {}
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (Exception ignored) {}
-                    }
-
-                    // ---- Remove card + save history ----
-                    Platform.runLater(() -> {
-                        try {
-                            downloadItems.remove(it);
-                            updateMissingSidebarItem();
-                        } catch (Exception ignored) {}
-                    });
-                });
-
-
-                folderBtn.setOnAction(e -> {
-                    DownloadRow it = getItem();
-                    if (it == null) return;
-
-                    // ✅ Only allow opening when COMPLETED
-                    try {
-                        if (it.state == null || it.state.get() != DownloadRow.State.COMPLETED) {
-                            return;
-                        }
-                    } catch (Exception ignored) {
-                        return;
-                    }
-
-                    try {
-                        java.nio.file.Path outFile = null;
-                        if (it.outputFile != null) outFile = it.outputFile.get();
-
-                        // Must know the final file AND it must exist
-                        if (outFile != null) {
-                            java.nio.file.Path abs = null;
-                            try { abs = outFile.toAbsolutePath().normalize(); } catch (Exception ignored) {}
-
-                            if (abs != null && java.nio.file.Files.exists(abs)) {
-                                revealInFileManager(abs);
-                                return;
-                            }
-                        }
-
-                        // ❌ File missing -> do NOT open folder, just inform
-                        if (statusText != null) {
-                            String name = null;
-                            try { name = it.title == null ? null : it.title.get(); } catch (Exception ignored) {}
-                            if (name == null || name.isBlank()) name = "This file";
-                            statusText.setText(name + " was moved or deleted.");
-
-                            // Mark as missing (file was removed from disk)
-                            try {
-                                it.setState(DownloadRow.State.MISSING);
-                            } catch (Exception ignored) {}
-
-                            Platform.runLater(() -> {
-                                try { updateMissingSidebarItem(); } catch (Exception ignored) {}
-                                try { downloadService.refilter(); } catch (Exception ignored) {}
-                            });
-                        }
-                    } catch (Exception ignored) {}
-                });
-
-                retryBtn.setOnAction(e -> {
-                    DownloadRow it = getItem();
-                    if (it == null) return;
-
-                    // أوقف أي Process شغال
-                    try { downloadStateCoordinator.cancel(it); } catch (Exception ignored) {}
-
-                    // Reset
-                    it.progress.set(0);
-                    it.speed.set("0 KB/s");
-                    it.eta.set("--");
-                    it.setState(DownloadRow.State.QUEUED);
-
-                    if (statusText != null) statusText.setText("Retry: " + it.title.get());
-
-                    // ابدأ من جديد (وخليها --continue عشان لو في جزء نازل يكمل)
-                    startDownloadRow(it, true);
-                    updateMissingSidebarItem();
-                });
-
-                openLinkBtn.setOnAction(e -> {
-                    DownloadRow it = getItem();
-                    if (it == null || it.url == null || it.url.isBlank()) return;
-                    try {
-                        java.awt.Desktop.getDesktop().browse(new java.net.URI(it.url.trim()));
-                    } catch (Exception ignored) {}
-                });
-            }
-
-            @Override
-            protected void updateItem(DownloadRow item, boolean empty) {
-                super.updateItem(item, empty);
-                if (empty || item == null) {
-                    setText(null);
-                    setGraphic(null);
-                    // stop smoother (cell reuse safety)
-                    try { unbindSmoothProgress(); } catch (Exception ignored) {}
-
-                    // Unbind/reset metric visibility so reused cells don't keep old bindings
-                    try {
-                        sizeLabel.visibleProperty().unbind();
-                        sizeLabel.managedProperty().unbind();
-                        speed.visibleProperty().unbind();
-                        speed.managedProperty().unbind();
-                        eta.visibleProperty().unbind();
-                        eta.managedProperty().unbind();
-
-                        sizeLabel.setVisible(true);
-                        sizeLabel.setManaged(true);
-                        speed.setVisible(true);
-                        speed.setManaged(true);
-                        eta.setVisible(true);
-                        eta.setManaged(true);
-                    } catch (Exception ignored) {}
-                    // Unbind/reset dot label bindings so reused cells don't keep old bindings
-                    try {
-                        speedDot.visibleProperty().unbind();
-                        speedDot.managedProperty().unbind();
-                        etaDot.visibleProperty().unbind();
-                        etaDot.managedProperty().unbind();
-
-                        speedDot.setVisible(true);
-                        speedDot.setManaged(true);
-                        etaDot.setVisible(true);
-                        etaDot.setManaged(true);
-                    } catch (Exception ignored) {}
-                    // Unbind/reset footer text bindings too (cell reuse safety)
-                    try {
-                        status.textProperty().unbind();
-                        speed.textProperty().unbind();
-                        eta.textProperty().unbind();
-                        sizeLabel.textProperty().unbind();
-                    } catch (Exception ignored) {}
-                    // Unbind/reset progress bar (cell reuse safety)
-                    try {
-                        bar.progressProperty().unbind();
-                        bar.setProgress(0);
-                        bar.setVisible(true);
-                        bar.setManaged(true);
-                    } catch (Exception ignored) {}
-
-                    lastThumbUrl = null;
-                    thumb.setImage(null);
-
-                    setPadding(javafx.geometry.Insets.EMPTY);
-                    return;
-                }
-
-                // Detach previous listener (cell reuse)
-                try {
-                    DownloadRow prev = (DownloadRow) getUserData();
-                    if (prev != null && prev.thumbUrl != null && thumbUrlListener != null) {
-                        prev.thumbUrl.removeListener(thumbUrlListener);
-                    }
-                } catch (Exception ignored) {}
-                try {
-                    DownloadRow prev = (DownloadRow) getUserData();
-                    if (prev != null && prev.state != null && stateListener != null) {
-                        prev.state.removeListener(stateListener);
-                    }
-                } catch (Exception ignored) {}
-
-                // Attach listener to current item
-                setUserData(item);
-                if (thumbUrlListener == null) {
-                    thumbUrlListener = (obs, oldV, newV) -> loadThumbUrl(newV);
-                }
-                if (item.thumbUrl != null) {
-                    item.thumbUrl.addListener(thumbUrlListener);
-                }
-                if (stateListener == null) {
-                    stateListener = (obs, oldV, newV) -> Platform.runLater(() -> {
-                        applyButtonsForState(newV);
-
-                        DownloadRow cur = getItem();
-                        boolean canOpen = false;
-                        try {
-                            if (cur != null && cur.state != null && cur.state.get() == DownloadRow.State.COMPLETED
-                                    && cur.outputFile != null && cur.outputFile.get() != null) {
-                                java.nio.file.Path abs = cur.outputFile.get().toAbsolutePath().normalize();
-                                canOpen = java.nio.file.Files.exists(abs);
-                            }
-                        } catch (Exception ignored) {
-                            canOpen = false;
-                        }
-                        folderBtn.setDisable(!canOpen);
-                    });                }
-                try {
-                    if (item.state != null) {
-                        item.state.addListener(stateListener);
-                    }
-                } catch (Exception ignored) {}
-
-                title.textProperty().unbind();
-                title.textProperty().bind(item.title);
-                meta.setText(item.mode + " • " + item.quality + " • " + item.folder);
-
-                // Bind footer texts (cell reuse safe)
-                status.textProperty().unbind();
-                speed.textProperty().unbind();
-                eta.textProperty().unbind();
-                sizeLabel.textProperty().unbind();
-
-                status.textProperty().bind(item.status);
-                // Ensure normal binding is active by default (the preparing animation will unbind it if needed)
-                speed.textProperty().bind(item.speed);
-                eta.textProperty().bind(item.eta);
-                sizeLabel.textProperty().bind(item.size);
-
-                // Thumbnail
-                final String turl = (item.thumbUrl == null) ? null : item.thumbUrl.get();
-                loadThumbUrl(turl);
-
-                // Show speed / ETA only when we actually have values (so they don't appear during "Preparing...")
-                javafx.beans.binding.BooleanBinding isDownloading =
-                        item.state.isEqualTo(DownloadRow.State.DOWNLOADING);
-
-                javafx.beans.binding.BooleanBinding showSpeed =
-                        isDownloading.and(item.speed.isNotNull()).and(item.speed.isNotEmpty());
-
-                javafx.beans.binding.BooleanBinding showEta =
-                        isDownloading.and(item.eta.isNotNull()).and(item.eta.isNotEmpty());
-
-
-
-                // size: show only when we actually have size text
-                javafx.beans.binding.BooleanBinding showSize =
-                        item.size.isNotNull()
-                                .and(item.size.isNotEmpty())
-                                .and(item.progress.greaterThanOrEqualTo(0));
-
-                // reset old bindings (cell reuse safety)
-                sizeLabel.visibleProperty().unbind();
-                sizeLabel.managedProperty().unbind();
-                speed.visibleProperty().unbind();
-                speed.managedProperty().unbind();
-                eta.visibleProperty().unbind();
-                eta.managedProperty().unbind();
-
-                // apply rules
-                sizeLabel.visibleProperty().bind(showSize);
-                sizeLabel.managedProperty().bind(showSize);
-
-                speed.visibleProperty().bind(showSpeed);
-                speed.managedProperty().bind(showSpeed);
-
-                eta.visibleProperty().bind(showEta);
-                eta.managedProperty().bind(showEta);
-
-                // Bind the dots to the same logic (speedDot same as speed, etaDot appears only if BOTH size and eta are shown)
-                speedDot.visibleProperty().bind(showSpeed);
-                speedDot.managedProperty().bind(showSpeed);
-
-                javafx.beans.binding.BooleanBinding showEtaDot = showEta.and(showSize);
-                etaDot.visibleProperty().bind(showEtaDot);
-                etaDot.managedProperty().bind(showEtaDot);
-
-                // Always show status (visible and managed)
-                status.setVisible(true);
-                status.setManaged(true);
-
-                // Progress bar (smooth visual progress; supports indeterminate when progress < 0)
-                bindSmoothProgress(item);
-                bar.setVisible(true);
-                bar.setManaged(true);
-
-                // Read current state once + apply buttons once
-                DownloadRow.State st;
-                try { st = item.state.get(); } catch (Exception ignored) { st = DownloadRow.State.QUEUED; }
-                applyButtonsForState(st);
-
-                boolean isPreparing = false;
-                try {
-                    String sv = item.status.get();
-                    // During yt-dlp prepare we keep state DOWNLOADING + status begins with "Preparing"
-                    isPreparing = (st == DownloadRow.State.DOWNLOADING)
-                            && (sv != null)
-                            && sv.toLowerCase(java.util.Locale.ROOT).startsWith("preparing");
-                } catch (Exception ignored) {}
-
-
-                try {
-                    clearBtn.setVisible(true);
-                    clearBtn.setManaged(true);
-                } catch (Exception ignored) {}
-
-                // ✅ Folder button enabled only when COMPLETED and outputFile exists
-                try {
-                    boolean canOpen = false;
-                    if (item.state != null && item.state.get() == DownloadRow.State.COMPLETED
-                            && item.outputFile != null && item.outputFile.get() != null) {
-
-                        java.nio.file.Path p = item.outputFile.get();
-                        try {
-                            java.nio.file.Path abs = p.toAbsolutePath().normalize();
-                            canOpen = java.nio.file.Files.exists(abs);
-                        } catch (Exception ignored) {
-                            canOpen = false;
-                        }
-                    }
-                    folderBtn.setDisable(!canOpen);
-                } catch (Exception ignored) {
-                    folderBtn.setDisable(true);
-                }
-
-                setPadding(new javafx.geometry.Insets(10, 0, 10, 0));
-                setGraphic(card);
-            }
-        });
-
+                },
+                this::revealInFileManager
+        );
+
+        downloadsList.setCellFactory(lv -> new DownloadRowCell(
+                downloadStateCoordinator::pause,
+                downloadStateCoordinator::resume,
+                downloadStateCoordinator::cancel,
+                rowActions::openDownloadLink,
+                rowActions::openFolderForDownloadRow,
+                rowActions::retryDownloadRow,
+                rowActions::clearDownloadRow,
+                MainController::setupSvgButton,
+                this::installTooltip,
+                ICON_PAUSE,
+                ICON_PLAY,
+                ICON_CANCEL,
+                ICON_LINK,
+                ICON_FOLDER_OPEN,
+                ICON_RETRY,
+                ICON_CLEAR
+        ));
 
         // Make it look nicer without selection highlight
         downloadsList.setSelectionModel(new NoSelectionModel<>());
     }
-
-
 
     private String fetchTitleWithOEmbed(String url) {
         if (url == null || url.isBlank()) return null;
@@ -2908,549 +2032,10 @@ public class MainController {
     // Only keep the version with yt-dlp --progress-template and regex patterns DEST1, DEST2, MERGE, PROG, etc.
 
     private void startDownloadRow(DownloadRow row, boolean resume) {
-        if (row == null) return;
-
-        // prevent duplicate runs for same row
-        Process existing = activeProcesses.get(row);
-        if (existing != null && existing.isAlive()) return;
-
-        stopReasons.remove(row);
-
-        // UI immediately: preparing (indeterminate)
-        Platform.runLater(() -> {
-            row.setState(DownloadRow.State.DOWNLOADING);
-            row.status.set("Preparing");
-            row.size.set("");
-            row.speed.set("");
-            row.eta.set("");
-            row.progress.set(-1); // indeterminate while yt-dlp is preparing
-        });
-
-        final String url = row.url;
-        final String folder = row.folder;
-        final String mode = row.mode;
-        final String quality = row.quality;
-
-        new Thread(() -> {
-            Process p = null;
-            final String[] lastError = new String[]{null};
-
-            // detect output file path
-            final java.util.regex.Pattern DEST1 =
-                    java.util.regex.Pattern.compile("\\[download\\]\\s+Destination:\\s+(.+)$");
-            final java.util.regex.Pattern DEST2 =
-                    java.util.regex.Pattern.compile("\\[ExtractAudio\\]\\s+Destination:\\s+(.+)$");
-            final java.util.regex.Pattern MERGE =
-                    java.util.regex.Pattern.compile("\\[Merger\\]\\s+Merging formats into\\s+\\\"(.+)\\\"");
-
-            // our progress template (percent may have padding)
-            // gx:  12.3%| 1.2MiB/s| 00:12
-            final java.util.regex.Pattern PROG =
-                    java.util.regex.Pattern.compile(
-                            "^(?:gx:|download:gx:)\\s*([0-9.]+)%\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)$"
-                    );
-
-            // fallback native progress line
-            final java.util.regex.Pattern PROG_FALLBACK =
-                    java.util.regex.Pattern.compile("^\\[download\\]\\s+([0-9.]+)%\\s+at\\s+([^\\s]+)\\s+ETA\\s+([^\\s]+).*$");
-
-            final java.util.concurrent.atomic.AtomicBoolean startedDownloading =
-                    new java.util.concurrent.atomic.AtomicBoolean(false);
-
-            try {
-                java.nio.file.Path outDir = java.nio.file.Paths.get(folder);
-                java.nio.file.Files.createDirectories(outDir);
-
-                boolean audioOnly =
-                        MODE_AUDIO.equals(mode) ||
-                                "Audio".equalsIgnoreCase(mode) ||
-                                "Audio only".equalsIgnoreCase(mode);
-
-                java.nio.file.Path yt = com.grabx.app.grabx.util.YtDlpManager.ensureAvailable();
-                if (yt == null) throw new IllegalStateException("yt-dlp not available");
-
-                java.util.List<String> cmd = new java.util.ArrayList<>();
-                cmd.add(yt.toAbsolutePath().toString());
-
-                cmd.add("--newline");
-                cmd.add("--no-warnings");
-                cmd.add("--no-playlist");
-
-                // allow resume / pause-resume
-                cmd.add("--continue");
-
-                cmd.add("--user-agent");
-                cmd.add("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36");
-                cmd.add("--referer");
-                cmd.add("https://www.youtube.com/");
-                cmd.add("--extractor-args");
-                cmd.add("youtube:player_client=android");
-
-                // Do NOT overwrite existing files (we will decide the naming strategy below)
-                cmd.add("--no-overwrites");
-
-                // UTF-8 output
-                cmd.add("--encoding");
-                cmd.add("utf-8");
-
-
-                // Build format selector first (we also need it to probe the final output filename)
-                String selector;
-                int requestedHeight = -1; // used for stable filenames by selected quality
-
-                if (audioOnly) {
-                    selector = "bestaudio/best";
-
-                } else {
-                    String q = (quality == null) ? QUALITY_BEST : quality;
-
-                    if (QUALITY_BEST.equals(q) || QUALITY_SEPARATOR.equals(q)) {
-                        // Best: selector can yield varying heights, so filename can use real %(height)s
-                        selector = "bv*+ba/best";
-                        requestedHeight = -1;
-                    } else {
-                        requestedHeight = parseHeightFromLabel(q);
-                        if (requestedHeight > 0) {
-                            selector = "bv*[height<=" + requestedHeight + "]+ba/b[height<=" + requestedHeight + "]/best";
-                        } else {
-                            selector = "bv*+ba/best";
-                            requestedHeight = -1;
-                        }
-                    }
-
-                }
-
-                // Decide output template:
-                // - First download: NO (1)
-                // - If the exact same filename already exists: use autonumber => (1), (2), ...
-                String baseTpl;
-                if (audioOnly) {
-                    baseTpl = "%(title)s [audio].%(ext)s";
-                } else {
-                    if (requestedHeight > 0) {
-                        baseTpl = "%(title)s [" + requestedHeight + "p].%(ext)s";
-                    } else {
-                        baseTpl = "%(title)s [%(height)sp].%(ext)s";
-                    }
-                }
-
-                boolean needsAutonumber = false;
-                try {
-                    // Probe the would-be output filename with the SAME format selector.
-                    // If it already exists on disk, we switch to autonumber template.
-                    String probed = probeOutputFilename(yt, url, selector, outDir, baseTpl);
-                    if (probed != null && !probed.isBlank()) {
-                        java.nio.file.Path probedPath = java.nio.file.Paths.get(probed.trim());
-                        if (!probedPath.isAbsolute()) probedPath = outDir.resolve(probedPath).normalize();
-                        needsAutonumber = java.nio.file.Files.exists(probedPath);
-                    }
-                } catch (Exception ignored) {
-                    needsAutonumber = false;
-                }
-
-                String outTpl;
-                if (needsAutonumber) {
-                    // Auto-number duplicates: (1), (2), ... (no leading zeros)
-                    cmd.add("--autonumber-start");
-                    cmd.add("1");
-                    if (audioOnly) {
-                        outTpl = "%(title)s [audio] (%(autonumber)d).%(ext)s";
-                    } else {
-                        if (requestedHeight > 0) {
-                            outTpl = "%(title)s [" + requestedHeight + "p] (%(autonumber)d).%(ext)s";
-                        } else {
-                            outTpl = "%(title)s [%(height)sp] (%(autonumber)d).%(ext)s";
-                        }
-                    }
-                } else {
-                    outTpl = baseTpl;
-                }
-
-                cmd.add("-o");
-                cmd.add(outDir.resolve(outTpl).toString());
-
-
-                // progress template
-                cmd.add("--progress-template");
-                cmd.add(
-                        "download:gx:%(progress._percent_str)s"
-                                + "|%(progress._speed_str)s"
-                                + "|%(progress._eta_str)s"
-                                + "|%(progress.downloaded_bytes)s"
-                                + "|%(progress.total_bytes)s"
-                                + "|%(progress.total_bytes_estimate)s"
-                );
-
-                if (audioOnly) {
-                    cmd.add("-x");
-                    cmd.add("--audio-quality");
-                    cmd.add("0");
-
-                    String fmt = quality;
-                    if (fmt == null || fmt.isBlank() || AUDIO_BEST.equals(fmt) || QUALITY_SEPARATOR.equals(fmt)) {
-                        fmt = AUDIO_DEFAULT_FORMAT;
-                    }
-                    fmt = fmt.trim().toLowerCase(java.util.Locale.ROOT);
-                    cmd.add("--audio-format");
-                    cmd.add(fmt);
-                    cmd.add("--add-metadata");
-
-                    if (supportsAudioThumbnailEmbedding(fmt)) {
-                        cmd.add("--embed-thumbnail");
-                        cmd.add("--convert-thumbnails");
-                        cmd.add("jpg");
-                        cmd.add("--postprocessor-args");
-                        cmd.add("ffmpeg:-id3v2_version 3");
-                        System.out.println("[AUDIO] Thumbnail embed ENABLED for: " + fmt);
-                    } else {
-                        System.out.println("[AUDIO] Thumbnail embed NOT supported for: " + fmt + " -> continue without thumbnail");
-                    }
-
-                    cmd.add("-f");
-                    cmd.add(selector);
-
-                } else {
-                    cmd.add("-f");
-                    cmd.add(selector);
-                }
-
-
-                cmd.add(url);
-
-                Path ffmpeg = com.grabx.app.grabx.util.FfmpegManager.ensureAvailable();
-                if (ffmpeg != null) {
-                    cmd.add("--ffmpeg-location");
-                    cmd.add(ffmpeg.toAbsolutePath().toString());
-                    System.out.println("[FFMPEG] Using ffmpeg at: " + ffmpeg);
-                } else {
-                    System.out.println("[FFMPEG] ffmpeg not available, yt-dlp will try system ffmpeg.");
-                }
-
-                ProcessBuilder pb = new ProcessBuilder(cmd);
-                pb.redirectErrorStream(true);
-                pb.environment().putIfAbsent("PYTHONIOENCODING", "utf-8");
-
-                p = pb.start();
-
-                activeProcesses.put(row, p);
-
-                try (java.io.BufferedReader br = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
-
-                    String line;
-                    while ((line = br.readLine()) != null) {
-                        String s = line.trim();
-                        if (s.isEmpty()) continue;
-
-                        // NEWFILE: yt-dlp started a new stream/file (audio/video). Reset monotonic progress so it can start from 0 again.
-                        if (s.startsWith("[download] Destination:") || s.startsWith("[ExtractAudio] Destination:")) {
-
-                            final String phaseLabel;
-                            if (audioOnly || MODE_AUDIO.equals(mode) || "Audio".equalsIgnoreCase(mode) || "Audio only".equalsIgnoreCase(mode)) {
-                                phaseLabel = "Downloading audio ";
-                            } else {
-                                final boolean isAudioStream = isAudioStreamFromDestinationLine(s);
-                                phaseLabel = isAudioStream ? "Downloading audio " : "Downloading video ";
-                            }
-
-                            lastProgressMap.remove(row);
-
-                            Platform.runLater(() -> {
-                                try {
-                                    row.downloadedBytes.set(0);
-                                    row.totalBytes.set(-1);
-                                    row.speed.set("");
-                                    row.eta.set("");
-                                    row.size.set("");
-                                    if (row.progress.get() < 0) row.progress.set(0);
-                                    row.progress.set(0);
-
-                                    row.status.set(phaseLabel);
-
-                                    if (row.state.get() != DownloadRow.State.DOWNLOADING)
-                                        row.setState(DownloadRow.State.DOWNLOADING);
-
-                                } catch (Exception ignored) {}
-                            });
-                        }
-
-                        // POST: merging/postprocessing (progress is misleading here)
-                        if (s.contains("Merging formats into") || s.startsWith("[Merger]") ||
-                                s.contains("Post-process") || s.contains("Postprocessing") ||
-                                s.contains("Fixing") || s.contains("Extracting") ||
-                                s.contains("Deleting original file") || s.contains("Deleting original files")) {
-
-                            Platform.runLater(() -> {
-                                try {
-                                    row.speed.set("");
-                                    row.eta.set("");
-                                    row.status.set("Merging . . .");
-                                    row.progress.set(-1); // indeterminate
-                                } catch (Exception ignored) {}
-                            });
-                        }
-
-                        if (s.startsWith("ERROR:")) lastError[0] = s;
-
-                        // capture output path
-                        try {
-                            var d1 = DEST1.matcher(s);
-                            var d2 = DEST2.matcher(s);
-                            var mg = MERGE.matcher(s);
-
-                            String pathStr = null;
-                            if (d1.find()) pathStr = d1.group(1);
-                            else if (d2.find()) pathStr = d2.group(1);
-                            else if (mg.find()) pathStr = mg.group(1);
-
-                            if (pathStr != null && !pathStr.isBlank()) {
-                                String ps = pathStr.trim();
-                                if ((ps.startsWith("\"") && ps.endsWith("\"")) || (ps.startsWith("'") && ps.endsWith("'"))) {
-                                    ps = ps.substring(1, ps.length() - 1);
-                                }
-                                java.nio.file.Path finalOut = java.nio.file.Paths.get(ps);
-                                try {
-                                    if (!finalOut.isAbsolute()) {
-                                        // Resolve relative output paths against the selected output directory
-                                        finalOut = outDir.resolve(finalOut).normalize();
-                                    }
-                                } catch (Exception ignored) {}
-
-                                final java.nio.file.Path finalOut2 = finalOut;
-                                Platform.runLater(() -> {
-                                    try { row.outputFile.set(finalOut2); } catch (Exception ignored) {}
-                                });
-                            }
-                        } catch (Exception ignored) {}
-
-                        // progress (preferred)
-                        var m = PROG.matcher(s);
-                        if (m.find()) {
-                            if (startedDownloading.compareAndSet(false, true)) {
-                                Platform.runLater(() -> {
-//                                    row.status.set("Downloading");
-                                    String cur = row.status.get();
-                                    if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
-                                        row.status.set("Downloading");
-                                    }
-                                    row.size.set("");
-                                    if (row.progress.get() < 0) row.progress.set(0);
-                                });
-                            }
-
-                            double pct;
-                            try {
-                                pct = Double.parseDouble(m.group(1)) / 100.0;
-                            } catch (Exception ex) {
-                                pct = -1;
-                            }
-
-                            String spd = m.group(2);
-                            String et  = m.group(3);
-
-                            long downloaded = parseLongSafe(m.group(4));
-                            long total = parseLongSafe(m.group(5));
-                            if (total <= 0) total = parseLongSafe(m.group(6));
-
-                            // Store raw byte counters (optional, but useful)
-                            row.downloadedBytes.set(Math.max(0, downloaded));
-                            row.totalBytes.set(total > 0 ? total : -1);
-
-                            // UI size text: downloaded / total (if total known)
-                            final String sizeText;
-                            if (downloaded > 0 && total > 0) {
-                                sizeText = formatBytesDecimal(downloaded) + " / " + formatBytesDecimal(total);
-                            } else if (downloaded > 0) {
-                                sizeText = formatBytesDecimal(downloaded);
-                            } else {
-                                sizeText = "";
-                            }
-
-                            double fpct = pct;
-
-                            Platform.runLater(() -> {
-//                                row.status.set("Downloading");
-                                String cur = row.status.get();
-                                if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
-                                    row.status.set("Downloading");
-                                }
-                                // أو ببساطة احذفها إذا أنت أصلاً بتضبط status من NEWFILE
-                                row.size.set(sizeText == null ? "" : sizeText);
-
-                                applyProgressMonotonic(row, fpct);
-
-                                if (spd != null && !spd.isBlank() && !"NA".equalsIgnoreCase(spd))
-                                    row.speed.set(normalizeSpeedUnit(spd));
-
-                                if (et != null && !et.isBlank() && !"NA".equalsIgnoreCase(et))
-                                    row.eta.set(et);
-                            });
-                            continue;
-                        }
-
-                        // progress fallback
-                        var mf = PROG_FALLBACK.matcher(s);
-                        if (mf.find()) {
-                            if (startedDownloading.compareAndSet(false, true)) {
-                                Platform.runLater(() -> {
-//                                    row.status.set("Downloading");
-                                    String cur = row.status.get();
-                                    if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
-                                        row.status.set("Downloading");
-                                    }
-                                    // أو ببساطة احذفها إذا أنت أصلاً بتضبط status من NEWFILE
-                                    if (row.progress.get() < 0) row.progress.set(0);
-                                });
-                            }
-
-                            double pct;
-                            try { pct = Double.parseDouble(mf.group(1)) / 100.0; } catch (Exception ex) { pct = -1; }
-                            String spd = mf.group(2);
-                            String et = mf.group(3);
-
-                            double fpct = pct;
-                            Platform.runLater(() -> {
-//                                row.status.set("Downloading");
-                                String cur = row.status.get();
-                                if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
-                                    row.status.set("Downloading");
-                                }
-                                // أو ببساطة احذفها إذا أنت أصلاً بتضبط status من NEWFILE
-                                applyProgressMonotonic(row, fpct);
-                                if (spd != null && !spd.isBlank()) row.speed.set(normalizeSpeedUnit(spd));
-                                if (et != null && !et.isBlank()) row.eta.set(et);
-                            });
-                            continue;
-                        }
-
-                        // phase updates during preparing
-                        if (!startedDownloading.get()) {
-                            // Convert noisy yt-dlp phases to a short friendly text
-                            String phase = null;
-                            String sl = s.toLowerCase(java.util.Locale.ROOT);
-
-                            if (sl.contains("downloading m3u8") || sl.contains("m3u8 information")) {
-                                phase = "Preparing stream";
-                            } else if (sl.contains("downloading webpage")) {
-                                phase = "Preparing";
-                            } else if (sl.contains("extracting")) {
-                                phase = "Extracting info";
-                            } else if (s.startsWith("[info]") || s.startsWith("[youtube]") || s.startsWith("[generic]")) {
-                                phase = "Preparing";
-                            }
-
-                            if (phase != null) {
-                                final String ph = phase;
-                                Platform.runLater(() -> row.status.set(ph));
-                            }
-
-                            // Switch to Downloading as soon as we see download lines
-                            if (s.startsWith("[download]")) {
-                                if (startedDownloading.compareAndSet(false, true)) {
-                                    Platform.runLater(() -> {
-//                                        row.status.set("Downloading");
-                                        String cur = row.status.get();
-                                        if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
-                                            row.status.set("Downloading");
-                                        }
-                                        if (row.progress.get() < 0) row.progress.set(0);
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-
-                int code = p.waitFor();
-                String reason = stopReasons.get(row);
-
-                Platform.runLater(() -> {
-                    activeProcesses.remove(row);
-
-                    if ("CANCEL".equals(reason)) {
-                        row.setState(DownloadRow.State.CANCELLED);
-                        updateMissingSidebarItem();
-                        row.status.set("Cancelled");
-                        lastProgressMap.remove(row);
-                        row.size.set("");
-                        row.speed.set("");
-                        row.eta.set("");
-                        try { if (historyService != null) historyService.scheduleSave(); } catch (Exception ignored) {}
-
-                        return;
-                    }
-
-                    if ("PAUSE".equals(reason)) {
-                        row.setState(DownloadRow.State.PAUSED);
-                        row.status.set("Paused");
-                        lastProgressMap.remove(row);
-                        row.size.set("");
-                        row.speed.set("");
-                        row.eta.set("");
-                        try { if (historyService != null) historyService.scheduleSave(); } catch (Exception ignored) {}
-
-                        return;
-                    }
-
-                    if (code == 0) {
-                        row.setState(DownloadRow.State.COMPLETED);
-                        // CHANGED: set final size from disk if possible
-                        try {
-                            java.nio.file.Path out = null;
-                            if (row.outputFile != null) out = row.outputFile.get();
-                            if (out != null && java.nio.file.Files.exists(out)) {
-                                long sz = java.nio.file.Files.size(out);
-                                row.size.set(formatBytesDecimal(sz));
-                            } else {
-                                row.size.set("");
-                            }
-                        } catch (Exception ignored) {
-                            row.size.set("");
-                        }
-                        row.progress.set(1.0);
-                        lastProgressMap.put(row, 1.0);
-                        row.speed.set("");
-                        row.eta.set("");
-                        try { if (historyService != null) historyService.scheduleSave(); } catch (Exception ignored) {}
-
-                    } else {
-                        row.setState(DownloadRow.State.FAILED);
-                        String err = lastError[0];
-                        if (err != null && !err.isBlank()) {
-                            // keep it short on the card
-                            String msg = err;
-                            if (msg.startsWith("ERROR:")) msg = msg.substring("ERROR:".length()).trim();
-                            if (msg.length() > 90) msg = msg.substring(0, 90) + "…";
-                            row.status.set("Failed: " + msg);
-                        } else {
-                            row.status.set("Failed (exit " + code + ")");
-                        }
-                        row.size.set("");
-                        row.speed.set("");
-                        row.eta.set("");
-                        try { if (historyService != null) historyService.scheduleSave(); } catch (Exception ignored) {}
-
-                    }
-                });
-
-            } catch (Exception ex) {
-                final Process fp = p;
-                Platform.runLater(() -> {
-                    try { if (fp != null) fp.destroyForcibly(); } catch (Exception ignored) {}
-                    activeProcesses.remove(row);
-                    row.setState(DownloadRow.State.FAILED);
-                    row.status.set("Failed");
-                    row.size.set("");
-                    row.speed.set("");
-                    row.eta.set("");
-                    try { if (historyService != null) historyService.scheduleSave(); } catch (Exception ignored) {}
-
-                });
-            }
-        }, "yt-dlp-download").start();
+        downloadRunner.start(row, resume);
     }
 
-    private static boolean supportsAudioThumbnailEmbedding(String fmt) {
+    public static boolean supportsAudioThumbnailEmbedding(String fmt) {
         if (fmt == null) return false;
         String f = fmt.trim().toLowerCase(java.util.Locale.ROOT);
 
@@ -3467,13 +2052,11 @@ public class MainController {
                 || f.equals("m4p");
     }
 
-    // Probe the exact output filename yt-dlp would use for the given selector + template.
-    // Returns a single line (may be absolute or relative depending on yt-dlp/platform).
-    private static String probeOutputFilename(java.nio.file.Path yt,
-                                              String url,
-                                              String selector,
-                                              java.nio.file.Path outDir,
-                                              String outTpl) {
+    public static String probeOutputFilename(java.nio.file.Path yt,
+                                             String url,
+                                             String selector,
+                                             java.nio.file.Path outDir,
+                                             String outTpl) {
         if (yt == null || url == null || url.isBlank() || selector == null || outDir == null || outTpl == null) return null;
 
         try {
@@ -3629,7 +2212,7 @@ public class MainController {
                 ext.equals("ogg") || ext.equals("flac") || ext.equals("wav");
     }
 
-    private static boolean isAudioStreamFromDestinationLine(String s) {
+    public static boolean isAudioStreamFromDestinationLine(String s) {
         if (s == null) return false;
 
         // ExtractAudio lines are always audio
@@ -3676,7 +2259,7 @@ public class MainController {
         return isAudioExtension(ext);
     }
 
-    private static void killProcessTree(Process p) {
+    public static void killProcessTree(Process p) {
         if (p == null) return;
 
         try {
@@ -3725,7 +2308,7 @@ public class MainController {
         return out.toString();
     }
 
-    private static long parseLongSafe(String s) {
+    public static long parseLongSafe(String s) {
         try {
             if (s == null) return 0L;
             s = s.trim();
@@ -3737,7 +2320,7 @@ public class MainController {
     }
 
     // Decimal units (KB/MB/GB) to avoid MiB/GiB and reduce visual clutter
-    private static String formatBytesDecimal(long bytes) {
+    public static String formatBytesDecimal(long bytes) {
         if (bytes <= 0) return "0 B";
         double b = (double) bytes;
         String[] u = {"B", "KB", "MB", "GB", "TB"};
@@ -3749,7 +2332,7 @@ public class MainController {
         return String.format(java.util.Locale.US, "%.1f %s", b, u[i]);
     }
 
-    private static String normalizeSpeedUnit(String spd) {
+    public static String normalizeSpeedUnit(String spd) {
         if (spd == null) return null;
 
         String s = spd.trim();
@@ -3783,7 +2366,7 @@ public class MainController {
     }
 
     // --- Thumbnail helpers and cache ---
-    private static final java.util.Map<String, javafx.scene.image.Image> MAIN_THUMB_CACHE =
+    public static final java.util.Map<String, javafx.scene.image.Image> MAIN_THUMB_CACHE =
             new java.util.concurrent.ConcurrentHashMap<>();
 
     private static String extractYoutubeId(String url) {
@@ -3852,7 +2435,7 @@ public class MainController {
 
 
     // Reveal/select a file in the OS file manager (best-effort)
-    private static void revealInFileManager(java.nio.file.Path file) {
+    private void revealInFileManager(java.nio.file.Path file) {
         if (file == null) return;
 
         try {
@@ -3895,7 +2478,7 @@ public class MainController {
 
 
     // === Thumbnail rendering helpers (cover crop + rounded clip) ===
-    private static void applyCoverViewport(ImageView iv, Image img, double targetW, double targetH) {
+    public static void applyCoverViewport(ImageView iv, Image img, double targetW, double targetH) {
         if (iv == null || img == null) return;
 
         double iw = img.getWidth();
@@ -3926,7 +2509,7 @@ public class MainController {
         iv.setViewport(new javafx.geometry.Rectangle2D(x, y, cropW, cropH));
     }
 
-    private static void applyRoundedClip(Region region, double arc) {
+    public static void applyRoundedClip(Region region, double arc) {
         if (region == null) return;
 
         javafx.scene.shape.Rectangle clip = new javafx.scene.shape.Rectangle();

@@ -7,6 +7,7 @@ import javafx.collections.ObservableList;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.BiConsumer;
+import java.util.concurrent.TimeUnit;
 
 /**
  * DownloadStateCoordinator
@@ -46,23 +47,31 @@ public final class DownloadStateCoordinator {
 
     public void pause(DownloadRow row) {
         if (row == null) return;
-        fx(() -> pauseFx(row));
+        fx(() -> {
+            if (pauseFx(row)) onStateChanged.run();
+        });
     }
 
     public void resume(DownloadRow row) {
         if (row == null) return;
-        fx(() -> resumeFx(row));
+        fx(() -> {
+            if (resumeFx(row)) onStateChanged.run();
+        });
     }
 
     public void cancel(DownloadRow row) {
         if (row == null) return;
-        fx(() -> cancelFx(row));
+        fx(() -> {
+            if (cancelFx(row)) onStateChanged.run();
+        });
     }
 
     /** UI logic only: reset row to QUEUED and ask MainController to start it again */
     public void retry(DownloadRow row) {
         if (row == null) return;
-        fx(() -> retryFx(row));
+        fx(() -> {
+            if (retryFx(row)) onStateChanged.run();
+        });
     }
 
     public int pauseAll() {
@@ -113,22 +122,36 @@ public final class DownloadStateCoordinator {
 
         stopProcess(row, "PAUSE");
         row.setState(DownloadRow.State.PAUSED);
+        try { row.status.set("Paused"); } catch (Exception ignored) {}
+        try { row.speed.set(""); } catch (Exception ignored) {}
+        try { row.eta.set(""); } catch (Exception ignored) {}
         return true;
     }
 
     /** @return true if attempt to resume was made */
     private boolean resumeFx(DownloadRow row) {
         DownloadRow.State st = safeState(row);
-        if (st != DownloadRow.State.PAUSED
-                && st != DownloadRow.State.QUEUED
-                && st != DownloadRow.State.PENDING) return false;
+        if (st != DownloadRow.State.PAUSED) return false;
+
+        try {
+            Process existing = activeProcesses.get(row);
+            if (existing != null && existing.isAlive()) {
+                return false;
+            }
+        } catch (Exception ignored) {}
+
+        try { stopReasons.remove(row); } catch (Exception ignored) {}
+        try { row.status.set("Preparing"); } catch (Exception ignored) {}
+        try { row.speed.set(""); } catch (Exception ignored) {}
+        try { row.eta.set(""); } catch (Exception ignored) {}
+        row.setState(DownloadRow.State.QUEUED);
 
         try {
             startOrResume.accept(row, true);
             return true;
         } catch (Exception ex) {
-            // keep it paused if resume fails
             row.setState(DownloadRow.State.PAUSED);
+            try { row.status.set("Paused"); } catch (Exception ignored) {}
             return false;
         }
     }
@@ -140,6 +163,9 @@ public final class DownloadStateCoordinator {
 
         stopProcess(row, "CANCEL");
         row.setState(DownloadRow.State.CANCELLED);
+        try { row.status.set("Cancelled"); } catch (Exception ignored) {}
+        try { row.speed.set(""); } catch (Exception ignored) {}
+        try { row.eta.set(""); } catch (Exception ignored) {}
         return true;
     }
 
@@ -162,13 +188,72 @@ public final class DownloadStateCoordinator {
 
     // ===================== Helpers =====================
 
+
     private void stopProcess(DownloadRow row, String reason) {
         try { stopReasons.put(row, reason); } catch (Exception ignored) {}
+
+        final Process p = findActiveProcess(row);
+        if (p == null) {
+            System.out.println("[DownloadStateCoordinator] No active process found for " + reason);
+            return;
+        }
+
+        System.out.println("[DownloadStateCoordinator] Stopping process for " + reason + ", alive=" + p.isAlive());
+
         try {
-            Process p = activeProcesses.get(row);
-            if (p != null && p.isAlive()) p.destroy();
-        } catch (Exception ignored) {}
+            ProcessHandle handle = p.toHandle();
+
+            handle.descendants().forEach(child -> {
+                try { child.destroyForcibly(); } catch (Exception ignored) {}
+            });
+
+            try { handle.destroyForcibly(); } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+            try { p.destroyForcibly(); } catch (Exception ignored2) {}
+        }
+
+        Thread killer = new Thread(() -> {
+            try {
+                if (!p.waitFor(800, TimeUnit.MILLISECONDS)) {
+                    try {
+                        ProcessHandle handle = p.toHandle();
+                        handle.descendants().forEach(child -> {
+                            try { child.destroyForcibly(); } catch (Exception ignored) {}
+                        });
+                        try { handle.destroyForcibly(); } catch (Exception ignored) {}
+                    } catch (Exception ignored) {
+                        try { p.destroyForcibly(); } catch (Exception ignored2) {}
+                    }
+                }
+            } catch (Exception ignored) {
+                try { p.destroyForcibly(); } catch (Exception ignored2) {}
+            }
+        }, "download-stop-" + String.valueOf(reason).toLowerCase(java.util.Locale.ROOT));
+
+        killer.setDaemon(true);
+        killer.start();
     }
+
+
+    private Process findActiveProcess(DownloadRow row) {
+        if (row == null) return null;
+
+        try {
+            Process direct = activeProcesses.get(row);
+            if (direct != null) return direct;
+        } catch (Exception ignored) {}
+
+        try {
+            for (Map.Entry<DownloadRow, Process> entry : activeProcesses.entrySet()) {
+                if (entry != null && entry.getKey() == row) {
+                    return entry.getValue();
+                }
+            }
+        } catch (Exception ignored) {}
+
+        return null;
+    }
+
 
     private static DownloadRow.State safeState(DownloadRow row) {
         try {

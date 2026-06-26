@@ -37,16 +37,16 @@ public final class NativeDialogs {
         if (os.contains("mac")) {
             try {
                 String title = "Remove download";
-                String msg = "Are you sure you want to remove\n\"" + safeName + "\"?";
+                String msg = "What would you like to do with this download?\n\n\"" + safeName + "\"";
 
                 String script;
                 if (canDeleteFiles) {
-                    // 3 buttons: Cancel / Remove / Remove & Delete
+                    // 3 buttons: Cancel / Remove / Delete from Device
                     script =
                             "set theTitle to \"" + escapeAppleScript(title) + "\"\n" +
                                     "set theMsg to \"" + escapeAppleScript(msg) + "\"\n" +
                                     "set r to display dialog theMsg with title theTitle " +
-                                    "buttons {\"Cancel\", \"Remove\", \"Remove & Delete\"} " +
+                                    "buttons {\"Cancel\", \"Remove\", \"Delete from Device\"} " +
                                     "default button \"Remove\" cancel button \"Cancel\" with icon caution\n" +
                                     "button returned of r";
                 } else {
@@ -73,7 +73,7 @@ public final class NativeDialogs {
                 if (out == null) return RemoveChoice.CANCEL;
                 out = out.trim();
 
-                if ("Remove & Delete".equalsIgnoreCase(out)) return RemoveChoice.REMOVE_AND_DELETE;
+                if ("Delete from Device".equalsIgnoreCase(out)) return RemoveChoice.REMOVE_AND_DELETE;
                 if ("Remove".equalsIgnoreCase(out)) return RemoveChoice.REMOVE_ONLY;
                 return RemoveChoice.CANCEL;
 
@@ -85,10 +85,10 @@ public final class NativeDialogs {
         if (os.contains("win")) {
             try {
                 String title = "Remove download";
-                String msg = "Remove this download?\n\n\"" + safeName + "\"\n\n" +
+                String msg = "What would you like to do with this download?\n\n\"" + safeName + "\"\n\n" +
                         (canDeleteFiles
-                                ? "Yes: Remove & delete files\nNo: Remove only\nCancel: Keep"
-                                : "Yes: Remove\nNo: Keep");
+                                ? "Yes: Delete from device\nNo: Remove from GrabX only\nCancel: Keep"
+                                : "Yes: Remove from GrabX\nNo: Keep");
 
                 String ps;
                 if (canDeleteFiles) {
@@ -134,15 +134,15 @@ public final class NativeDialogs {
         // -------- Linux (zenity) --------
         try {
             String title = "Remove download";
-            String msg = "Remove this download?\n\n\"" + safeName + "\"";
+            String msg = "What would you like to do with this download?\n\n\"" + safeName + "\"";
 
             if (canDeleteFiles) {
                 Process p = new ProcessBuilder(
                         "sh", "-lc",
                         "command -v zenity >/dev/null 2>&1 && " +
                                 "zenity --question --title='" + title.replace("'", "'\\''") + "' " +
-                                "--text='" + msg.replace("'", "'\\''") + "\\n\\nOK=Remove & Delete, Extra=Remove only' " +
-                                "--ok-label='Remove & Delete' --cancel-label='Cancel' --extra-button='Remove'"
+                                "--text='" + msg.replace("'", "'\\''") + "\\n\\nOK=Delete from device, Extra=Remove only' " +
+                                "--ok-label='Delete from Device' --cancel-label='Cancel' --extra-button='Remove'"
                 ).redirectErrorStream(true).start();
 
                 int code = p.waitFor();
