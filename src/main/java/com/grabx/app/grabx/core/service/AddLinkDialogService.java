@@ -6,8 +6,6 @@ import javafx.geometry.Insets;
 import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
-import javafx.scene.image.Image;
-import javafx.scene.image.ImageView;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Circle;
@@ -22,11 +20,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.*;
 
 public final class AddLinkDialogService {
 
     // ===================== API =====================
+    private final AtomicLong sessionId = new AtomicLong();
 
     public interface Callbacks {
         // UI helpers
@@ -183,7 +183,11 @@ private static javafx.scene.Node buildSuccessGraphic() {
     );
 
     private void openAddLinkDialogDeferred(String prefillUrl) {
+        final long mySession = sessionId.get();
         if (UI_DELAY_EXEC == null) {
+            if (mySession != sessionId.get()) {
+                return;
+            }
             Platform.runLater(() -> showAddLinkDialog(prefillUrl));
             return;
         }
@@ -192,7 +196,6 @@ private static javafx.scene.Node buildSuccessGraphic() {
     }
 
     private void showAddLinkDialog(String prefillUrl) {
-
         if (addLinkDialogOpen) {
             if (prefillUrl != null && cb.isHttpUrl(prefillUrl) && activeAddLinkUrlField != null) {
                 activeAddLinkUrlField.setText(prefillUrl.trim());
@@ -201,6 +204,8 @@ private static javafx.scene.Node buildSuccessGraphic() {
             }
             return;
         }
+
+        final long mySession = sessionId.incrementAndGet();
 
         addLinkDialogOpen = true;
         activeAddLinkUrlField = null;
@@ -416,6 +421,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
 
         Runnable updateSizeAsync = () -> {
             if (!dialogAlive[0]) return;
+            if (mySession != sessionId.get()) return;
             String u = urlField.getText() == null ? "" : urlField.getText().trim();
             if (u.isBlank()) { setSizeText.accept("Estimated size: —"); return; }
 
@@ -438,6 +444,8 @@ private static javafx.scene.Node buildSuccessGraphic() {
                     Long bytes = probeContentLength(u);
                     if (bytes != null && bytes > 0) SIZE_CACHE.put(key, bytes);
                     Platform.runLater(() -> {
+                        if (!dialogAlive[0]) return;
+                        if (mySession != sessionId.get()) return;
                         if (rid != sizeReqId[0]) return;
                         if (bytes != null && bytes > 0) setSizeText.accept("Estimated size: " + formatBytesDecimal(bytes));
                         else setSizeText.accept("Estimated size: — ");
@@ -490,6 +498,8 @@ private static javafx.scene.Node buildSuccessGraphic() {
 
                         final Long fbytes = bytes;
                         Platform.runLater(() -> {
+                            if (!dialogAlive[0]) return;
+                            if (mySession != sessionId.get()) return;
                             if (rid != sizeReqId[0]) return;
                             if (fbytes != null && fbytes > 0) setSizeText.accept("Estimated size: " + formatBytesDecimal(fbytes));
                             else setSizeText.accept("Estimated size: —");
@@ -498,6 +508,8 @@ private static javafx.scene.Node buildSuccessGraphic() {
                 } catch (RejectedExecutionException rex) {
                     VIDEO_SIZE_INFLIGHT.remove(inflightKey);
                     Platform.runLater(() -> {
+                        if (!dialogAlive[0]) return;
+                        if (mySession != sessionId.get()) return;
                         if (rid != sizeReqId[0]) return;
                         setSizeText.accept("Estimated size: —");
                     });
@@ -588,9 +600,12 @@ private static javafx.scene.Node buildSuccessGraphic() {
 
                 hideSuccess.run();
 
+                final long probeSession = sessionId.get();
                 new Thread(() -> {
                     VideoInfo vi = probeOnceFast(url);
                     Platform.runLater(() -> {
+                        if (!dialogAlive[0]) return;
+                        if (probeSession != sessionId.get()) return;
                         if (vi == null || vi.heights == null || vi.heights.isEmpty()) {
                             fillQualityCombo(qualityCombo);
                         } else {
@@ -649,6 +664,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
 
         dialog.setOnHidden(ev -> {
             dialogAlive[0] = false;
+            sessionId.incrementAndGet();
             sizeReqId[0]++;
             addLinkDialogOpen = false;
             activeAddLinkUrlField = null;
@@ -658,6 +674,10 @@ private static javafx.scene.Node buildSuccessGraphic() {
         dialog.setResultConverter(btn -> btn);
         dialog.resultProperty().addListener((obs, oldRes, res) -> {
             if (res != downLoadBtn) return;
+            dialogAlive[0] = false;
+            sizeReqId[0]++;
+            sessionId.incrementAndGet();
+            stopSizeLoading.run();
 
             String url = urlField.getText() == null ? "" : urlField.getText().trim();
             ContentType t = lastType[0];
