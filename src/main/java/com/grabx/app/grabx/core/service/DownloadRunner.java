@@ -230,7 +230,10 @@ public final class DownloadRunner {
                 try {
                     // Probe the would-be output filename with the SAME format selector.
                     // If it already exists on disk, we switch to autonumber template.
+                    long probeStartMs = System.currentTimeMillis();
                     String probed = probeOutputFilename.probe(yt, url, selector, outDir, baseTpl);
+                    System.out.println("probeOutputFilename: " +
+                            (System.currentTimeMillis() - probeStartMs) + " ms");
                     if (probed != null && !probed.isBlank()) {
                         java.nio.file.Path probedPath = java.nio.file.Paths.get(probed.trim());
                         if (!probedPath.isAbsolute()) probedPath = outDir.resolve(probedPath).normalize();
@@ -322,8 +325,12 @@ public final class DownloadRunner {
                 pb.redirectErrorStream(true);
                 pb.environment().putIfAbsent("PYTHONIOENCODING", "utf-8");
 
+                long processStartMs = System.currentTimeMillis();
                 p = pb.start();
-
+                System.out.println("pb.start(): " +
+                        (System.currentTimeMillis() - processStartMs) + " ms");
+                long firstOutputClockMs = System.currentTimeMillis();
+                final boolean[] firstOutputLogged = {false};
                 activeProcesses.put(row, p);
 
                 try (java.io.BufferedReader br = new java.io.BufferedReader(
@@ -331,6 +338,12 @@ public final class DownloadRunner {
 
                     String line;
                     while ((line = br.readLine()) != null) {
+                        if (!firstOutputLogged[0]) {
+                            firstOutputLogged[0] = true;
+                            System.out.println("First output after: " +
+                                    (System.currentTimeMillis() - firstOutputClockMs) + " ms");
+                        }
+
                         String s = line.trim();
                         if (s.isEmpty()) continue;
 

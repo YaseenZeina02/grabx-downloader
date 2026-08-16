@@ -5,6 +5,8 @@ import javafx.application.Platform;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.control.Button;
+import javafx.scene.Node;
+import javafx.beans.value.ObservableValue;
 import javafx.scene.layout.Pane;
 import javafx.scene.layout.StackPane;
 
@@ -27,6 +29,7 @@ public final class HoverTooltipService {
     private HoverBubble hoverBubble;
 
     private final List<javafx.util.Pair<Button, String>> pendingTooltips = new ArrayList<>();
+    private final List<javafx.util.Pair<Node, ObservableValue<String>>> pendingDynamicTooltips = new ArrayList<>();
     private volatile boolean hoverBubbleReady = false;
 
     public HoverTooltipService(Parent rootNode, Class<?> resourceOwner) {
@@ -47,6 +50,19 @@ public final class HoverTooltipService {
         }
 
         hoverBubble.install(btn, text);
+    }
+
+    /** Install dynamic text on any node, rendered inside the application scene. */
+    public void install(Node owner, ObservableValue<String> text) {
+        if (owner == null || text == null) return;
+
+        if (hoverBubble == null || !hoverBubbleReady) {
+            pendingDynamicTooltips.add(new javafx.util.Pair<>(owner, text));
+            Platform.runLater(this::flushPendingTooltips);
+            return;
+        }
+
+        hoverBubble.install(owner, text);
     }
 
     // ===================== internals =====================
@@ -132,5 +148,13 @@ public final class HoverTooltipService {
             } catch (Exception ignored) {}
         }
         pendingTooltips.clear();
+
+        for (var p : pendingDynamicTooltips) {
+            if (p.getKey() == null || p.getValue() == null) continue;
+            try {
+                hoverBubble.install(p.getKey(), p.getValue());
+            } catch (Exception ignored) {}
+        }
+        pendingDynamicTooltips.clear();
     }
 }

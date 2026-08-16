@@ -2,6 +2,7 @@ package com.grabx.app.grabx.ui.components;
 
 import com.grabx.app.grabx.core.model.DownloadRow;
 import javafx.animation.AnimationTimer;
+import javafx.beans.binding.Bindings;
 import javafx.beans.binding.BooleanBinding;
 import javafx.geometry.Insets;
 import javafx.geometry.NodeOrientation;
@@ -139,12 +140,27 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
 
     private BiConsumer<Button, String> iconButtonSetup;
     private BiConsumer<Button, String> tooltipInstaller;
+    private BiConsumer<javafx.scene.Node, javafx.beans.value.ObservableValue<String>> hoverTextInstaller;
 
     public DownloadRowCell() {
         setStyle("-fx-background-color: transparent;");
+        setContentDisplay(ContentDisplay.GRAPHIC_ONLY);
+        // A ListCell otherwise computes its preferred width from the graphic.
+        // With a long title that creates a feedback loop where the cell/card
+        // grows wider than the ListView viewport and gets clipped on the right.
+        setPrefWidth(0);
+        setMaxWidth(Double.MAX_VALUE);
 
         title.getStyleClass().add("gx-task-title");
         title.setWrapText(false);
+        title.setTextOverrun(OverrunStyle.ELLIPSIS);
+        title.setEllipsisString("…");
+        title.setMinWidth(0);
+        title.setMaxWidth(Double.MAX_VALUE);
+
+        meta.setTextOverrun(OverrunStyle.ELLIPSIS);
+        meta.setMinWidth(0);
+        meta.setMaxWidth(Double.MAX_VALUE);
 
         meta.getStyleClass().add("gx-task-meta");
         status.getStyleClass().addAll("gx-task-status", "gx-task-metric");
@@ -180,9 +196,16 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         actions.setAlignment(Pos.CENTER_RIGHT);
         actions.setFillHeight(true);
         actions.setMinHeight(40);
+        // Never let a long title push the action buttons outside the card.
+        actions.setMinWidth(Region.USE_PREF_SIZE);
         actions.getChildren().addAll(pauseBtn, resumeBtn, cancelBtn, openLinkBtn, retryBtn, folderBtn, clearBtn);
 
         textBox.getChildren().addAll(title, meta);
+        // HBox children default to their content's minimum width. A title can be
+        // arbitrarily long, so allow this column to shrink and let the labels
+        // render an ellipsis inside the space that remains.
+        textBox.setMinWidth(0);
+        textBox.setMaxWidth(Double.MAX_VALUE);
         HBox.setHgrow(textBox, Priority.ALWAYS);
 
         headerRow.setAlignment(Pos.CENTER_LEFT);
@@ -228,6 +251,9 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         footerRow.getChildren().setAll(status, speedDot, speed, footerSpacer, sizeLabel, eta);
 
         card.getStyleClass().add("gx-task-card");
+        card.setMinWidth(0);
+        card.prefWidthProperty().bind(Bindings.max(0, widthProperty().subtract(2)));
+        card.maxWidthProperty().bind(Bindings.max(0, widthProperty().subtract(2)));
         card.getChildren().addAll(headerRow, bar, footerRow);
 
         pauseBtn.setOnAction(e -> fire(onPause));
@@ -249,6 +275,7 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
             Consumer<DownloadRow> onClear,
             BiConsumer<Button, String> iconButtonSetup,
             BiConsumer<Button, String> tooltipInstaller,
+            BiConsumer<javafx.scene.Node, javafx.beans.value.ObservableValue<String>> hoverTextInstaller,
             String pauseIcon,
             String resumeIcon,
             String cancelIcon,
@@ -260,6 +287,10 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         this(onPause, onResume, onCancel, onOpenLink, onOpenFolder, onRetry, onClear);
         this.iconButtonSetup = iconButtonSetup;
         this.tooltipInstaller = tooltipInstaller;
+        this.hoverTextInstaller = hoverTextInstaller;
+        if (this.hoverTextInstaller != null) {
+            this.hoverTextInstaller.accept(title, title.textProperty());
+        }
         applyButtonVisuals(pauseIcon, resumeIcon, cancelIcon, openLinkIcon, folderIcon, retryIcon, clearIcon);
     }
 

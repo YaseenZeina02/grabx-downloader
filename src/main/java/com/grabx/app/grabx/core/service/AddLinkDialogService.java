@@ -22,6 +22,8 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.*;
+import javafx.scene.control.ContentDisplay;
+import javafx.scene.control.ProgressIndicator;
 
 public final class AddLinkDialogService {
 
@@ -270,16 +272,24 @@ private static javafx.scene.Node buildSuccessGraphic() {
 
         Button getBtn = new Button("Get");
         getBtn.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
-        getBtn.setMinWidth(90);
+        getBtn.setMinWidth(130);
+        getBtn.setPrefWidth(130);
+        getBtn.setMaxWidth(130);
 
         // Mode + Quality
         ComboBox<String> modeCombo = new ComboBox<>();
         modeCombo.getItems().setAll(cfg.MODE_VIDEO, cfg.MODE_AUDIO);
         modeCombo.getSelectionModel().select(cfg.MODE_VIDEO);
         modeCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality");
+        modeCombo.setMinWidth(420);
+        modeCombo.setPrefWidth(420);
+        modeCombo.setMaxWidth(420);
 
         ComboBox<String> qualityCombo = new ComboBox<>();
         qualityCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality");
+        qualityCombo.setMinWidth(420);
+        qualityCombo.setPrefWidth(420);
+        qualityCombo.setMaxWidth(420);
         fillQualityCombo(qualityCombo);
 
         qualityCombo.setCellFactory(lv -> new ListCell<>() {
@@ -307,6 +317,9 @@ private static javafx.scene.Node buildSuccessGraphic() {
 
         Button browseBtn = new Button("Browse");
         browseBtn.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
+        browseBtn.setMinWidth(130);
+        browseBtn.setPrefWidth(130);
+        browseBtn.setMaxWidth(130);
         browseBtn.setOnAction(e -> {
             DirectoryChooser chooser = new DirectoryChooser();
             chooser.setTitle("Select Download Folder");
@@ -455,65 +468,11 @@ private static javafx.scene.Node buildSuccessGraphic() {
             }
 
             if (lastType[0] == ContentType.VIDEO) {
-                if (cfg.QUALITY_SEPARATOR.equals(qV)) { setSizeText.accept("Estimated size: — "); return; }
-
-                if (cfg.MODE_VIDEO.equals(modeV)) {
-                    String qLabel = (qV == null || qV.isBlank()) ? cfg.QUALITY_BEST : qV;
-                    String txt = lastProbedSizeTextByQualityLabel[0].get(qLabel);
-                    if (txt != null && !txt.isBlank()) {
-                        setSizeText.accept("Estimated size: " + txt.trim());
-                        return;
-                    }
-                }
-
-                startSizeLoading.run();
-
-                final String qLabel = (qV == null || qV.isBlank()) ? cfg.QUALITY_BEST : qV;
-                final String inflightKey = u + "||" + modeV + "||" + qLabel;
-
-                if (!VIDEO_SIZE_INFLIGHT.add(inflightKey)) return;
-
-                try {
-                    VIDEO_SIZE_EXEC.execute(() -> {
-                        Long bytes = null;
-                        try {
-                            if (cfg.MODE_VIDEO.equals(modeV)) {
-                                if (cfg.QUALITY_BEST.equals(qLabel)) {
-                                    bytes = fetchCombinedSizeBytesWithYtDlpPrint(u, "bv*+ba/b");
-                                } else {
-                                    int h = parseHeightFromLabel(qLabel);
-                                    String selector = (h > 0) ? buildFormatSelectorForHeight(h) : "bv*+ba/b";
-                                    bytes = fetchCombinedSizeBytesWithYtDlpPrint(u, selector);
-                                }
-                            } else {
-                                bytes = fetchSizeWithYtDlp(u, modeV, qV);
-                            }
-
-                            if (bytes != null && bytes > 0) SIZE_CACHE.put(key, bytes);
-
-                        } catch (Exception ignored) {
-                        } finally {
-                            VIDEO_SIZE_INFLIGHT.remove(inflightKey);
-                        }
-
-                        final Long fbytes = bytes;
-                        Platform.runLater(() -> {
-                            if (!dialogAlive[0]) return;
-                            if (mySession != sessionId.get()) return;
-                            if (rid != sizeReqId[0]) return;
-                            if (fbytes != null && fbytes > 0) setSizeText.accept("Estimated size: " + formatBytesDecimal(fbytes));
-                            else setSizeText.accept("Estimated size: —");
-                        });
-                    });
-                } catch (RejectedExecutionException rex) {
-                    VIDEO_SIZE_INFLIGHT.remove(inflightKey);
-                    Platform.runLater(() -> {
-                        if (!dialogAlive[0]) return;
-                        if (mySession != sessionId.get()) return;
-                        if (rid != sizeReqId[0]) return;
-                        setSizeText.accept("Estimated size: —");
-                    });
-                }
+                // Do not run slow yt-dlp size probes in the Add Link dialog.
+                // Download still starts only after the user clicks Download.
+                // The real total size will appear from DownloadRunner progress after download starts.
+                stopSizeLoading.run();
+                setSizeText.accept("Estimated size: will appear during download");
                 return;
             }
 
@@ -529,7 +488,9 @@ private static javafx.scene.Node buildSuccessGraphic() {
                 fillQualityComboFromHeights(qualityCombo, lastProbedHeights[0]);
                 qualityCombo.getSelectionModel().select(cfg.QUALITY_BEST);
             }
-            if (okBtn != null && !okBtn.isDisabled() && lastType[0] == ContentType.VIDEO) updateSizeAsync.run();
+            if (okBtn != null && !okBtn.isDisabled() && lastType[0] == ContentType.VIDEO) {
+                setSizeText.accept("Estimated size: will appear during download");
+            }
         });
 
         qualityCombo.valueProperty().addListener((obsQ, oldQ, newQ) -> {
@@ -537,7 +498,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
             if (lastType[0] != ContentType.VIDEO) return;
             if (newQ == null) return;
             if (cfg.QUALITY_SEPARATOR.equals(newQ)) return;
-            updateSizeAsync.run();
+            setSizeText.accept("Estimated size: will appear during download");
         });
 
         Runnable applyTypeToUi = () -> {
@@ -550,6 +511,8 @@ private static javafx.scene.Node buildSuccessGraphic() {
                 info.setTextFill(Color.web("#9aa4b2"));
                 showSuccess.run();
                 if (okBtn != null) okBtn.setDisable(false);
+                setGetButtonLoading(getBtn, false);
+                setSizeText.accept("Estimated size: will appear during download");
 
             } else if (t == ContentType.PLAYLIST) {
                 modeCombo.setDisable(true);
@@ -566,7 +529,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
                 info.setTextFill(Color.web("#9aa4b2"));
                 showSuccess.run();
                 if (okBtn != null) okBtn.setDisable(false);
-
+                setGetButtonLoading(getBtn, false);
             } else {
                 modeCombo.setDisable(true);
                 qualityCombo.setDisable(true);
@@ -578,6 +541,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
         };
 
         getBtn.setOnAction(e -> {
+            setGetButtonLoading(getBtn, true);
             String url = urlField.getText() == null ? "" : urlField.getText().trim();
             if (url.isBlank()) {
                 lastType[0] = ContentType.UNSUPPORTED;
@@ -614,6 +578,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
                         }
                         applyTypeToUi.run();
                         if (okBtn != null) okBtn.setDisable(false);
+                        setGetButtonLoading(getBtn, false);
                     });
                 }, "probe-fast").start();
 
@@ -652,7 +617,10 @@ private static javafx.scene.Node buildSuccessGraphic() {
         });
 
         pane.setContent(grid);
+        pane.setMinWidth(760);
         pane.setPrefWidth(760);
+        pane.setMaxWidth(760);
+        dialog.setResizable(false);
 
         if (prefillUrl != null && !prefillUrl.isBlank()) urlField.setText(prefillUrl.trim());
 
@@ -758,6 +726,32 @@ private static javafx.scene.Node buildSuccessGraphic() {
 
         for (Integer h : sorted) qualityCombo.getItems().add(formatHeightLabel(h));
         qualityCombo.getSelectionModel().select(cfg.QUALITY_BEST);
+    }
+
+    private static void setGetButtonLoading(Button getBtn, boolean loading) {
+        if (getBtn == null) return;
+
+        if (loading) {
+            ProgressIndicator spinner = new ProgressIndicator();
+            spinner.setMaxSize(18, 18);
+            spinner.setMouseTransparent(true);
+
+            getBtn.setDisable(true);
+            getBtn.setText("Getting...");
+            getBtn.setGraphic(spinner);
+            getBtn.setContentDisplay(ContentDisplay.RIGHT);
+            getBtn.setMinWidth(130);
+            getBtn.setPrefWidth(130);
+            getBtn.setMaxWidth(130);
+        } else {
+            getBtn.setDisable(false);
+            getBtn.setText("Get");
+            getBtn.setGraphic(null);
+            getBtn.setContentDisplay(ContentDisplay.CENTER);
+            getBtn.setMinWidth(130);
+            getBtn.setPrefWidth(130);
+            getBtn.setMaxWidth(130);
+        }
     }
 
     private List<String> buildAudioOptions() {
