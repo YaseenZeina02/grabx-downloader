@@ -1639,11 +1639,8 @@ public class MainController {
         if (url == null || url.isBlank()) return null;
 
         final String u = url.trim();
-        long t0 = System.currentTimeMillis();
         try {
             java.nio.file.Path yt = com.grabx.app.grabx.util.YtDlpManager.ensureAvailable();
-            System.out.println("ensureAvailable: " +
-                    (System.currentTimeMillis() - t0));
             if (yt == null) return null;
 
             boolean audioOnly = MODE_AUDIO.equals(mode)
@@ -1691,9 +1688,6 @@ public class MainController {
             pb.environment().putIfAbsent("PYTHONIOENCODING", "utf-8");
 
             Process p = pb.start();
-            long t3 = System.currentTimeMillis();
-            System.out.println("pb.start(): " +
-                    (System.currentTimeMillis() - t3));
             StringBuilder sb = new StringBuilder(256 * 1024);
             try (java.io.BufferedReader br = new java.io.BufferedReader(
                     new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
