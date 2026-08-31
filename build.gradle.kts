@@ -30,11 +30,12 @@ dependencies {
     // Needed for iconLiteral like: fas-plus, far-..., fab-...
     implementation("org.kordamp.ikonli:ikonli-fontawesome5-pack:12.3.1")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.0")
+    testImplementation(platform("org.junit:junit-bom:5.11.4"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
 }
 
-/** ✅ IMPORTANT: Disable tests temporarily to bypass the Gradle ':test' crash */
-tasks.named("test") {
-    enabled = false
+tasks.test {
+    useJUnitPlatform()
 }
 
 

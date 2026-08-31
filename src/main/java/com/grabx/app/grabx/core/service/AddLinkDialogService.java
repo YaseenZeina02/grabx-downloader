@@ -1,6 +1,8 @@
 package com.grabx.app.grabx.core.service;
 
 import com.grabx.app.grabx.util.YtDlpManager;
+import com.grabx.app.grabx.util.VideoQualityUtils;
+import com.grabx.app.grabx.core.model.probe.VideoProbeService;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.scene.Node;
@@ -154,6 +156,8 @@ private static javafx.scene.Node buildSuccessGraphic() {
     private final ScheduledExecutorService UI_DELAY_EXEC;
     private final Callbacks cb;
     private final Config cfg;
+    private final VideoProbeCache videoProbeCache = new VideoProbeCache();
+    private final VideoProbeService videoProbeService = new VideoProbeService();
 
     private volatile boolean addLinkDialogOpen = false;
     private volatile TextField activeAddLinkUrlField;
@@ -565,22 +569,27 @@ private static javafx.scene.Node buildSuccessGraphic() {
                 hideSuccess.run();
 
                 final long probeSession = sessionId.get();
-                new Thread(() -> {
-                    VideoInfo vi = probeOnceFast(url);
-                    Platform.runLater(() -> {
+                final String requestedKey = videoProbeCache.cacheKey(url);
+                videoProbeCache.get(url, () -> videoProbeService.probeHeights(url))
+                        .whenComplete((cachedProbe, probeError) -> Platform.runLater(() -> {
                         if (!dialogAlive[0]) return;
                         if (probeSession != sessionId.get()) return;
-                        if (vi == null || vi.heights == null || vi.heights.isEmpty()) {
+                        String currentUrl = urlField.getText() == null ? "" : urlField.getText().trim();
+                        if (!requestedKey.equals(videoProbeCache.cacheKey(currentUrl))) return;
+
+                        Set<Integer> heights = probeError == null && cachedProbe != null
+                                ? cachedProbe.heights()
+                                : Set.of();
+                        if (heights.isEmpty()) {
                             fillQualityCombo(qualityCombo);
                         } else {
-                            fillQualityComboFromHeights(qualityCombo, vi.heights);
-                            lastProbedHeights[0] = vi.heights;
+                            fillQualityComboFromHeights(qualityCombo, heights);
+                            lastProbedHeights[0] = heights;
                         }
                         applyTypeToUi.run();
                         if (okBtn != null) okBtn.setDisable(false);
                         setGetButtonLoading(getBtn, false);
-                    });
-                }, "probe-fast").start();
+                        }));
 
                 return;
             }
@@ -724,7 +733,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
         qualityCombo.getItems().add(cfg.QUALITY_BEST);
         qualityCombo.getItems().add(cfg.QUALITY_SEPARATOR);
 
-        for (Integer h : sorted) qualityCombo.getItems().add(formatHeightLabel(h));
+        for (Integer h : sorted) qualityCombo.getItems().add(VideoQualityUtils.formatHeightLabel(h));
         qualityCombo.getSelectionModel().select(cfg.QUALITY_BEST);
     }
 
@@ -762,77 +771,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
         return out;
     }
 
-    private static String formatHeightLabel(int h) {
-        if (h >= 2160) return "2160p (4K)";
-        if (h >= 1440) return "1440p (2K)";
-        if (h >= 540 && h < 720) return "540p";
-        return h + "p";
-    }
-
     // ===== probing =====
-
-    private static final java.util.regex.Pattern YTDLP_HEIGHT_P = java.util.regex.Pattern.compile("\\b(\\d{3,4})p(?:\\d{1,3})?\\b");
-
-    private static int parseHeightFromLabel(String label) {
-        if (label == null) return -1;
-        var mp = YTDLP_HEIGHT_P.matcher(label);
-        if (mp.find()) return safeParseInt(mp.group(1));
-        return -1;
-    }
-
-    private static int safeParseInt(String s) {
-        try { return Integer.parseInt(s); } catch (Exception e) { return -1; }
-    }
-
-    private static class VideoInfo {
-        Set<Integer> heights = new TreeSet<>();
-    }
-
-    private static VideoInfo probeOnceFast(String url) {
-        try {
-            String json = YtDlpManager.run(List.of("-J", "--no-playlist", "--no-warnings", url));
-            if (json == null || json.isBlank()) return null;
-            return parseVideoInfoFast(json);
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private static VideoInfo parseVideoInfoFast(String json) {
-        VideoInfo info = new VideoInfo();
-        try {
-            var om = new com.fasterxml.jackson.databind.ObjectMapper();
-            var root = om.readTree(json);
-            var formats = root.get("formats");
-            if (formats == null || !formats.isArray()) return info;
-
-            for (var f : formats) {
-                if (!f.has("height")) continue;
-                int h = f.get("height").asInt(-1);
-                int nh = normalizeHeight(h);
-                if (nh > 0) info.heights.add(nh);
-            }
-        } catch (Exception ignored) {}
-        return info;
-    }
-
-    private static int normalizeHeight(int h) {
-        if (h <= 0) return -1;
-        if (h < 120) return -1;
-        int[] ladder = {144, 240, 360, 480, 540, 720, 1080, 1440, 2160, 4320};
-        int best = -1, bestDiff = Integer.MAX_VALUE;
-        for (int v : ladder) {
-            int diff = Math.abs(h - v);
-            if (diff < bestDiff) { bestDiff = diff; best = v; }
-        }
-        int tolerance = 28;
-        return (bestDiff <= tolerance) ? best : -1;
-    }
-
-    private static String buildFormatSelectorForHeight(int height) {
-        int h = Math.max(1, height);
-        return "bv*[height<=" + h + "]+ba/b[height<=" + h + "]/bv*+ba/b";
-    }
 
     private static Long fetchCombinedSizeBytesWithYtDlpPrint(String url, String selector) {
         if (url == null || url.isBlank()) return null;
@@ -871,8 +810,8 @@ private static javafx.scene.Node buildSuccessGraphic() {
             if (mode != null && mode.toLowerCase().contains("audio")) selector = "bestaudio/best";
 
             if (quality != null && !quality.isBlank() && !quality.toLowerCase().contains("best")) {
-                int h = parseHeightFromLabel(quality);
-                if (h > 0) selector = buildFormatSelectorForHeight(h);
+                int h = VideoQualityUtils.parseHeight(quality);
+                if (h > 0) selector = VideoQualityUtils.formatSelectorForHeight(h);
             }
 
             return fetchCombinedSizeBytesWithYtDlpPrint(url, selector);

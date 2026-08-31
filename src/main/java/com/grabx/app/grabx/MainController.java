@@ -9,7 +9,13 @@ import com.grabx.app.grabx.ui.components.NoSelectionModel;
 import com.grabx.app.grabx.ui.dialogs.NativeDialogs;
 import com.grabx.app.grabx.thumbs.ThumbnailCacheManager;
 import com.grabx.app.grabx.core.service.DownloadRunner;
+import com.grabx.app.grabx.core.service.DownloadFolderPreferences;
+import com.grabx.app.grabx.core.model.probe.VideoProbeService;
 import com.grabx.app.grabx.util.YtDlpManager;
+import com.grabx.app.grabx.util.AppLog;
+import com.grabx.app.grabx.util.YouTubeUrls;
+import com.grabx.app.grabx.util.VideoQualityUtils;
+import com.grabx.app.grabx.util.DownloadRuntimeUtils;
 import javafx.animation.*;
 import javafx.collections.transformation.FilteredList;
 import javafx.collections.transformation.SortedList;
@@ -53,6 +59,7 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.logging.Logger;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.beans.property.StringProperty;
 
@@ -62,6 +69,9 @@ import static com.grabx.app.grabx.util.YtDlpManager.*;
 import com.grabx.app.grabx.ui.components.DownloadRowCell;
 
 public class MainController {
+    private static final Logger LOG = AppLog.get(MainController.class);
+    private final DownloadFolderPreferences downloadFolderPreferences = new DownloadFolderPreferences();
+    private static final VideoProbeService VIDEO_PROBE_SERVICE = new VideoProbeService();
     @FXML
     private TextField searchField;
 
@@ -382,15 +392,15 @@ public class MainController {
                         }
                     } catch (Exception ignored) {}
                 },
-                label -> parseHeightFromLabel(String.valueOf(label)),
-                (yt, url, selector, outDir, outTpl) -> probeOutputFilename(yt, url, selector, outDir, outTpl),
-                fmt -> supportsAudioThumbnailEmbedding(fmt),
-                line -> isAudioStreamFromDestinationLine(line),
-                value -> parseLongSafe(value),
-                bytes -> formatBytesDecimal(bytes),
-                value -> normalizeSpeedUnit(value),
+                label -> VideoQualityUtils.parseHeight(String.valueOf(label)),
+                DownloadRuntimeUtils::probeOutputFilename,
+                DownloadRuntimeUtils::supportsAudioThumbnailEmbedding,
+                DownloadRuntimeUtils::isAudioStreamFromDestinationLine,
+                DownloadRuntimeUtils::parseLongSafe,
+                DownloadRuntimeUtils::formatBytesDecimal,
+                DownloadRuntimeUtils::normalizeSpeedUnit,
                 (row, progress) -> applyProgressMonotonic(row, progress),
-                process -> killProcessTree(process),
+                DownloadRuntimeUtils::killProcessTree,
                 MODE_AUDIO,
                 QUALITY_BEST,
                 QUALITY_SEPARATOR,
@@ -400,6 +410,7 @@ public class MainController {
 
         // Main downloads list (center) - initialize after coordinator is ready
         ensureDownloadsListView();
+        installWindowActivationRefresh();
 
         applyFilter("ALL");
         setupSearchFilter();
@@ -420,8 +431,8 @@ public class MainController {
                                     @Override public boolean isHttpUrl(String s) { return MainController.this.isHttpUrl(s); }
                                     @Override public String shorten(String s) { return MainController.this.shorten(s); }
 
-                                    @Override public String getLastDownloadFolderOrDefault() { return MainController.this.getLastDownloadFolderOrDefault(); }
-                                    @Override public void saveLastDownloadFolder(String folder) { MainController.this.saveLastDownloadFolder(folder); }
+                                    @Override public String getLastDownloadFolderOrDefault() { return downloadFolderPreferences.getLastFolderOrDefault(); }
+                                    @Override public void saveLastDownloadFolder(String folder) { downloadFolderPreferences.saveLastFolder(folder); }
 
                                     @Override public void addDownloadItemToList(String url, String folder, String mode, String quality) {
                                         MainController.this.addDownloadItemToList(url, folder, mode, quality);
@@ -568,7 +579,7 @@ public class MainController {
             PlaylistBatchService.Callbacks cb = new PlaylistBatchService.Callbacks();
 
             // videoId -> watch URL
-            cb.youtubeWatchUrl = MainController::youtubeWatchUrl;
+            cb.youtubeWatchUrl = YouTubeUrls::watchUrl;
 
             // create a PENDING row and add it to main list (no engine start here)
             cb.addPendingRow = (url, mode, quality, title) -> {
@@ -616,7 +627,7 @@ public class MainController {
             };
 
             // extract youtube id from URL
-            cb.extractYoutubeId = MainController::extractYouTubeId;
+            cb.extractYoutubeId = YouTubeUrls::extractVideoId;
 
             // persist history after adding rows
             cb.scheduleHistorySave = () -> {
@@ -687,8 +698,7 @@ public class MainController {
         }
 
         try {
-            heights = probeHeightsFastJson(url);
-            heights = normalizeHeights(heights);
+            heights = VIDEO_PROBE_SERVICE.probeHeights(url);
         } catch (Exception ignored) {}
 
         // bestBytes intentionally unknown here
@@ -764,150 +774,7 @@ public class MainController {
         }
     }
 
-    // Matches: 1080p, 1080p60, 2160p, 2160p60 ... (yt-dlp often prints p60 without WxH)
-    private static final Pattern YTDLP_HEIGHT_P = Pattern.compile("\\b(\\d{3,4})p(?:\\d{1,3})?\\b");
-
-    // Matches: 1920x1080, 3840x2160 ...
-    private static final Pattern YTDLP_HEIGHT_X = Pattern.compile("\\b\\d{3,4}x(\\d{3,4})\\b");
-
-
-    private static VideoInfo probeOnceFast(String url) {
-        long t = tStart("probeOnceFast", url);
-
-        try {
-            String json = YtDlpManager.run(List.of(
-                    "-J",
-                    "--no-playlist",
-                    "--no-warnings",
-                    url
-            ));
-
-            if (json == null || json.isBlank()) return null;
-            return parseVideoInfoFast(json);
-
-        } catch (Exception e) {
-            return null;
-        } finally {
-            tEnd("probeOnceFast", t);
-        }
-    }
-
-    private static VideoInfo parseVideoInfoFast(String json) {
-        VideoInfo info = new VideoInfo();
-
-        try {
-            var om = new com.fasterxml.jackson.databind.ObjectMapper();
-            var root = om.readTree(json);
-            var formats = root.get("formats");
-            if (formats == null || !formats.isArray()) return info;
-
-            for (var f : formats) {
-                if (!f.has("height")) continue;
-                int h = f.get("height").asInt(-1);
-                if (h > 0) info.heights.add(normalizeHeight(h));
-            }
-
-            // best = أعلى ارتفاع
-            if (!info.heights.isEmpty()) {
-                info.bestBytes = -1;
-            }
-
-        } catch (Exception ignored) {}
-
-        return info;
-    }
-
-    static class VideoInfo {
-        Set<Integer> heights = new TreeSet<>();
-        Map<Integer, Long> sizeByHeight = new HashMap<>();
-        long bestBytes = -1;
-    }
-
-
-    private static Set<Integer> probeHeightsFastJson(String url) {
-        Set<Integer> heights = new HashSet<>();
-        if (url == null || url.isBlank()) return heights;
-
-        try {
-            List<String> args = List.of(
-                    "--no-warnings",
-                    "--no-playlist",
-                    "-J",
-                    "--encoding", "utf-8",
-                    url.trim()
-            );
-
-            String json = com.grabx.app.grabx.util.YtDlpManager.run(args);
-            if (json == null) return heights;
-
-            // Sometimes yt-dlp may emit non-JSON lines (network errors, warnings, etc.).
-            // Keep only the first JSON object if possible.
-            int firstBrace = json.indexOf('{');
-            if (firstBrace > 0) json = json.substring(firstBrace);
-            if (json.isBlank() || !json.trim().startsWith("{")) return heights;
-
-            com.fasterxml.jackson.databind.ObjectMapper om =
-                    new com.fasterxml.jackson.databind.ObjectMapper();
-
-            var root = om.readTree(json);
-            var formats = root.get("formats");
-            if (formats == null || !formats.isArray()) return heights;
-
-            for (var f : formats) {
-                if (!f.has("height")) continue;
-                int h = f.get("height").asInt(-1);
-                int nh = normalizeHeight(h);
-                if (nh > 0) heights.add(nh);
-            }
-        } catch (Exception ignored) {}
-
-        return normalizeHeights(heights);
-    }
-
     private static final Pattern YTDLP_SIZE = Pattern.compile("\\b(\\d+(?:\\.\\d+)?)(KiB|MiB|GiB)\\b");
-
-    private static String youtubeWatchUrl(String videoId) {
-        if (videoId == null || videoId.isBlank()) return null;
-        return "https://www.youtube.com/watch?v=" + videoId;
-    }
-
-    // ===== Thumbnail helpers (YouTube) =====
-    private static String extractYouTubeId(String url) {
-        if (url == null) return null;
-        String u = url.trim();
-        if (u.isEmpty()) return null;
-
-        // youtu.be/<id>
-        int yi = u.indexOf("youtu.be/");
-        if (yi >= 0) {
-            String tail = u.substring(yi + "youtu.be/".length());
-            int q = tail.indexOf('?');
-            if (q >= 0) tail = tail.substring(0, q);
-            int a = tail.indexOf('&');
-            if (a >= 0) tail = tail.substring(0, a);
-            if (!tail.isBlank()) return tail;
-        }
-
-        // youtube.com/watch?v=<id>
-        int vi = u.indexOf("v=");
-        if (vi >= 0) {
-            String tail = u.substring(vi + 2);
-            int a = tail.indexOf('&');
-            if (a >= 0) tail = tail.substring(0, a);
-            int h = tail.indexOf('#');
-            if (h >= 0) tail = tail.substring(0, h);
-            if (!tail.isBlank()) return tail;
-        }
-
-        return null;
-    }
-
-    private static String buildYouTubeThumbUrl(String videoId) {
-        if (videoId == null || videoId.isBlank()) return null;
-        // Stable CDN; hqdefault works well for list thumbnails
-        return "https://i.ytimg.com/vi/" + videoId + "/hqdefault.jpg";
-    }
-
 
     private static String approxSizeTextFromLine(String line) {
         if (line == null) return null;
@@ -953,57 +820,6 @@ public class MainController {
         return q + " \u2022 " + sz; // "•"
     }
 
-    public static int parseHeightFromLabel(String label) {
-        if (label == null) return -1;
-        Matcher mp = YTDLP_HEIGHT_P.matcher(label);
-        if (mp.find()) return safeParseInt(mp.group(1));
-        return -1;
-    }
-
-    /**
-     * Pick closest supported quality for THIS item based on desired label.
-     * - BEST => BEST
-     * - 1080p => choose highest available <=1080; if none, choose highest available
-     */
-    private static String pickClosestSupportedQuality(String desired, java.util.List<String> availableLabels) {
-        if (desired == null || desired.isBlank()) return QUALITY_BEST;
-        if (QUALITY_BEST.equals(desired)) return QUALITY_BEST;
-
-        int desiredH = parseHeightFromLabel(desired);
-        if (desiredH <= 0) return QUALITY_BEST;
-
-        if (availableLabels == null || availableLabels.isEmpty()) return QUALITY_BEST;
-
-        java.util.List<Integer> hs = new java.util.ArrayList<>();
-        java.util.Map<Integer, String> labelByH = new java.util.HashMap<>();
-
-        for (String s : availableLabels) {
-            if (s == null) continue;
-            if (QUALITY_SEPARATOR.equals(s)) continue;
-            if (QUALITY_BEST.equals(s)) continue;
-            int h = parseHeightFromLabel(s);
-            if (h > 0) {
-                hs.add(h);
-                labelByH.put(h, s);
-            }
-        }
-
-        if (hs.isEmpty()) return QUALITY_BEST;
-
-        hs.sort(java.util.Comparator.naturalOrder());
-
-        Integer bestLE = null;
-        for (Integer h : hs) {
-            if (h <= desiredH) bestLE = h;
-        }
-
-        if (bestLE != null) return labelByH.get(bestLE);
-
-        Integer max = hs.get(hs.size() - 1);
-        return labelByH.get(max);
-    }
-
-
 
     private static ProbeQualitiesResult probeQualitiesWithSizes(String url) {
         long now = System.currentTimeMillis();
@@ -1025,8 +841,7 @@ public class MainController {
         }
 
         // ===== 1) Detect available heights ONCE (FAST, JSON only) =====
-        heights = probeHeightsFastJson(url);
-        heights = normalizeHeights(heights);
+        heights = VIDEO_PROBE_SERVICE.probeHeights(url);
 
         // ===== 2) Compute BEST size ONLY (blocking, once) =====
         Integer bestH = null;
@@ -1038,17 +853,17 @@ public class MainController {
         long bestBytes = -1L;
         if (bestH != null) {
             try {
-                String selector = buildFormatSelectorForHeight(bestH);
+                String selector = VideoQualityUtils.formatSelectorForHeight(bestH);
                 Long b = fetchCombinedSizeBytesWithYtDlpPrint(url, selector);
                 if (b != null && b > 0) {
                     bestBytes = b;
 
                     bytesByHeight.put(bestH, b);
-                    sizeByHeight.put(bestH, formatBytesDecimal(b));
+                    sizeByHeight.put(bestH, DownloadRuntimeUtils.formatBytesDecimal(b));
 
                     // seed cache for instant UI usage
                     SIZE_CACHE.put(url + "|" + MODE_VIDEO + "|" + QUALITY_BEST, b);
-                    SIZE_CACHE.put(url + "|" + MODE_VIDEO + "|" + formatHeightLabel(bestH), b);
+                    SIZE_CACHE.put(url + "|" + MODE_VIDEO + "|" + VideoQualityUtils.formatHeightLabel(bestH), b);
                 }
             } catch (Exception ignored) {}
         }
@@ -1061,12 +876,6 @@ public class MainController {
         } catch (Exception ignored) {}
 
         return pr;
-    }
-
-    /** selector like: bv*[height<=720]+ba/b[height<=720]/bv*+ba/b */
-    private static String buildFormatSelectorForHeight(int height) {
-        int h = Math.max(1, height);
-        return "bv*[height<=" + h + "]+ba/b[height<=" + h + "]/bv*+ba/b";
     }
 
     /**
@@ -1106,14 +915,6 @@ public class MainController {
         }
     }
 
-
-    private static int safeParseInt(String s) {
-        try {
-            return Integer.parseInt(s);
-        } catch (Exception e) {
-            return -1;
-        }
-    }
 
     private void applyFilter(String key) {
         // sidebar filter changed
@@ -1353,95 +1154,10 @@ public class MainController {
         qualityCombo.getItems().add(QUALITY_SEPARATOR);
 
         for (Integer h : sorted) {
-            qualityCombo.getItems().add(formatHeightLabel(h));
+            qualityCombo.getItems().add(VideoQualityUtils.formatHeightLabel(h));
         }
 
         qualityCombo.getSelectionModel().select(QUALITY_BEST);
-    }
-
-    private static String formatHeightLabel(int h) {
-        // keep your labels consistent
-        if (h >= 2160) return "2160p (4K)";
-        if (h >= 1440) return "1440p (2K)";
-        if (h >= 540 && h < 720) return "540p";
-        return h + "p";
-    }
-
-    // Normalize slightly-off heights from yt-dlp (e.g., 1434 -> 1440, 1076 -> 1080, 718 -> 720)
-    private static int normalizeHeight(int h) {
-        if (h <= 0) return -1;
-
-        // Ignore tiny storyboard/thumbnail heights
-        if (h < 120) return -1;
-
-        // Accept common ladder heights (and close variants)
-        int[] ladder = {144, 240, 360, 480, 540, 720, 1080, 1440, 2160, 4320};
-        int best = -1;
-        int bestDiff = Integer.MAX_VALUE;
-
-        for (int v : ladder) {
-            int diff = Math.abs(h - v);
-            if (diff < bestDiff) {
-                bestDiff = diff;
-                best = v;
-            }
-        }
-
-        // Tolerance: allow small encoder variations
-        int tolerance = 28;
-        return (bestDiff <= tolerance) ? best : -1;
-    }
-
-    private static Set<Integer> normalizeHeights(Set<Integer> in) {
-        Set<Integer> out = new TreeSet<>();
-        if (in == null) return out;
-        for (Integer v : in) {
-            if (v == null) continue;
-            int nh = normalizeHeight(v);
-            if (nh > 0) out.add(nh);
-        }
-        return out;
-    }
-
-
-    // ================== Last download folder (persisted) ==================
-    private static final String PREF_KEY_LAST_FOLDER = "gx_last_download_folder";
-
-    private String getLastDownloadFolderOrDefault() {
-        try {
-            java.util.prefs.Preferences prefs =
-                    java.util.prefs.Preferences.userNodeForPackage(MainController.class);
-
-            String v = prefs.get(PREF_KEY_LAST_FOLDER, null);
-            if (v != null) {
-                v = v.trim();
-                if (!v.isEmpty()) {
-                    java.nio.file.Path p = java.nio.file.Path.of(v).toAbsolutePath().normalize();
-                    return p.toString();
-                }
-            }
-        } catch (Exception ignored) {}
-
-        // Default
-        try {
-            return java.nio.file.Path.of(System.getProperty("user.home"), "Downloads").toString();
-        } catch (Exception ignored) {
-            return System.getProperty("user.home");
-        }
-    }
-
-    private void saveLastDownloadFolder(String folder) {
-        if (folder == null) return;
-        String v = folder.trim();
-        if (v.isEmpty()) return;
-
-        try {
-            java.util.prefs.Preferences prefs =
-                    java.util.prefs.Preferences.userNodeForPackage(MainController.class);
-
-            prefs.put(PREF_KEY_LAST_FOLDER, v);
-            try { prefs.flush(); } catch (Exception ignored) {}
-        } catch (Exception ignored) {}
     }
 
     private static String esc(String s) {
@@ -1554,9 +1270,9 @@ public class MainController {
         ensureDownloadsListView();
 
         String u = (url == null) ? "" : url.trim();
-        u = normalizeYoutubeSingleVideoUrl(u);
+        u = YouTubeUrls.normalizeSingleVideoUrl(u);
 
-        String folder = getLastDownloadFolderOrDefault();
+        String folder = downloadFolderPreferences.getLastFolderOrDefault();
 
         String t = (title == null || title.isBlank()) ? shorten(u) : title;
         if (t == null || t.isBlank()) t = "New item";
@@ -1656,7 +1372,7 @@ public class MainController {
                 if (q == null || q.isBlank() || QUALITY_SEPARATOR.equals(q) || QUALITY_BEST.equals(q)) {
                     selector = "bv*+ba/best";
                 } else {
-                    int h = parseHeightFromLabel(q);
+                    int h = VideoQualityUtils.parseHeight(q);
                     if (h > 0) selector = "bv*[height<=" + h + "]+ba/b[height<=" + h + "]/best";
                     else selector = "bv*+ba/best";
                 }
@@ -1678,9 +1394,9 @@ public class MainController {
             if (ffmpeg != null) {
                 cmd.add("--ffmpeg-location");
                 cmd.add(ffmpeg.toAbsolutePath().toString());
-                System.out.println("[FFMPEG] Using ffmpeg at: " + ffmpeg);
+                LOG.info(() -> "Using FFmpeg at " + ffmpeg);
             } else {
-                System.out.println("[FFMPEG] ffmpeg not available, yt-dlp will try system ffmpeg.");
+                LOG.warning("Managed FFmpeg unavailable; yt-dlp will try the system PATH");
             }
 
             ProcessBuilder pb = new ProcessBuilder(cmd);
@@ -1864,6 +1580,29 @@ public class MainController {
         downloadsList.setSelectionModel(new NoSelectionModel<>());
     }
 
+    /**
+     * macOS may suspend JavaFX pulses while the application is fully obscured.
+     * Refresh the visible cells when the window becomes active so the latest
+     * background-download state is painted without waiting for a mouse click.
+     */
+    private void installWindowActivationRefresh() {
+        Platform.runLater(() -> {
+            try {
+                if (root == null || root.getScene() == null || root.getScene().getWindow() == null) return;
+
+                root.getScene().getWindow().focusedProperty().addListener((obs, wasFocused, isFocused) -> {
+                    if (!isFocused) return;
+                    Platform.runLater(() -> {
+                        try {
+                            if (downloadsList != null) downloadsList.refresh();
+                            root.requestLayout();
+                        } catch (Exception ignored) {}
+                    });
+                });
+            } catch (Exception ignored) {}
+        });
+    }
+
     private String fetchTitleWithOEmbed(String url) {
         if (url == null || url.isBlank()) return null;
         try {
@@ -1926,7 +1665,7 @@ public class MainController {
 
     private void addDownloadItemToList(String url, String folder, String mode, String quality) {
         ensureDownloadsListView();
-        url = normalizeYoutubeSingleVideoUrl(url);
+        url = YouTubeUrls.normalizeSingleVideoUrl(url);
         String initialTitle = shorten(url);
         if (initialTitle == null || initialTitle.isBlank()) initialTitle = "New item";
 
@@ -2034,143 +1773,6 @@ public class MainController {
         downloadRunner.start(row, resume);
     }
 
-    public static boolean supportsAudioThumbnailEmbedding(String fmt) {
-        if (fmt == null) return false;
-        String f = fmt.trim().toLowerCase(java.util.Locale.ROOT);
-
-        // wav intentionally NOT included
-        return f.equals("mp3")
-                || f.equals("m4a")
-                || f.equals("opus")
-                || f.equals("ogg")
-                || f.equals("flac")
-                || f.equals("mka")
-                || f.equals("mkv")
-                || f.equals("mp4")
-                || f.equals("m4b")
-                || f.equals("m4p");
-    }
-
-    public static String probeOutputFilename(java.nio.file.Path yt,
-                                             String url,
-                                             String selector,
-                                             java.nio.file.Path outDir,
-                                             String outTpl) {
-        if (yt == null || url == null || url.isBlank() || selector == null || outDir == null || outTpl == null) return null;
-
-        try {
-            java.util.List<String> probe = new java.util.ArrayList<>();
-            probe.add(yt.toAbsolutePath().toString());
-            probe.add("--no-warnings");
-            probe.add("--no-playlist");
-            probe.add("--skip-download");
-            probe.add("--encoding"); probe.add("utf-8");
-
-            // keep the same anti-403 args as the real download
-            probe.add("--user-agent");
-            probe.add("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36");
-            probe.add("--referer");
-            probe.add("https://www.youtube.com/");
-            probe.add("--extractor-args");
-            probe.add("youtube:player_client=android");
-
-            probe.add("-f");
-            probe.add(selector);
-
-            probe.add("-o");
-            probe.add(outDir.resolve(outTpl).toString());
-
-            // Print the final filename chosen by yt-dlp
-            probe.add("--print");
-            probe.add("filename");
-
-            probe.add(url.trim());
-
-            Process p = new ProcessBuilder(probe)
-                    .redirectErrorStream(true)
-                    .start();
-
-            String line;
-            try (java.io.BufferedReader br = new java.io.BufferedReader(
-                    new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
-                line = br.readLine();
-            }
-            try { p.waitFor(); } catch (Exception ignored) {}
-
-            if (line == null) return null;
-            line = line.trim();
-            return line.isBlank() ? null : line;
-
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
-
-    private static String normalizeYoutubeSingleVideoUrl(String input) {
-        if (input == null) return null;
-        String u = input.trim();
-        if (u.isBlank()) return u;
-
-        try {
-            java.net.URI uri = new java.net.URI(u);
-
-            String host = uri.getHost();
-            if (host == null) host = "";
-            host = host.toLowerCase(java.util.Locale.ROOT);
-
-            // handle youtu.be/<id>
-            if (host.contains("youtu.be")) {
-                String path = uri.getPath(); // "/ID"
-                if (path != null && path.length() > 1) {
-                    String id = path.substring(1);
-                    int slash = id.indexOf('/');
-                    if (slash > 0) id = id.substring(0, slash);
-                    if (!id.isBlank()) {
-                        return "https://www.youtube.com/watch?v=" + id;
-                    }
-                }
-                return u;
-            }
-
-            // only normalize youtube domains
-            if (!host.contains("youtube.com")) return u;
-
-            String path = uri.getPath() == null ? "" : uri.getPath();
-
-            // shorts/<id> -> watch?v=<id>
-            if (path.startsWith("/shorts/")) {
-                String id = path.substring("/shorts/".length());
-                int slash = id.indexOf('/');
-                if (slash > 0) id = id.substring(0, slash);
-                if (!id.isBlank()) {
-                    return "https://www.youtube.com/watch?v=" + id;
-                }
-                return u;
-            }
-
-            // watch?v=<id>  -> keep only v
-            String q = uri.getRawQuery();
-            if (q == null || q.isBlank()) return u;
-
-            String v = null;
-            for (String part : q.split("&")) {
-                int eq = part.indexOf('=');
-                String k = (eq >= 0) ? part.substring(0, eq) : part;
-                String val = (eq >= 0) ? part.substring(eq + 1) : "";
-                if ("v".equals(k)) {
-                    v = java.net.URLDecoder.decode(val, java.nio.charset.StandardCharsets.UTF_8);
-                    break;
-                }
-            }
-            if (v == null || v.isBlank()) return u;
-
-            return "https://www.youtube.com/watch?v=" + v;
-
-        } catch (Exception ignored) {
-            return u;
-        }
-    }
-
     private String makeUniqueUiTitle(String base, DownloadRow self) {
         if (base == null) base = "";
         base = base.trim();
@@ -2180,6 +1782,7 @@ public class MainController {
 
         for (DownloadRow r : downloadItems) {
             if (r == null || r == self) continue;
+            if (!hasSameDownloadTarget(r, self)) continue;
 
             String t = null;
             try { t = r.title.get(); } catch (Exception ignored) {}
@@ -2204,83 +1807,23 @@ public class MainController {
         return (max == 0) ? base : (base + " (" + max + ")");
     }
 
-    private static boolean isAudioExtension(String ext) {
-        if (ext == null) return false;
-        ext = ext.toLowerCase(java.util.Locale.ROOT).trim();
-        return ext.equals("m4a") || ext.equals("mp3") || ext.equals("aac") || ext.equals("opus") ||
-                ext.equals("ogg") || ext.equals("flac") || ext.equals("wav");
+    /**
+     * UI numbering should represent a possible output-file collision, not merely
+     * two rows that happen to have the same video title.
+     */
+    private static boolean hasSameDownloadTarget(DownloadRow first, DownloadRow second) {
+        if (first == null || second == null) return false;
+        return normalizedPath(first.folder).equals(normalizedPath(second.folder))
+                && java.util.Objects.equals(first.mode, second.mode)
+                && java.util.Objects.equals(first.quality, second.quality);
     }
 
-    public static boolean isAudioStreamFromDestinationLine(String s) {
-        if (s == null) return false;
-
-        // ExtractAudio lines are always audio
-        if (s.startsWith("[ExtractAudio]")) return true;
-
-        int idx = s.indexOf("Destination");
-        if (idx < 0) return false;
-
-        int colon = s.indexOf(":", idx);
-        String path = (colon >= 0)
-                ? s.substring(colon + 1).trim()
-                : s.substring(idx + "Destination".length()).trim();
-
-        if (path.isEmpty()) return false;
-
-        // remove quotes if any
-        if ((path.startsWith("\"") && path.endsWith("\"")) || (path.startsWith("'") && path.endsWith("'"))) {
-            path = path.substring(1, path.length() - 1).trim();
-        }
-        if (path.isEmpty()) return false;
+    private static String normalizedPath(String folder) {
+        if (folder == null || folder.isBlank()) return "";
         try {
-            java.util.regex.Matcher mid = java.util.regex.Pattern
-                    .compile("\\.f(\\d{2,4})\\.", java.util.regex.Pattern.CASE_INSENSITIVE)
-                    .matcher(path);
-
-            if (mid.find()) {
-                int fid = Integer.parseInt(mid.group(1));
-
-                // Common audio-only ids on YouTube
-                if (fid == 139 || fid == 140 || fid == 141 || fid == 249 || fid == 250 || fid == 251
-                        || fid == 599 || fid == 600) {
-                    return true;
-                }
-                // if it has a format id and it's not in audio set -> very likely video
-                return false;
-            }
-        } catch (Exception ignored) {}
-
-        // Fallback: audio extensions => audio
-        int dot = path.lastIndexOf('.');
-        if (dot < 0 || dot == path.length() - 1) return false;
-
-        String ext = path.substring(dot + 1).toLowerCase(java.util.Locale.ROOT).trim();
-        return isAudioExtension(ext);
-    }
-
-    public static void killProcessTree(Process p) {
-        if (p == null) return;
-
-        try {
-            ProcessHandle h = p.toHandle();
-
-            // graceful destroy descendants first
-            h.descendants().forEach(ph -> {
-                try { ph.destroy(); } catch (Exception ignored) {}
-            });
-            try { h.destroy(); } catch (Exception ignored) {}
-
-            // small wait then force kill still-alive
-            try { Thread.sleep(150); } catch (Exception ignored) {}
-
-            h.descendants().forEach(ph -> {
-                try { if (ph.isAlive()) ph.destroyForcibly(); } catch (Exception ignored) {}
-            });
-            try { if (h.isAlive()) h.destroyForcibly(); } catch (Exception ignored) {}
-
+            return java.nio.file.Path.of(folder).toAbsolutePath().normalize().toString();
         } catch (Exception ignored) {
-            // fallback: at least kill main process
-            try { p.destroyForcibly(); } catch (Exception ignored2) {}
+            return folder.trim();
         }
     }
 
@@ -2307,127 +1850,12 @@ public class MainController {
         return out.toString();
     }
 
-    public static long parseLongSafe(String s) {
-        try {
-            if (s == null) return 0L;
-            s = s.trim();
-            if (s.isEmpty() || "NA".equalsIgnoreCase(s) || "None".equalsIgnoreCase(s)) return 0L;
-            return Long.parseLong(s);
-        } catch (Exception e) {
-            return 0L;
-        }
-    }
-
-    // Decimal units (KB/MB/GB) to avoid MiB/GiB and reduce visual clutter
-    public static String formatBytesDecimal(long bytes) {
-        if (bytes <= 0) return "0 B";
-        double b = (double) bytes;
-        String[] u = {"B", "KB", "MB", "GB", "TB"};
-        int i = 0;
-        while (b >= 1000.0 && i < u.length - 1) {
-            b /= 1000.0;
-            i++;
-        }
-        return String.format(java.util.Locale.US, "%.1f %s", b, u[i]);
-    }
-
-    public static String normalizeSpeedUnit(String spd) {
-        if (spd == null) return null;
-
-        String s = spd.trim();
-        if (s.isEmpty() || "NA".equalsIgnoreCase(s)) return "";
-
-        // توحيد الوحدات
-        s = s.replace("KiB/s", "KB/s")
-                .replace("MiB/s", "MB/s")
-                .replace("GiB/s", "GB/s")
-                .replace("TiB/s", "TB/s");
-
-        // استخراج الرقم + الوحدة
-        java.util.regex.Matcher m =
-                java.util.regex.Pattern
-                        .compile("([0-9]+(?:\\.[0-9]+)?)\\s*(KB/s|MB/s|GB/s|TB/s)",
-                                java.util.regex.Pattern.CASE_INSENSITIVE)
-                        .matcher(s);
-
-        if (!m.find()) return s;
-
-        double value;
-        try {
-            value = Double.parseDouble(m.group(1));
-        } catch (Exception e) {
-            return s;
-        }
-
-        String unit = m.group(2).toUpperCase();
-
-        return String.format(java.util.Locale.US, "%.1f %s", value, unit);
-    }
-
     // --- Thumbnail helpers and cache ---
     public static final java.util.Map<String, javafx.scene.image.Image> MAIN_THUMB_CACHE =
             new java.util.concurrent.ConcurrentHashMap<>();
 
-    private static String extractYoutubeId(String url) {
-        if (url == null) return null;
-        String u = url.trim();
-        if (u.isEmpty()) return null;
-
-        try {
-            // youtu.be/<id>
-            int yb = u.indexOf("youtu.be/");
-            if (yb >= 0) {
-                String s = u.substring(yb + "youtu.be/".length());
-                int q = s.indexOf('?');
-                if (q >= 0) s = s.substring(0, q);
-                int a = s.indexOf('&');
-                if (a >= 0) s = s.substring(0, a);
-                s = s.trim();
-                return s.isEmpty() ? null : s;
-            }
-
-
-            int sh = u.indexOf("/shorts/");
-            if (sh >= 0) {
-                String s = u.substring(sh + "/shorts/".length());
-                int q = s.indexOf('?');
-                if (q >= 0) s = s.substring(0, q);
-                int a = s.indexOf('&');
-                if (a >= 0) s = s.substring(0, a);
-                s = s.trim();
-                return s.isEmpty() ? null : s;
-            }
-
-            // embed/<id>
-            int em = u.indexOf("/embed/");
-            if (em >= 0) {
-                String s = u.substring(em + "/embed/".length());
-                int q = s.indexOf('?');
-                if (q >= 0) s = s.substring(0, q);
-                int a = s.indexOf('&');
-                if (a >= 0) s = s.substring(0, a);
-                s = s.trim();
-                return s.isEmpty() ? null : s;
-            }
-
-            // watch?v=<id>
-            int v = u.indexOf("v=");
-            if (v >= 0) {
-                String s = u.substring(v + 2);
-                int a = s.indexOf('&');
-                if (a >= 0) s = s.substring(0, a);
-                int h = s.indexOf('#');
-                if (h >= 0) s = s.substring(0, h);
-                s = s.trim();
-                return s.isEmpty() ? null : s;
-            }
-        } catch (Exception ignored) {}
-
-        return null;
-    }
-
     public String thumbFromUrl(String url) {
-        String id = extractYoutubeId(url);
+        String id = YouTubeUrls.extractVideoId(url);
         if (id == null || id.isBlank()) return null;
         return "https://img.youtube.com/vi/" + id + "/hqdefault.jpg";
     }
@@ -2556,7 +1984,7 @@ public class MainController {
                             String cur = r.size.get();
                             if (cur == null || cur.isBlank()) {
                                 long bytes = java.nio.file.Files.size(abs);
-                                r.size.set(formatBytesDecimal(bytes));
+                                r.size.set(DownloadRuntimeUtils.formatBytesDecimal(bytes));
                             }
                         }
                     } catch (Exception ignored) {}
@@ -2590,7 +2018,7 @@ public class MainController {
     // ========= Playlist Screen (v1 - lightweight) =========
     private void openPlaylistWindow(String playlistUrl, String folder) {
         final String playlistFolder = (folder == null || folder.isBlank())
-                ? getLastDownloadFolderOrDefault()
+                ? downloadFolderPreferences.getLastFolderOrDefault()
                 : folder;
 
         Stage stage = new Stage();
@@ -2835,7 +2263,7 @@ public class MainController {
                     if (globalQualityCombo.getItems().contains(desired)) {
                         globalQualityCombo.getSelectionModel().select(desired);
                     } else {
-                        String mapped = pickClosestSupportedQuality(desired, new java.util.ArrayList<>(globalQualityCombo.getItems()));
+                        String mapped = VideoQualityUtils.closestSupportedLabel(desired, new java.util.ArrayList<>(globalQualityCombo.getItems()), QUALITY_BEST, QUALITY_SEPARATOR);
                         globalQualityCombo.getSelectionModel().select(mapped);
                     }
                 }
@@ -2868,13 +2296,13 @@ public class MainController {
                                 "1080p", "720p", "480p", "360p", "240p", "144p"
                         );
                     } else {
-                        java.util.Set<Integer> normalized = normalizeHeights(new java.util.HashSet<>(globalHeightsUnion));
+                        java.util.Set<Integer> normalized = VideoQualityUtils.normalizeHeights(new java.util.HashSet<>(globalHeightsUnion));
                         java.util.List<Integer> sorted = new java.util.ArrayList<>(normalized);
                         sorted.sort(java.util.Comparator.reverseOrder());
 
                         globalQualityCombo.getItems().add(QUALITY_BEST);
                         globalQualityCombo.getItems().add(QUALITY_SEPARATOR);
-                        for (Integer h : sorted) globalQualityCombo.getItems().add(formatHeightLabel(h));
+                        for (Integer h : sorted) globalQualityCombo.getItems().add(VideoQualityUtils.formatHeightLabel(h));
                     }
 
                     if (QUALITY_CUSTOM.equals(prev) && keepCustom) {
@@ -2882,7 +2310,7 @@ public class MainController {
                     } else if (globalQualityCombo.getItems().contains(prev)) {
                         globalQualityCombo.getSelectionModel().select(prev);
                     } else {
-                        String mapped = pickClosestSupportedQuality(prev, new java.util.ArrayList<>(globalQualityCombo.getItems()));
+                        String mapped = VideoQualityUtils.closestSupportedLabel(prev, new java.util.ArrayList<>(globalQualityCombo.getItems()), QUALITY_BEST, QUALITY_SEPARATOR);
                         globalQualityCombo.getSelectionModel().select(mapped);
                     }
                 } finally {
@@ -2955,12 +2383,12 @@ public class MainController {
 
                     probeIndex.set(i); // next position for later
 
-                    String url = youtubeWatchUrl(vid);
+                    String url = YouTubeUrls.watchUrl(vid);
 
                     boolean queued = probeVideoQualitiesAsync(url, vid, pr -> {
                         try {
                             java.util.Set<Integer> heights = (pr == null) ? java.util.Set.of() : pr.heights;
-                            java.util.Set<Integer> norm = normalizeHeights(heights);
+                            java.util.Set<Integer> norm = VideoQualityUtils.normalizeHeights(heights);
 
                             if (norm != null && !norm.isEmpty()) {
                                 globalHeightsUnion.addAll(norm);
@@ -2975,7 +2403,7 @@ public class MainController {
                                     ? new java.util.ArrayList<>()
                                     : new java.util.ArrayList<>(norm);
                             sorted.sort(java.util.Comparator.reverseOrder());
-                            for (Integer h : sorted) labels.add(formatHeightLabel(h));
+                            for (Integer h : sorted) labels.add(VideoQualityUtils.formatHeightLabel(h));
 
                             it.setAvailableQualities(labels);
 
@@ -2989,7 +2417,7 @@ public class MainController {
                                     desired = globalDesiredQuality.get();
                                     if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
                                 }
-                                String supported = pickClosestSupportedQuality(desired, it.getAvailableQualities());
+                                String supported = VideoQualityUtils.closestSupportedLabel(desired, it.getAvailableQualities(), QUALITY_BEST, QUALITY_SEPARATOR);
                                 it.setQuality(supported);
                             }
 
@@ -3195,7 +2623,7 @@ public class MainController {
                         java.util.List<String> avail = it.getAvailableQualities();
                         globalMapped = (avail == null || avail.isEmpty())
                                 ? desired
-                                : pickClosestSupportedQuality(desired, avail);
+                                : VideoQualityUtils.closestSupportedLabel(desired, avail, QUALITY_BEST, QUALITY_SEPARATOR);
                     }
 
                     boolean manual = !val.equals(globalMapped);
@@ -3439,7 +2867,7 @@ public class MainController {
                         if (cur == null || cur.isBlank()) cur = QUALITY_BEST;
 
                         if (!q.contains(cur)) {
-                            cur = pickClosestSupportedQuality(cur, q);
+                            cur = VideoQualityUtils.closestSupportedLabel(cur, q, QUALITY_BEST, QUALITY_SEPARATOR);
                             item.setQuality(cur);
                         }
 
@@ -3529,7 +2957,7 @@ public class MainController {
                     java.util.List<String> avail = it.getAvailableQualities();
                     String mapped = (avail == null || avail.isEmpty())
                             ? val
-                            : pickClosestSupportedQuality(val, avail);
+                            : VideoQualityUtils.closestSupportedLabel(val, avail, QUALITY_BEST, QUALITY_SEPARATOR);
                     it.setQuality(mapped);
                     // ✅ NO size probing
                 }
@@ -3631,7 +3059,7 @@ public class MainController {
         });
 
         download.setOnAction(e -> {
-            saveLastDownloadFolder(playlistFolder);
+            downloadFolderPreferences.saveLastFolder(playlistFolder);
 
             didDownload.set(true);
             try {
@@ -3764,7 +3192,7 @@ public class MainController {
         String vid = it.getId();
         if (vid == null || vid.isBlank()) return;
 
-        String videoUrl = youtubeWatchUrl(vid);
+        String videoUrl = YouTubeUrls.watchUrl(vid);
         if (videoUrl == null || videoUrl.isBlank()) return;
 
         // 0) Global size cache hit
@@ -3777,7 +3205,7 @@ public class MainController {
                 if (exist == null || exist.isBlank()) {
                     var next = new java.util.HashMap<String, String>();
                     if (cur != null) next.putAll(cur);
-                    next.put(qLabel, formatBytesDecimal(cachedBytes));
+                    next.put(qLabel, DownloadRuntimeUtils.formatBytesDecimal(cachedBytes));
                     it.setSizeByQuality(next);
                     if (requestRefreshSafe != null) requestRefreshSafe.run();
                 }
@@ -3805,8 +3233,8 @@ public class MainController {
                 if (QUALITY_BEST.equals(qLabel)) {
                     selector = "bv*+ba/b";
                 } else {
-                    int h = parseHeightFromLabel(qLabel);
-                    selector = (h > 0) ? buildFormatSelectorForHeight(h) : "bv*+ba/b";
+                    int h = VideoQualityUtils.parseHeight(qLabel);
+                    selector = (h > 0) ? VideoQualityUtils.formatSelectorForHeight(h) : "bv*+ba/b";
                 }
 
                 bytes = fetchCombinedSizeBytesWithYtDlpPrint(videoUrl, selector);
@@ -3829,7 +3257,7 @@ public class MainController {
                         var next = new java.util.HashMap<String, String>();
                         var cur = it.getSizeByQuality();
                         if (cur != null) next.putAll(cur);
-                        next.put(qLabel, formatBytesDecimal(fbytes));
+                        next.put(qLabel, DownloadRuntimeUtils.formatBytesDecimal(fbytes));
                         it.setSizeByQuality(next);
                         if (requestRefreshSafe != null) requestRefreshSafe.run();
                     }
@@ -3884,7 +3312,7 @@ public class MainController {
         }
 
         for (PlaylistEntry it : batch) {
-            String url = youtubeWatchUrl(it.getId());
+            String url = YouTubeUrls.watchUrl(it.getId());
             String q = it.getQuality();
             if (q == null || q.isBlank()) q = playlistBatchDefaultQuality;
 
@@ -4007,12 +3435,6 @@ public class MainController {
         } catch (Exception ignored) {}
     }
 
-
-
-    private static String youtubeThumbUrl(String videoId) {
-        if (videoId == null || videoId.isBlank()) return null;
-        return "https://i.ytimg.com/vi/" + videoId + "/hqdefault.jpg";
-    }
 
 
     private static String shorten(String s) {

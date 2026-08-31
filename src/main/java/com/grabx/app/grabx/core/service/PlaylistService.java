@@ -3,10 +3,14 @@ package com.grabx.app.grabx.core.service;
 
 import com.grabx.app.grabx.ui.playlist.PlaylistEntry;
 import com.grabx.app.grabx.util.YtDlpManager;
+import com.grabx.app.grabx.util.AppLog;
+import com.grabx.app.grabx.util.YouTubeUrls;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * PlaylistService
@@ -18,6 +22,7 @@ import java.util.List;
  * الهدف: نطلع من MainController كل منطق yt-dlp الخاص بالـ playlist (مرحلة أولى).
  */
 public final class PlaylistService {
+    private static final Logger LOG = AppLog.get(PlaylistService.class);
 
     /**
      * Loads playlist entries using yt-dlp --flat-playlist.
@@ -73,7 +78,7 @@ public final class PlaylistService {
                         index,
                         id,
                         title,
-                        youtubeThumbUrl(id),
+                        YouTubeUrls.thumbnailUrl(id),
                         true
                 );
 
@@ -88,7 +93,7 @@ public final class PlaylistService {
             }
 
         } catch (Exception e) {
-            System.out.println("[PlaylistService] loadFlatPlaylist failed: " + e.getMessage());
+            LOG.log(Level.WARNING, "Could not load playlist: " + url, e);
         }
 
         return out;
@@ -104,14 +109,5 @@ public final class PlaylistService {
                 || t.equals("[private video]")
                 || t.equals("[deleted video]");
     }
-
-    /** YouTube CDN thumbnail URL */
-    public static String youtubeThumbUrl(String videoId) {
-        if (videoId == null) return null;
-        String v = videoId.trim();
-        if (v.isEmpty()) return null;
-        return "https://i.ytimg.com/vi/" + v + "/hqdefault.jpg";
-    }
-
 
 }

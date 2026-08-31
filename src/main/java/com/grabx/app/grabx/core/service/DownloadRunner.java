@@ -2,6 +2,7 @@
 package com.grabx.app.grabx.core.service;
 
 import com.grabx.app.grabx.core.model.DownloadRow;
+import com.grabx.app.grabx.util.AppLog;
 import javafx.application.Platform;
 
 import java.nio.file.Path;
@@ -12,8 +13,10 @@ import java.util.function.Function;
 
 import java.util.function.LongFunction;
 import java.util.function.Predicate;
+import java.util.logging.Logger;
 
 public final class DownloadRunner {
+    private static final Logger LOG = AppLog.get(DownloadRunner.class);
 
     @FunctionalInterface
     public interface OutputFilenameProbe {
@@ -232,8 +235,8 @@ public final class DownloadRunner {
                     // If it already exists on disk, we switch to autonumber template.
                     long probeStartMs = System.currentTimeMillis();
                     String probed = probeOutputFilename.probe(yt, url, selector, outDir, baseTpl);
-                    System.out.println("probeOutputFilename: " +
-                            (System.currentTimeMillis() - probeStartMs) + " ms");
+                    LOG.fine(() -> "Output filename probe took "
+                            + (System.currentTimeMillis() - probeStartMs) + " ms");
                     if (probed != null && !probed.isBlank()) {
                         java.nio.file.Path probedPath = java.nio.file.Paths.get(probed.trim());
                         if (!probedPath.isAbsolute()) probedPath = outDir.resolve(probedPath).normalize();
@@ -296,9 +299,9 @@ public final class DownloadRunner {
                         cmd.add("jpg");
                         cmd.add("--postprocessor-args");
                         cmd.add("ffmpeg:-id3v2_version 3");
-                        System.out.println("[AUDIO] Thumbnail embed ENABLED for: " + fmt);
+                        LOG.fine("Audio thumbnail embedding enabled for " + fmt);
                     } else {
-                        System.out.println("[AUDIO] Thumbnail embed NOT supported for: " + fmt + " -> continue without thumbnail");
+                        LOG.fine("Audio thumbnail embedding is unsupported for " + fmt);
                     }
 
                     cmd.add("-f");
@@ -316,9 +319,9 @@ public final class DownloadRunner {
                 if (ffmpeg != null) {
                     cmd.add("--ffmpeg-location");
                     cmd.add(ffmpeg.toAbsolutePath().toString());
-                    System.out.println("[FFMPEG] Using ffmpeg at: " + ffmpeg);
+                    LOG.info(() -> "Using FFmpeg at " + ffmpeg);
                 } else {
-                    System.out.println("[FFMPEG] ffmpeg not available, yt-dlp will try system ffmpeg.");
+                    LOG.warning("Managed FFmpeg unavailable; yt-dlp will try the system PATH");
                 }
 
                 ProcessBuilder pb = new ProcessBuilder(cmd);
@@ -327,8 +330,8 @@ public final class DownloadRunner {
 
                 long processStartMs = System.currentTimeMillis();
                 p = pb.start();
-                System.out.println("pb.start(): " +
-                        (System.currentTimeMillis() - processStartMs) + " ms");
+                LOG.fine(() -> "Download process start took "
+                        + (System.currentTimeMillis() - processStartMs) + " ms");
                 long firstOutputClockMs = System.currentTimeMillis();
                 final boolean[] firstOutputLogged = {false};
                 activeProcesses.put(row, p);
@@ -340,8 +343,8 @@ public final class DownloadRunner {
                     while ((line = br.readLine()) != null) {
                         if (!firstOutputLogged[0]) {
                             firstOutputLogged[0] = true;
-                            System.out.println("First output after: " +
-                                    (System.currentTimeMillis() - firstOutputClockMs) + " ms");
+                            LOG.fine(() -> "First yt-dlp output received after "
+                                    + (System.currentTimeMillis() - firstOutputClockMs) + " ms");
                         }
 
                         String s = line.trim();
@@ -463,10 +466,6 @@ public final class DownloadRunner {
                             long total = parseLongSafe.apply(m.group(5));
                             if (total <= 0) total = parseLongSafe.apply(m.group(6));
 
-                            // Store raw byte counters (optional, but useful)
-                            row.downloadedBytes.set(Math.max(0, downloaded));
-                            row.totalBytes.set(total > 0 ? total : -1);
-
                             // UI size text: downloaded / total (if total known)
                             final String sizeText;
                             if (downloaded > 0 && total > 0) {
@@ -478,8 +477,12 @@ public final class DownloadRunner {
                             }
 
                             double fpct = pct;
+                            long finalDownloaded = downloaded;
+                            long finalTotal = total;
 
                             Platform.runLater(() -> {
+                                row.downloadedBytes.set(Math.max(0, finalDownloaded));
+                                row.totalBytes.set(finalTotal > 0 ? finalTotal : -1);
 //                                row.status.set("Downloading");
                                 String cur = row.status.get();
                                 if (cur == null || cur.isBlank() || cur.equals("Preparing")) {

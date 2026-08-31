@@ -5,8 +5,10 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
+import java.util.logging.Logger;
 
 public final class YtDlpManager {
+    private static final Logger LOG = AppLog.get(YtDlpManager.class);
 
     private static final java.util.prefs.Preferences PREFS = java.util.prefs.Preferences.userRoot().node("com.grabx.app.grabx");
 
@@ -457,16 +459,13 @@ public final class YtDlpManager {
 
     public static long tStart(String tag, String detail) {
         if (!YTDLP_TIMING) return 0L;
-        System.out.println(
-                "[yt-dlp][START] " + tag +
-                        (detail != null ? " | " + detail : "")
-        );
+        LOG.fine(() -> "yt-dlp start: " + tag + (detail != null ? " | " + detail : ""));
         return System.nanoTime();
     }
 
     public static void tEnd(String tag, long startNs) {
         if (!YTDLP_TIMING || startNs == 0L) return;
         long ms = (System.nanoTime() - startNs) / 1_000_000;
-        System.out.println("[yt-dlp][END]   " + tag + " | took " + ms + " ms");
+        LOG.fine(() -> "yt-dlp end: " + tag + " | took " + ms + " ms");
     }
 }

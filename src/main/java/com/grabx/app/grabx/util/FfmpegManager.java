@@ -9,8 +9,10 @@ import java.util.*;
 import java.util.prefs.Preferences;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import java.util.logging.Logger;
 
 public final class FfmpegManager {
+    private static final Logger LOG = AppLog.get(FfmpegManager.class);
 
     // ====== CHANGE IF NEEDED ======
     private static final String GITHUB_OWNER = "YaseenZeina02";
@@ -534,6 +536,6 @@ public final class FfmpegManager {
     }
 
     private static void log(String msg) {
-        System.out.println("[FFMPEG] " + msg);
+        LOG.info(msg);
     }
 }

@@ -8,6 +8,7 @@ module com.grabx.app.grabx {
     requires javafx.graphics;
     requires java.prefs;
     requires java.net.http;
+    requires java.logging;
     requires com.fasterxml.jackson.databind;
 //    requires com.grabx.app.grabx;
 //    requires com.grabx.app.grabx;

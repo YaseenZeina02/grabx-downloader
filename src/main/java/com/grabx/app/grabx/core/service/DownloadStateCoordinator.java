@@ -1,6 +1,7 @@
 package com.grabx.app.grabx.core.service;
 
 import com.grabx.app.grabx.core.model.DownloadRow;
+import com.grabx.app.grabx.util.AppLog;
 import javafx.application.Platform;
 import javafx.collections.ObservableList;
 
@@ -8,6 +9,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.function.BiConsumer;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Logger;
 
 /**
  * DownloadStateCoordinator
@@ -18,6 +20,7 @@ import java.util.concurrent.TimeUnit;
  * ملاحظة: إيقاف التحميل هنا = destroy() للـ Process الحالي (نفس سلوك MainController الحالي).
  */
 public final class DownloadStateCoordinator {
+    private static final Logger LOG = AppLog.get(DownloadStateCoordinator.class);
 
     private final ObservableList<DownloadRow> items;
     private final Map<DownloadRow, Process> activeProcesses;
@@ -194,11 +197,11 @@ public final class DownloadStateCoordinator {
 
         final Process p = findActiveProcess(row);
         if (p == null) {
-            System.out.println("[DownloadStateCoordinator] No active process found for " + reason);
+            LOG.fine(() -> "No active download process found for " + reason);
             return;
         }
 
-        System.out.println("[DownloadStateCoordinator] Stopping process for " + reason + ", alive=" + p.isAlive());
+        LOG.info(() -> "Stopping download process for " + reason + ", alive=" + p.isAlive());
 
         try {
             ProcessHandle handle = p.toHandle();
