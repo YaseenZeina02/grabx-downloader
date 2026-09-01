@@ -9,6 +9,7 @@ import com.grabx.app.grabx.util.YouTubeUrls;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -29,6 +30,14 @@ public final class PlaylistService {
      * Output: one line per entry using: id|title
      */
     public List<PlaylistEntry> loadFlatPlaylist(String playlistUrl) {
+        return loadFlatPlaylist(playlistUrl, null);
+    }
+
+    /**
+     * Loads a flat playlist and reports each valid entry as soon as yt-dlp prints it.
+     * The returned list remains useful to callers that also need the final snapshot.
+     */
+    public List<PlaylistEntry> loadFlatPlaylist(String playlistUrl, Consumer<PlaylistEntry> onEntry) {
         List<PlaylistEntry> out = new ArrayList<>();
         if (playlistUrl == null) return out;
 
@@ -40,40 +49,35 @@ public final class PlaylistService {
             Path yt = YtDlpManager.ensureAvailable();
             if (yt == null) return out;
 
-            // Use bundled runner so env/encoding is consistent across OS
-            String raw = YtDlpManager.run(List.of(
+            // Stream output so the UI does not wait for the entire playlist process.
+            YtDlpManager.runLines(List.of(
                     "--flat-playlist",
                     "--no-warnings",
                     "--encoding", "utf-8",
                     "--print", "%(id)s|%(title)s",
                     url
-            ));
-
-            if (raw == null || raw.isBlank()) return out;
-
-            int index = 0;
-            for (String line : raw.split("\\R")) {
-                if (line == null) continue;
+            ), line -> {
+                if (line == null) return;
                 String t = line.trim();
-                if (t.isEmpty()) continue;
+                if (t.isEmpty()) return;
 
                 // ✅ تجاهل سطور الأخطاء/التحذيرات التي قد تخرج من yt-dlp
                 // (خصوصاً لما يكون الرابط غلط أو فيه مشكلة اتصال)
                 String tl = t.toLowerCase();
-                if (tl.startsWith("error:") || tl.startsWith("warning:")) continue;
-                if (tl.contains("http error") && tl.contains("bad request")) continue;
+                if (tl.startsWith("error:") || tl.startsWith("warning:")) return;
+                if (tl.contains("http error") && tl.contains("bad request")) return;
 
                 // Expect: <id>|<title>
                 int bar = t.indexOf('|');
                 String id = (bar >= 0) ? t.substring(0, bar).trim() : t;
-                if (id.isEmpty()) continue;
+                if (id.isEmpty()) return;
 
                 String lowerId = id.toLowerCase();
-                if ("na".equals(lowerId) || "null".equals(lowerId) || "none".equals(lowerId)) continue;
+                if ("na".equals(lowerId) || "null".equals(lowerId) || "none".equals(lowerId)) return;
 
                 String title = (bar >= 0) ? t.substring(bar + 1).trim() : "";
 
-                index++;
+                int index = out.size() + 1;
                 PlaylistEntry entry = new PlaylistEntry(
                         index,
                         id,
@@ -90,7 +94,8 @@ public final class PlaylistService {
                 }
 
                 out.add(entry);
-            }
+                if (onEntry != null) onEntry.accept(entry);
+            });
 
         } catch (Exception e) {
             LOG.log(Level.WARNING, "Could not load playlist: " + url, e);

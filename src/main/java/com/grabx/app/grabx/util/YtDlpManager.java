@@ -5,6 +5,7 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 public final class YtDlpManager {
@@ -200,6 +201,36 @@ public final class YtDlpManager {
         tEnd("run(exit=" + code + ")", t);
 
         return sb.toString();
+    }
+
+    /** Run yt-dlp and deliver merged stdout/stderr one line at a time. */
+    public static int runLines(List<String> args, Consumer<String> onLine)
+            throws IOException, InterruptedException {
+        long startedAt = tStart("runLines", String.join(" ", args));
+
+        Path bin = ensureAvailable();
+        if (bin == null || !Files.exists(bin)) throw new FileNotFoundException("yt-dlp not found");
+
+        List<String> cmd = new ArrayList<>();
+        cmd.add(bin.toAbsolutePath().toString());
+        cmd.addAll(args);
+
+        ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.redirectErrorStream(true);
+        pb.environment().putIfAbsent("PYTHONIOENCODING", "utf-8");
+
+        Process process = pb.start();
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (onLine != null) onLine.accept(line);
+            }
+        }
+
+        int code = process.waitFor();
+        tEnd("runLines(exit=" + code + ")", startedAt);
+        return code;
     }
 
 
