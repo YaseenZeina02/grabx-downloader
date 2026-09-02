@@ -1,6 +1,7 @@
 package com.grabx.app.grabx;
 import com.grabx.app.grabx.ui.components.DownloadRowActions;
 import com.grabx.app.grabx.ui.components.DownloadListViewService;
+import com.grabx.app.grabx.ui.components.IconButtonService;
 import com.grabx.app.grabx.core.model.DownloadRow;
 import com.grabx.app.grabx.core.service.DownloadStateCoordinator;
 import com.grabx.app.grabx.core.service.DownloadHistoryReconciler;
@@ -44,7 +45,6 @@ import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
-import javafx.scene.paint.Color;
 import java.util.logging.Logger;
 
 public class MainController {
@@ -106,46 +106,6 @@ public class MainController {
 
     private com.grabx.app.grabx.core.service.ClipboardService clipboardService;
     private SidebarService sidebarService;
-
-
-    private static final String ICON_PLUS =
-            "M19 11H13V5h-2v6H5v2h6v6h2v-6h6v-2z";
-
-    public static final String ICON_FOLDER_OPEN =
-            "M3 6.5C3 5.12 4.12 4 5.5 4H10L12 6H18.5C19.88 6 21 7.12 21 8.5V17.5C21 18.88 19.88 20 18.5 20H5.5C4.12 20 3 18.88 3 17.5V6.5Z";
-
-    public static final String ICON_PAUSE =
-            "M6 5h4v14H6V5zm8 0h4v14h-4V5z";
-
-    public static final String ICON_PLAY =
-            "M8 5v14l11-7L8 5z";
-
-    public static final String ICON_CANCEL =
-            "M18.3 5.71 12 12l6.3 6.29-1.41 1.42L10.59 13.4 4.3 19.71 2.89 18.29 9.17 12 2.89 5.71 4.3 4.29 10.59 10.6 16.89 4.29z";
-
-    public static final String ICON_RETRY =
-            "M12 5a7 7 0 1 1-6.32 4H3l3.5-3.5L10 9H7.76A5.5 5.5 0 1 0 12 6.5V5z";
-
-    public static final String ICON_CLEAR =
-            "M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z";
-
-    private static final String ICON_SETTINGS =
-            "M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58" +
-                    "c.18-.14.23-.41.12-.61l-1.92-3.32c-.11-.2-.36-.28-.57-.2l-2.39.96" +
-                    "c-.5-.38-1.04-.69-1.64-.92l-.36-2.54c-.03-.22-.22-.38-.45-.38h-3.84" +
-                    "c-.23 0-.42.16-.45.38l-.36 2.54c-.6.23-1.14.54-1.64.92l-2.39-.96" +
-                    "c-.21-.08-.46 0-.57.2L2.71 8.89c-.11.2-.06.47.12.61l2.03 1.58" +
-                    "c-.04.31-.06.63-.06.94s.02.63.06.94L2.83 14.54c-.18.14-.23.41-.12.61" +
-                    "l1.92 3.32c.11.2.36.28.57.2l2.39-.96c.5.38 1.04.69 1.64.92l.36 2.54" +
-                    "c.03.22.22.38.45.38h3.84c.23 0 .42-.16.45-.38l.36-2.54" +
-                    "c.6-.23 1.14-.54 1.64-.92l2.39.96c.21.08.46 0 .57-.2l1.92-3.32" +
-                    "c.11-.2.06-.47-.12-.61l-2.03-1.58z" +
-                    "M12 15.5c-1.93 0-3.5-1.57-3.5-3.5S10.07 8.5 12 8.5" +
-                    "s3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z";
-
-    public static final String ICON_LINK=
-            "M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3z";
-
 
 
     private final java.util.Map<DownloadRow, Process> activeProcesses = new java.util.concurrent.ConcurrentHashMap<>();
@@ -247,31 +207,11 @@ public class MainController {
             }
         } catch (Exception ignored) {}
 
-        try {
-            if (hoverTooltipService != null) {
-                hoverTooltipService.install(pauseAllButton, "Pause all");
-                hoverTooltipService.install(resumeAllButton, "Resume all");
-                hoverTooltipService.install(clearAllButton, "Clear all");
-                hoverTooltipService.install(addLinkButton, "Add link");
-                hoverTooltipService.install(settingsButton, "Settings");
-                hoverTooltipService.install(cancelAllBtn, "Cancel All");
-            }
-        } catch (Exception ignored) {}
-
-        setupSvgButton(addLinkButton, ICON_PLUS);
-        setupSvgButton(pauseAllButton, ICON_PAUSE);
-        setupSvgButton(resumeAllButton, ICON_PLAY);
-        setupSvgButton(cancelAllBtn, ICON_CANCEL);
-        setupSvgButton(clearAllButton, ICON_CLEAR);
-        setupSvgButton(settingsButton, ICON_SETTINGS);
-
-        // ✅ Make hover/press work on the whole Button (not only the icon node)
-
-        normalizeIconButton(pauseAllButton);
-        normalizeIconButton(resumeAllButton);
-        normalizeIconButton(clearAllButton);
-        normalizeIconButton(addLinkButton);
-        normalizeIconButton(settingsButton);
+        IconButtonService iconButtons = new IconButtonService(hoverTooltipService);
+        iconButtons.initializeToolbar(
+                addLinkButton, pauseAllButton, resumeAllButton,
+                cancelAllBtn, clearAllButton, settingsButton
+        );
 
         // Main downloads list will be initialized after DownloadStateCoordinator is ready.
         downloadStateCoordinator = new DownloadStateCoordinator(
@@ -378,13 +318,10 @@ public class MainController {
                 root,
                 downloadStateCoordinator,
                 rowActions,
-                MainController::setupSvgButton,
-                this::installTooltip,
+                IconButtonService::setupSvgButton,
+                iconButtons::installTooltip,
                 (node, text) -> hoverTooltipService.install(node, text),
-                new DownloadListViewService.Icons(
-                        ICON_PAUSE, ICON_PLAY, ICON_CANCEL, ICON_LINK,
-                        ICON_FOLDER_OPEN, ICON_RETRY, ICON_CLEAR
-                )
+                IconButtonService.downloadIcons()
         );
         downloadListViewService.initialize();
         historyService.loadOnce();
@@ -572,73 +509,8 @@ public class MainController {
         return t;
     });
 
-    // ========= Fix icon buttons hover/press =========
-
-    private void normalizeIconButton(Button btn) {
-        if (btn == null) return;
-
-        // Make the entire bounds clickable
-        btn.setPickOnBounds(true);
-
-        // VERY IMPORTANT: let the Button receive mouse events (icon should not steal them)
-        Node g = btn.getGraphic();
-        if (g != null) {
-            g.setMouseTransparent(true);
-        }
-    }
-
-
-
-
-
-    // ========= Custom in-scene tooltip bubble (no Popup/Tooltip jitter) =========
-
-
     private void updateMissingSidebarItem() {
         if (sidebarService != null) sidebarService.refreshMissingItem();
-    }
-
-    public static Node svgIcon(String path, double boxSize) {
-        javafx.scene.shape.SVGPath svg = new javafx.scene.shape.SVGPath();
-        svg.setContent(path);
-        svg.getStyleClass().add("gx-svg-icon");
-
-        StackPane box = new StackPane(svg);
-        box.setMinSize(boxSize, boxSize);
-        box.setPrefSize(boxSize, boxSize);
-        box.setMaxSize(boxSize, boxSize);
-
-        // Scale to fit nicely
-        Platform.runLater(() -> {
-            var b = svg.getBoundsInLocal();
-            double iw = b.getWidth(), ih = b.getHeight();
-            if (iw <= 0 || ih <= 0) return;
-            double target = boxSize * 0.52;
-            double s = Math.min(target / iw, target / ih);
-            svg.setScaleX(s);
-            svg.setScaleY(s);
-        });
-
-        return box;
-    }
-
-    public static void setupSvgButton(Button b, String svgPath) {
-        // Match Topbar icon buttons look
-        b.getStyleClass().addAll("gx-icon-btn", "gx-task-action");
-        b.setFocusTraversable(false);
-        b.setText(null);
-        b.setGraphic(svgIcon(svgPath, 34));
-
-    }
-
-
-    /** Backwards-compatible helper so existing code can keep calling installTooltip(...) */
-    private void installTooltip(javafx.scene.control.Button btn, String text) {
-        try {
-            if (hoverTooltipService != null) {
-                hoverTooltipService.install(btn, text);
-            }
-        } catch (Exception ignored) {}
     }
 
     private void addDownloadItemToList(String url, String folder, String mode, String quality) {
