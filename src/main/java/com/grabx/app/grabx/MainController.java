@@ -16,6 +16,8 @@ import com.grabx.app.grabx.core.service.DownloadProgressTracker;
 import com.grabx.app.grabx.core.service.DownloadQueueService;
 import com.grabx.app.grabx.core.service.AddLinkFlowService;
 import com.grabx.app.grabx.core.service.BulkDownloadActionsService;
+import com.grabx.app.grabx.core.service.AddLinkDialogFactory;
+import com.grabx.app.grabx.core.service.AddLinkDialogService;
 import com.grabx.app.grabx.core.service.SidebarService;
 import com.grabx.app.grabx.core.service.DownloadRunner;
 import com.grabx.app.grabx.core.service.DownloadFolderPreferences;
@@ -40,10 +42,7 @@ import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
 
 import java.util.prefs.Preferences;
-import javafx.scene.Node;
-import javafx.scene.Scene;
 import javafx.scene.control.*;
-import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
 import java.util.logging.Logger;
 
@@ -94,7 +93,7 @@ public class MainController {
     // fields in MainController
     private PlaylistBatchCoordinator playlistBatchCoordinator;
 
-    private com.grabx.app.grabx.core.service.AddLinkDialogService addLinkDialogService;
+    private AddLinkDialogService addLinkDialogService;
     private AddLinkFlowService addLinkFlowService;
 
     private HoverTooltipService hoverTooltipService;
@@ -199,7 +198,7 @@ public class MainController {
             if (root != null) root.requestFocus();
         });
 
-        installClickToDefocus(root);
+        AddLinkDialogFactory.installClickToDefocus(root);
 
         try {
             if (hoverTooltipService == null && root != null) {
@@ -329,48 +328,25 @@ public class MainController {
 
 
         try {
-            if (addLinkDialogService == null && root != null) {
-                addLinkDialogService =
-                        new com.grabx.app.grabx.core.service.AddLinkDialogService(
-                                root,
-                                UI_DELAY_EXEC,
-                                new com.grabx.app.grabx.core.service.AddLinkDialogService.Callbacks() {
-                                    @Override public void installClickToDefocus(DialogPane pane) { MainController.this.installClickToDefocus(pane); }
-                                    @Override public void bringWindowToFront(javafx.stage.Window w) { MainController.this.bringWindowToFront(w); }
-
-                                    @Override public String shorten(String s) { return DownloadTitleService.shorten(s); }
-
-                                    @Override public String getLastDownloadFolderOrDefault() { return downloadFolderPreferences.getLastFolderOrDefault(); }
-                                    @Override public void saveLastDownloadFolder(String folder) { downloadFolderPreferences.saveLastFolder(folder); }
-
-                                    @Override public void addDownloadItemToList(String url, String folder, String mode, String quality) {
-                                        MainController.this.addDownloadItemToList(url, folder, mode, quality);
-                                    }
-
-                                    @Override public void onPlaylistDetected(String playlistUrl, String folder) {
-                                        if (addLinkFlowService != null) addLinkFlowService.beginPlaylist(playlistUrl);
-                                        MainController.this.openPlaylistWindow(playlistUrl, folder);
-                                    }
-
-                                    @Override public void setStatusText(String txt) {
-                                        if (statusText != null && txt != null) statusText.setText(txt);
-                                    }
-                                },
-                                new com.grabx.app.grabx.core.service.AddLinkDialogService.Config(
-                                        MODE_VIDEO,
-                                        MODE_AUDIO,
-                                        QUALITY_BEST,
-                                        QUALITY_SEPARATOR,
-                                        AUDIO_DEFAULT_FORMAT,
-                                        AUDIO_FORMATS,
-                                        "/com/grabx/app/grabx/styles/theme-base.css",
-                                        "/com/grabx/app/grabx/styles/layout.css",
-                                        "/com/grabx/app/grabx/styles/buttons.css",
-                                        "/com/grabx/app/grabx/styles/sidebar.css"
-                                )
-                        );
-            }
-        } catch (Exception ignored) {}
+            addLinkDialogService = AddLinkDialogFactory.create(
+                    root,
+                    UI_DELAY_EXEC,
+                    downloadFolderPreferences::getLastFolderOrDefault,
+                    downloadFolderPreferences::saveLastFolder,
+                    downloadQueueService::enqueue,
+                    (playlistUrl, folder) -> {
+                        if (addLinkFlowService != null) addLinkFlowService.beginPlaylist(playlistUrl);
+                        openPlaylistWindow(playlistUrl, folder);
+                    },
+                    text -> { if (statusText != null) statusText.setText(text); },
+                    AddLinkDialogFactory.defaultConfig(
+                            MODE_VIDEO, MODE_AUDIO, QUALITY_BEST, QUALITY_SEPARATOR,
+                            AUDIO_DEFAULT_FORMAT, AUDIO_FORMATS
+                    )
+            );
+        } catch (Exception ignored) {
+            addLinkDialogService = null;
+        }
 
         if (addLinkDialogService != null) {
             addLinkFlowService = new AddLinkFlowService(
@@ -513,10 +489,6 @@ public class MainController {
         if (sidebarService != null) sidebarService.refreshMissingItem();
     }
 
-    private void addDownloadItemToList(String url, String folder, String mode, String quality) {
-        downloadQueueService.enqueue(url, folder, mode, quality);
-    }
-
     // Only keep the version with yt-dlp --progress-template and regex patterns DEST1, DEST2, MERGE, PROG, etc.
 
     private void startDownloadRow(DownloadRow row, boolean resume) {
@@ -572,35 +544,4 @@ public class MainController {
             addLinkFlowService.returnFromPlaylist();
         }
     }
-    // UX: prevent “first click just removes focus” feeling
-    private static void installClickToDefocus(Node rootNode) {
-        if (rootNode == null) return;
-
-        rootNode.addEventFilter(MouseEvent.MOUSE_PRESSED, e -> {
-            try {
-                Scene sc = rootNode.getScene();
-                if (sc == null) return;
-
-                Node fo = sc.getFocusOwner();
-                if (fo instanceof TextInputControl) {
-                    // remove focus from the text input but DON'T consume the click
-                    rootNode.requestFocus();
-                }
-            } catch (Exception ignored) {}
-        });
-    }
-
-    private static void bringWindowToFront(javafx.stage.Window w) {
-        if (w == null) return;
-        try {
-            w.requestFocus();
-            if (w instanceof javafx.stage.Stage s) {
-                s.toFront();
-                s.requestFocus();
-            }
-        } catch (Exception ignored) {}
-    }
-
-
-
 }
