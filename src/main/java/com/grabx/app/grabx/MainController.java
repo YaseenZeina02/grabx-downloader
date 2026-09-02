@@ -1,5 +1,6 @@
 package com.grabx.app.grabx;
 import com.grabx.app.grabx.ui.components.DownloadRowActions;
+import com.grabx.app.grabx.ui.components.DownloadListViewService;
 import com.grabx.app.grabx.core.model.DownloadRow;
 import com.grabx.app.grabx.core.service.DownloadStateCoordinator;
 import com.grabx.app.grabx.core.service.DownloadHistoryReconciler;
@@ -7,7 +8,6 @@ import com.grabx.app.grabx.core.service.ClearAllService;
 import com.grabx.app.grabx.core.service.PlaylistBatchService;
 import com.grabx.app.grabx.core.service.PlaylistDialogService;
 import com.grabx.app.grabx.ui.components.HoverBubble;
-import com.grabx.app.grabx.ui.components.NoSelectionModel;
 import com.grabx.app.grabx.ui.dialogs.NativeDialogs;
 import com.grabx.app.grabx.core.service.ThumbnailService;
 import com.grabx.app.grabx.core.service.UrlAnalysisService;
@@ -70,7 +70,6 @@ import javafx.beans.property.StringProperty;
 import java.io.File;
 
 import static com.grabx.app.grabx.util.YtDlpManager.*;
-import com.grabx.app.grabx.ui.components.DownloadRowCell;
 
 public class MainController {
     private static final Logger LOG = AppLog.get(MainController.class);
@@ -350,14 +349,37 @@ public class MainController {
                 AUDIO_DEFAULT_FORMAT
         );
 
-        // Main downloads list (center) - initialize after coordinator is ready
-        ensureDownloadsListView();
-        installWindowActivationRefresh();
-
         sidebarService = new SidebarService(
                 sidebarList, contentTitle, statusText, searchField, downloadItems, downloadService
         );
         sidebarService.initialize();
+
+        DownloadRowActions rowActions = new DownloadRowActions(
+                downloadStateCoordinator,
+                activeProcesses,
+                stopReasons,
+                downloadItems,
+                statusText,
+                this::startDownloadRow,
+                this::updateMissingSidebarItem,
+                sidebarService::refilter,
+                fileManagerService::reveal
+        );
+        DownloadListViewService downloadListViewService = new DownloadListViewService(
+                downloadsList,
+                downloadService.view(),
+                root,
+                downloadStateCoordinator,
+                rowActions,
+                MainController::setupSvgButton,
+                this::installTooltip,
+                (node, text) -> hoverTooltipService.install(node, text),
+                new DownloadListViewService.Icons(
+                        ICON_PAUSE, ICON_PLAY, ICON_CANCEL, ICON_LINK,
+                        ICON_FOLDER_OPEN, ICON_RETRY, ICON_CLEAR
+                )
+        );
+        downloadListViewService.initialize();
         historyService.loadOnce();
         initPlaylistBatchService();
 
@@ -660,8 +682,6 @@ public class MainController {
     }
 
     private DownloadRow createDownloadRow(String url, String mode, String quality, String title) {
-        ensureDownloadsListView();
-
         String u = (url == null) ? "" : url.trim();
         u = YouTubeUrls.normalizeSingleVideoUrl(u);
 
@@ -718,77 +738,6 @@ public class MainController {
     }
 
 
-    private void ensureDownloadsListView() {
-        if (downloadsList == null) return;
-
-        downloadsList.setItems(downloadService.view());
-
-        DownloadRowActions rowActions = new DownloadRowActions(
-                downloadStateCoordinator,
-                activeProcesses,
-                stopReasons,
-                downloadItems,
-                statusText,
-                (row, isResume) -> startDownloadRow(row, isResume),
-                this::updateMissingSidebarItem,
-                () -> {
-                    try {
-                        downloadService.setCombinedFilter(
-                                sidebarService.currentKey(),
-                                (searchField == null ? "" : searchField.getText())
-                        );
-                    } catch (Exception ignored) {}
-                },
-                fileManagerService::reveal
-        );
-
-        downloadsList.setCellFactory(lv -> new DownloadRowCell(
-                downloadStateCoordinator::pause,
-                downloadStateCoordinator::resume,
-                downloadStateCoordinator::cancel,
-                rowActions::openDownloadLink,
-                rowActions::openFolderForDownloadRow,
-                rowActions::retryDownloadRow,
-                rowActions::clearDownloadRow,
-                MainController::setupSvgButton,
-                this::installTooltip,
-                (node, text) -> hoverTooltipService.install(node, text),
-                ICON_PAUSE,
-                ICON_PLAY,
-                ICON_CANCEL,
-                ICON_LINK,
-                ICON_FOLDER_OPEN,
-                ICON_RETRY,
-                ICON_CLEAR
-        ));
-
-        // Make it look nicer without selection highlight
-        downloadsList.setSelectionModel(new NoSelectionModel<>());
-    }
-
-    /**
-     * macOS may suspend JavaFX pulses while the application is fully obscured.
-     * Refresh the visible cells when the window becomes active so the latest
-     * background-download state is painted without waiting for a mouse click.
-     */
-    private void installWindowActivationRefresh() {
-        Platform.runLater(() -> {
-            try {
-                if (root == null || root.getScene() == null || root.getScene().getWindow() == null) return;
-
-                root.getScene().getWindow().focusedProperty().addListener((obs, wasFocused, isFocused) -> {
-                    if (!isFocused) return;
-                    Platform.runLater(() -> {
-                        try {
-                            if (downloadsList != null) downloadsList.refresh();
-                            root.requestLayout();
-                        } catch (Exception ignored) {}
-                    });
-                });
-            } catch (Exception ignored) {}
-        });
-    }
-
     /** Backwards-compatible helper so existing code can keep calling installTooltip(...) */
     private void installTooltip(javafx.scene.control.Button btn, String text) {
         try {
@@ -799,7 +748,6 @@ public class MainController {
     }
 
     private void addDownloadItemToList(String url, String folder, String mode, String quality) {
-        ensureDownloadsListView();
         url = YouTubeUrls.normalizeSingleVideoUrl(url);
         String initialTitle = DownloadTitleService.shorten(url);
         if (initialTitle == null || initialTitle.isBlank()) initialTitle = "New item";
