@@ -140,6 +140,10 @@ private static javafx.scene.Node buildSuccessGraphic() {
         showAddLinkDialog(prefillUrl);
     }
 
+    public boolean isOpen() {
+        return addLinkDialogOpen;
+    }
+
     /** optional: close if open */
     public void closeIfOpen() {
         try {

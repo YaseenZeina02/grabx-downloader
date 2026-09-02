@@ -109,8 +109,6 @@ public class MainController {
     @FXML
     private ListView<SidebarItem> sidebarList;
 
-    private Dialog<ButtonType> activeAddLinkDialog = null;
-
     @FXML
     private ListView<DownloadRow> downloadsList;
 
@@ -191,14 +189,6 @@ public class MainController {
     private static final Path HISTORY_DIR  = Paths.get(System.getProperty("user.home"), ".grabx");
     private static final Path HISTORY_FILE = HISTORY_DIR.resolve("download_history.json");
     private static final int HISTORY_MAX_ITEMS = 500; // لاحقاً: user setting
-
-    // ========== Add Link dialog state tracking for clipboard auto-paste ==========
-    private boolean addLinkDialogOpen = false;
-    private TextField activeAddLinkUrlField = null;
-    private String pendingAddLinkPrefillUrl = null;
-
-    // Keep a strong reference so the poll Timeline doesn't get GC'ed
-    private javafx.animation.Timeline clipboardPollTimeline;
 
     // Persist last selected download folder
     private static final Preferences PREFS = Preferences.userNodeForPackage(MainController.class);
@@ -397,7 +387,6 @@ public class MainController {
                                         reopenAddLinkAfterPlaylist = true;
                                         reopenAddLinkPrefillUrl = playlistUrl;
 
-                                        try { if (activeAddLinkDialog != null) activeAddLinkDialog.hide(); } catch (Exception ignored) {}
                                         MainController.this.openPlaylistWindow(playlistUrl, folder);
                                     }
 
@@ -464,18 +453,7 @@ public class MainController {
         try {
             clipboardService = new com.grabx.app.grabx.core.service.ClipboardService(
                     root,
-                    this::openOrUpdateAddLinkDialog,  // ✅ يفتح الديالوج ومعه الرابط
-                    url -> {
-                        // ✅ لو الديالوج مفتوح: حدّث الحقل فورًا
-                        try { pendingAddLinkPrefillUrl = url; } catch (Exception ignored) {}
-                        if (addLinkDialogOpen && activeAddLinkUrlField != null) {
-                            try {
-                                activeAddLinkUrlField.setText(url);
-                                activeAddLinkUrlField.positionCaret(url.length());
-                            } catch (Exception ignored) {}
-                        }
-                    },
-                    () -> addLinkDialogOpen,
+                    this::openOrUpdateAddLinkDialog,
                     urlAnalysisService::isHttpUrl
             );
             clipboardService.start();
@@ -518,15 +496,6 @@ public class MainController {
             applyFilter(newV.getKey());
         });
 
-        Platform.runLater(() -> {
-            String clip = readClipboardTextSafe();
-            if (!urlAnalysisService.isHttpUrl(clip)) return;
-
-            lastClipboardText = clip;
-
-            UI_DELAY_EXEC.schedule(() -> Platform.runLater(() -> openAddLinkDialogDeferred(clip)),
-                    350, TimeUnit.MILLISECONDS);
-        });
     }
 
     private void initPlaylistBatchService() {
@@ -735,25 +704,6 @@ public class MainController {
                 80, TimeUnit.MILLISECONDS);
     }
 
-    // open add link page when copy now link
-    private void handleClipboardUrl(String url) {
-        if (!urlAnalysisService.isHttpUrl(url)) return;
-
-        // إذا نافذة AddLink مفتوحة → حدّث الحقل
-        if (addLinkDialogOpen && activeAddLinkUrlField != null) {
-            activeAddLinkUrlField.setText(url);
-            activeAddLinkUrlField.positionCaret(url.length());
-            return;
-        }
-
-        // غير مفتوحة → افتح AddLink مع prefill (deferred) بدل fire أثناء layout/animation
-        pendingAddLinkPrefillUrl = url;
-        openAddLinkDialogDeferred(url);
-    }
-    private void onClipboardChanged(String newText) {
-        handleClipboardUrl(newText);
-    }
-
     // ========= Fix icon buttons hover/press =========
 
     private void normalizeIconButton(Button btn) {
@@ -886,18 +836,6 @@ public class MainController {
         }
 
         addLinkDialogService.show(prefillUrl);
-    }
-
-    private void closeActiveAddLinkDialogIfOpen() {
-        try {
-            if (activeAddLinkDialog != null) {
-                activeAddLinkDialog.close();
-            }
-        } catch (Exception ignored) {}
-
-        addLinkDialogOpen = false;
-        activeAddLinkUrlField = null;
-        activeAddLinkDialog = null;
     }
 
     private DownloadRow createDownloadRow(String url, String mode, String quality, String title) {
@@ -1332,10 +1270,6 @@ public class MainController {
 
         if (result.action() == PlaylistDialogService.Action.DOWNLOAD) {
             downloadFolderPreferences.saveLastFolder(result.folder());
-            try {
-                if (activeAddLinkDialog != null) activeAddLinkDialog.hide();
-            } catch (Exception ignored) {}
-
             if (playlistBatchService != null) {
                 playlistBatchService.enqueue(result.batch(), result.mode(), result.quality());
             } else {
@@ -1396,10 +1330,6 @@ public class MainController {
         return s.length() > 46 ? s.substring(0, 43) + "..." : s;
     }
 
-    // ========= Clipboard auto-paste (v1) =========
-    private String lastClipboardText = "";
-
-
     // ================== Safe deferred open for Add Link dialog ==================
     private final java.util.concurrent.atomic.AtomicBoolean addLinkOpenScheduled =
             new java.util.concurrent.atomic.AtomicBoolean(false);
@@ -1410,20 +1340,8 @@ public class MainController {
      */
     private void openOrUpdateAddLinkDialog(String prefillUrl) {
         String url = (prefillUrl != null && urlAnalysisService.isHttpUrl(prefillUrl)) ? prefillUrl.trim() : null;
-        if (url != null) pendingAddLinkPrefillUrl = url;
-
-        // If already open -> update field immediately
-        if (addLinkDialogOpen) {
-            if (url != null) {
-                if (activeAddLinkUrlField != null) {
-                    activeAddLinkUrlField.setText(url);
-                    activeAddLinkUrlField.positionCaret(activeAddLinkUrlField.getText().length());
-                    Platform.runLater(activeAddLinkUrlField::requestFocus);
-                } else {
-                    // dialog is opening but field not ready yet
-                    pendingAddLinkPrefillUrl = url;
-                }
-            }
+        if (addLinkDialogService != null && addLinkDialogService.isOpen()) {
+            addLinkDialogService.show(url);
             return;
         }
 

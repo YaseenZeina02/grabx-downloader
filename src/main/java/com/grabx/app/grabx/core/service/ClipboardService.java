@@ -11,14 +11,11 @@ import javafx.util.Duration;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
-import java.util.function.Supplier;
 
 public final class ClipboardService {
 
     private final Parent root;
     private final Consumer<String> openAddLinkWithUrl;
-    private final Consumer<String> updateAddLinkUrl;
-    private final Supplier<Boolean> isDialogOpen;
     private final Predicate<String> isHttpUrl;
 
     private String lastClipboardText = "";
@@ -28,14 +25,10 @@ public final class ClipboardService {
     public ClipboardService(
             Parent root,
             Consumer<String> openAddLinkWithUrl,
-            Consumer<String> updateAddLinkUrl,
-            Supplier<Boolean> isDialogOpen,
             Predicate<String> isHttpUrl
     ) {
         this.root = root;
         this.openAddLinkWithUrl = openAddLinkWithUrl;
-        this.updateAddLinkUrl = updateAddLinkUrl;
-        this.isDialogOpen = isDialogOpen;
         this.isHttpUrl = isHttpUrl == null ? value -> false : isHttpUrl;
     }
 
@@ -50,6 +43,7 @@ public final class ClipboardService {
         );
         clipboardPollTimeline.setCycleCount(Animation.INDEFINITE);
         clipboardPollTimeline.play();
+        Platform.runLater(this::tick);
     }
 
     private void tick() {
@@ -58,11 +52,6 @@ public final class ClipboardService {
         lastClipboardText = clip;
 
         if (!isHttpUrl.test(clip)) return;
-
-        if (isDialogOpen.get()) {
-            updateAddLinkUrl.accept(clip);
-            return;
-        }
 
         if (!addLinkOpenScheduled.compareAndSet(false, true)) return;
 
