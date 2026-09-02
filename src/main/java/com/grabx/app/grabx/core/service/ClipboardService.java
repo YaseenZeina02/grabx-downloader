@@ -10,6 +10,7 @@ import javafx.util.Duration;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 public final class ClipboardService {
@@ -18,6 +19,7 @@ public final class ClipboardService {
     private final Consumer<String> openAddLinkWithUrl;
     private final Consumer<String> updateAddLinkUrl;
     private final Supplier<Boolean> isDialogOpen;
+    private final Predicate<String> isHttpUrl;
 
     private String lastClipboardText = "";
     private Timeline clipboardPollTimeline;
@@ -27,12 +29,14 @@ public final class ClipboardService {
             Parent root,
             Consumer<String> openAddLinkWithUrl,
             Consumer<String> updateAddLinkUrl,
-            Supplier<Boolean> isDialogOpen
+            Supplier<Boolean> isDialogOpen,
+            Predicate<String> isHttpUrl
     ) {
         this.root = root;
         this.openAddLinkWithUrl = openAddLinkWithUrl;
         this.updateAddLinkUrl = updateAddLinkUrl;
         this.isDialogOpen = isDialogOpen;
+        this.isHttpUrl = isHttpUrl == null ? value -> false : isHttpUrl;
     }
 
     public void start() {
@@ -53,7 +57,7 @@ public final class ClipboardService {
         if (clip.equals(lastClipboardText)) return;
         lastClipboardText = clip;
 
-        if (!isHttpUrl(clip)) return;
+        if (!isHttpUrl.test(clip)) return;
 
         if (isDialogOpen.get()) {
             updateAddLinkUrl.accept(clip);
@@ -80,9 +84,4 @@ public final class ClipboardService {
         return "";
     }
 
-    private static boolean isHttpUrl(String s) {
-        if (s == null) return false;
-        String ss = s.trim().toLowerCase();
-        return ss.startsWith("http://") || ss.startsWith("https://");
-    }
 }

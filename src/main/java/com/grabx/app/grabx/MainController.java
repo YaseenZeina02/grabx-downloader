@@ -10,6 +10,7 @@ import com.grabx.app.grabx.ui.components.HoverBubble;
 import com.grabx.app.grabx.ui.components.NoSelectionModel;
 import com.grabx.app.grabx.ui.dialogs.NativeDialogs;
 import com.grabx.app.grabx.core.service.ThumbnailService;
+import com.grabx.app.grabx.core.service.UrlAnalysisService;
 import com.grabx.app.grabx.core.service.DownloadRunner;
 import com.grabx.app.grabx.core.service.DownloadFolderPreferences;
 import com.grabx.app.grabx.core.service.VideoSizeService;
@@ -76,6 +77,7 @@ public class MainController {
     private final PlaylistDialogService playlistDialogService =
             new PlaylistDialogService(playlistProbeScheduler, videoSizeService);
     private final ThumbnailService thumbnailService = new ThumbnailService(UI_DELAY_EXEC);
+    private final UrlAnalysisService urlAnalysisService = new UrlAnalysisService();
     @FXML
     private TextField searchField;
 
@@ -258,25 +260,6 @@ public class MainController {
     private volatile boolean reopenAddLinkAfterPlaylist = false;
     private volatile String reopenAddLinkPrefillUrl = null;
 
-    // ========= Analyze URL (backend logic - v1) =========
-    private enum ContentType {
-        DIRECT_FILE,
-        VIDEO,
-        PLAYLIST,
-        UNSUPPORTED
-    }
-
-    private static final String[] DIRECT_EXT = {
-            ".zip", ".rar", ".7z", ".tar", ".gz",
-            ".pdf", ".epub",
-            ".exe", ".dmg", ".pkg",
-            ".iso",
-            ".mp3", ".wav", ".m4a", ".flac",
-            ".mp4", ".mkv", ".mov", ".webm",
-            ".jpg", ".jpeg", ".png", ".gif", ".webp"
-    };
-
-
     // ========= Initialize =========
 
     @FXML
@@ -397,7 +380,6 @@ public class MainController {
                                     @Override public void installClickToDefocus(DialogPane pane) { MainController.this.installClickToDefocus(pane); }
                                     @Override public void bringWindowToFront(javafx.stage.Window w) { MainController.this.bringWindowToFront(w); }
 
-                                    @Override public boolean isHttpUrl(String s) { return MainController.this.isHttpUrl(s); }
                                     @Override public String shorten(String s) { return MainController.this.shorten(s); }
 
                                     @Override public String getLastDownloadFolderOrDefault() { return downloadFolderPreferences.getLastFolderOrDefault(); }
@@ -490,7 +472,8 @@ public class MainController {
                             } catch (Exception ignored) {}
                         }
                     },
-                    () -> addLinkDialogOpen
+                    () -> addLinkDialogOpen,
+                    urlAnalysisService::isHttpUrl
             );
             clipboardService.start();
         } catch (Exception ignored) {}
@@ -534,7 +517,7 @@ public class MainController {
 
         Platform.runLater(() -> {
             String clip = readClipboardTextSafe();
-            if (!isHttpUrl(clip)) return;
+            if (!urlAnalysisService.isHttpUrl(clip)) return;
 
             lastClipboardText = clip;
 
@@ -622,7 +605,7 @@ public class MainController {
     public void onAddLink(ActionEvent event) {
         String clip = readClipboardTextSafe();
         clip = (clip == null) ? null : clip.trim();
-        showAddLinkDialog(isHttpUrl(clip) ? clip : null);
+        showAddLinkDialog(urlAnalysisService.isHttpUrl(clip) ? clip : null);
     }
 
     @FXML
@@ -739,7 +722,7 @@ public class MainController {
 
     private void openAddLinkFromClipboardOrEmpty() {
         String clip = readClipboardTextSafe();
-        String prefill = isHttpUrl(clip) ? clip.trim() : null;
+        String prefill = urlAnalysisService.isHttpUrl(clip) ? clip.trim() : null;
         openAddLinkDialogDeferred(prefill);
     }
 
@@ -751,7 +734,7 @@ public class MainController {
 
     // open add link page when copy now link
     private void handleClipboardUrl(String url) {
-        if (!isHttpUrl(url)) return;
+        if (!urlAnalysisService.isHttpUrl(url)) return;
 
         // إذا نافذة AddLink مفتوحة → حدّث الحقل
         if (addLinkDialogOpen && activeAddLinkUrlField != null) {
@@ -830,46 +813,6 @@ public class MainController {
 
     // ========= Custom in-scene tooltip bubble (no Popup/Tooltip jitter) =========
 
-
-    private static ContentType analyzeUrlType(String url) {
-        if (url == null) return ContentType.UNSUPPORTED;
-        String u = url.trim();
-        if (u.isEmpty()) return ContentType.UNSUPPORTED;
-
-        // must be a URL-ish string
-        String lower = u.toLowerCase();
-        if (!(lower.startsWith("http://") || lower.startsWith("https://"))) {
-            return ContentType.UNSUPPORTED;
-        }
-
-        // 1) obvious direct file by extension
-        for (String ext : DIRECT_EXT) {
-            if (lower.contains(ext + "?") || lower.endsWith(ext)) {
-                return ContentType.DIRECT_FILE;
-            }
-        }
-
-        // 2) YouTube playlist heuristics
-        // - playlist url contains "playlist" or "list=" without a specific video id
-        boolean hasList = lower.contains("list=");
-        boolean looksYouTube = lower.contains("youtube.com") || lower.contains("youtu.be");
-        boolean hasVideoId = lower.contains("watch?v=") || lower.contains("youtu.be/");
-        boolean looksPlaylistPath = lower.contains("youtube.com/playlist");
-
-        if (looksYouTube && (looksPlaylistPath || (hasList && !hasVideoId))) {
-            return ContentType.PLAYLIST;
-        }
-
-        // 3) treat other YouTube watch links as single video
-        if (looksYouTube && (hasVideoId || hasList)) {
-            // note: watch?v=...&list=... is still a single video link; playlist selection will be offered later
-            return ContentType.VIDEO;
-        }
-
-        // 4) For other sites, we cannot know yet without HEAD/yt-dlp probing.
-        // We'll treat it as DIRECT_FILE candidate only after probing in a later iteration.
-        return ContentType.DIRECT_FILE;
-    }
 
     private static void setManagedVisible(Node n, boolean visible) {
         if (n == null) return;
@@ -1494,7 +1437,7 @@ public class MainController {
      * Opens Add Link safely OR updates it if already open.
      */
     private void openOrUpdateAddLinkDialog(String prefillUrl) {
-        String url = (prefillUrl != null && isHttpUrl(prefillUrl)) ? prefillUrl.trim() : null;
+        String url = (prefillUrl != null && urlAnalysisService.isHttpUrl(prefillUrl)) ? prefillUrl.trim() : null;
         if (url != null) pendingAddLinkPrefillUrl = url;
 
         // If already open -> update field immediately
@@ -1546,14 +1489,6 @@ public class MainController {
         }
         return "";
     }
-
-    // Helper: is this string an HTTP/HTTPS URL
-    private boolean isHttpUrl(String s) {
-        if (s == null) return false;
-        String ss = s.trim().toLowerCase();
-        return ss.startsWith("http://") || ss.startsWith("https://");
-    }
-
 
     // Open a folder in the OS file manager
     private static void openInFileManager(java.nio.file.Path folder) {

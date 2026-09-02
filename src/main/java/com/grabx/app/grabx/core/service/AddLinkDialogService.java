@@ -3,6 +3,7 @@ package com.grabx.app.grabx.core.service;
 import com.grabx.app.grabx.util.YtDlpManager;
 import com.grabx.app.grabx.util.VideoQualityUtils;
 import com.grabx.app.grabx.core.model.probe.VideoProbeService;
+import com.grabx.app.grabx.core.service.UrlAnalysisService.ContentType;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.scene.Node;
@@ -38,7 +39,6 @@ public final class AddLinkDialogService {
         void bringWindowToFront(javafx.stage.Window w);
 
         // App behavior
-        boolean isHttpUrl(String s);
         String shorten(String s);
 
         // Folder prefs
@@ -158,6 +158,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
     private final Config cfg;
     private final VideoProbeCache videoProbeCache = new VideoProbeCache();
     private final VideoProbeService videoProbeService = new VideoProbeService();
+    private final UrlAnalysisService urlAnalysisService = new UrlAnalysisService();
 
     private volatile boolean addLinkDialogOpen = false;
     private volatile TextField activeAddLinkUrlField;
@@ -182,12 +183,6 @@ private static javafx.scene.Node buildSuccessGraphic() {
     );
     private static final Set<String> VIDEO_SIZE_INFLIGHT = ConcurrentHashMap.newKeySet();
 
-    private enum ContentType { VIDEO, PLAYLIST, DIRECT_FILE, UNSUPPORTED }
-
-    private static final List<String> DIRECT_EXT = List.of(
-            ".mp4", ".mkv", ".webm", ".mov", ".mp3", ".m4a", ".wav", ".aac", ".flac", ".zip", ".rar", ".7z", ".pdf"
-    );
-
     private void openAddLinkDialogDeferred(String prefillUrl) {
         final long mySession = sessionId.get();
         if (UI_DELAY_EXEC == null) {
@@ -203,7 +198,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
 
     private void showAddLinkDialog(String prefillUrl) {
         if (addLinkDialogOpen) {
-            if (prefillUrl != null && cb.isHttpUrl(prefillUrl) && activeAddLinkUrlField != null) {
+            if (prefillUrl != null && urlAnalysisService.isHttpUrl(prefillUrl) && activeAddLinkUrlField != null) {
                 activeAddLinkUrlField.setText(prefillUrl.trim());
                 activeAddLinkUrlField.positionCaret(activeAddLinkUrlField.getText().length());
                 Platform.runLater(activeAddLinkUrlField::requestFocus);
@@ -560,7 +555,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
                 return;
             }
 
-            lastType[0] = analyzeUrlType(url);
+            lastType[0] = urlAnalysisService.analyze(url);
 
             if (lastType[0] == ContentType.VIDEO) {
                 info.setText("Analyzing formats...");
@@ -676,29 +671,6 @@ private static javafx.scene.Node buildSuccessGraphic() {
     }
 
     // ===================== logic helpers =====================
-
-    private ContentType analyzeUrlType(String url) {
-        if (url == null) return ContentType.UNSUPPORTED;
-        String u = url.trim();
-        if (u.isEmpty()) return ContentType.UNSUPPORTED;
-
-        String lower = u.toLowerCase();
-        if (!(lower.startsWith("http://") || lower.startsWith("https://"))) return ContentType.UNSUPPORTED;
-
-        for (String ext : DIRECT_EXT) {
-            if (lower.contains(ext + "?") || lower.endsWith(ext)) return ContentType.DIRECT_FILE;
-        }
-
-        boolean hasList = lower.contains("list=");
-        boolean looksYouTube = lower.contains("youtube.com") || lower.contains("youtu.be");
-        boolean hasVideoId = lower.contains("watch?v=") || lower.contains("youtu.be/");
-        boolean looksPlaylistPath = lower.contains("youtube.com/playlist");
-
-        if (looksYouTube && (looksPlaylistPath || (hasList && !hasVideoId))) return ContentType.PLAYLIST;
-        if (looksYouTube && (hasVideoId || hasList)) return ContentType.VIDEO;
-
-        return ContentType.DIRECT_FILE;
-    }
 
     private static void fillQualityCombo(ComboBox<String> qualityCombo) {
         if (qualityCombo == null) return;
