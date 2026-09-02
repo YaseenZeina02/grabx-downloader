@@ -14,6 +14,7 @@ import com.grabx.app.grabx.core.service.UrlAnalysisService;
 import com.grabx.app.grabx.core.service.FileManagerService;
 import com.grabx.app.grabx.core.service.DownloadTitleService;
 import com.grabx.app.grabx.core.service.DownloadProgressTracker;
+import com.grabx.app.grabx.core.service.DownloadQueueService;
 import com.grabx.app.grabx.core.service.SidebarService;
 import com.grabx.app.grabx.core.service.DownloadRunner;
 import com.grabx.app.grabx.core.service.DownloadFolderPreferences;
@@ -229,6 +230,8 @@ public class MainController {
                     thumbnailService::thumbnailUrl
             );
 
+    private DownloadQueueService downloadQueueService;
+
 
     //  ===========================
 
@@ -346,6 +349,23 @@ public class MainController {
                 QUALITY_BEST,
                 QUALITY_SEPARATOR,
                 AUDIO_BEST,
+                AUDIO_DEFAULT_FORMAT
+        );
+
+        downloadQueueService = new DownloadQueueService(
+                downloadItems,
+                downloadOrderSeq,
+                downloadFolderPreferences::getLastFolderOrDefault,
+                historyService::attachAutoSave,
+                historyService::scheduleSave,
+                thumbnailService::applyToRow,
+                downloadTitleService::resolveAsync,
+                this::startDownloadRow,
+                Platform::runLater,
+                text -> { if (statusText != null) statusText.setText(text); },
+                MODE_VIDEO,
+                MODE_AUDIO,
+                QUALITY_BEST,
                 AUDIO_DEFAULT_FORMAT
         );
 
@@ -494,7 +514,7 @@ public class MainController {
 
             // create a PENDING row and add it to main list (no engine start here)
             cb.addPendingRow = (url, mode, quality, title) -> {
-                DownloadRow r = createDownloadRow(url, mode, quality, title);
+                DownloadRow r = downloadQueueService.create(url, mode, quality, title);
                 try { r.state.set(DownloadRow.State.QUEUED); } catch (Exception ignored) {}
 
                 // ✅ apply thumbnail immediately for playlist rows
@@ -521,7 +541,7 @@ public class MainController {
 
             // fallback: create row + add + start immediately
             cb.startDownloadForUrl = (url, mode, quality, title) -> {
-                DownloadRow r = createDownloadRow(url, mode, quality, title);
+                DownloadRow r = downloadQueueService.create(url, mode, quality, title);
 
                 // ✅ apply thumbnail immediately for playlist rows
                 try { thumbnailService.applyToRow(r, url); } catch (Exception ignored) {}
@@ -681,25 +701,6 @@ public class MainController {
         addLinkDialogService.show(prefillUrl);
     }
 
-    private DownloadRow createDownloadRow(String url, String mode, String quality, String title) {
-        String u = (url == null) ? "" : url.trim();
-        u = YouTubeUrls.normalizeSingleVideoUrl(u);
-
-        String folder = downloadFolderPreferences.getLastFolderOrDefault();
-
-        String t = (title == null || title.isBlank()) ? DownloadTitleService.shorten(u) : title;
-        if (t == null || t.isBlank()) t = "New item";
-
-        String m = (mode == null || mode.isBlank()) ? MODE_VIDEO : mode;
-        String q = (quality == null || quality.isBlank())
-                ? (MODE_AUDIO.equals(m) ? AUDIO_DEFAULT_FORMAT : QUALITY_BEST)
-                : quality;
-
-        DownloadRow r = new DownloadRow(u, t,downloadOrderSeq.getAndIncrement(), folder, m, q);
-        try { r.status.set("Preparing"); } catch (Exception ignored) {}
-        return r;
-    }
-
     private void updateMissingSidebarItem() {
         if (sidebarService != null) sidebarService.refreshMissingItem();
     }
@@ -748,30 +749,7 @@ public class MainController {
     }
 
     private void addDownloadItemToList(String url, String folder, String mode, String quality) {
-        url = YouTubeUrls.normalizeSingleVideoUrl(url);
-        String initialTitle = DownloadTitleService.shorten(url);
-        if (initialTitle == null || initialTitle.isBlank()) initialTitle = "New item";
-
-        DownloadRow row = new DownloadRow(url, initialTitle,downloadOrderSeq.getAndIncrement(),folder, mode, quality);
-        if (historyService != null) historyService.attachAutoSave(row);
-        // خَلّي “Loading/Preparing” في status مش في العنوان
-        row.status.set("Preparing");
-
-        thumbnailService.applyToRow(row, url);
-
-        // ✅ أي تغيير مهم = احفظ التاريخ (العنوان/الحالة/مسار الملف)
-
-
-        Platform.runLater(() -> {
-            downloadItems.add(0, row);
-            if (historyService != null) historyService.scheduleSave();
-
-            startDownloadRow(row, false);
-        });
-
-        if (statusText != null) statusText.setText("Queued: " + row.title.get());
-
-        downloadTitleService.resolveAsync(row, url);
+        downloadQueueService.enqueue(url, folder, mode, quality);
     }
 
     // Only keep the version with yt-dlp --progress-template and regex patterns DEST1, DEST2, MERGE, PROG, etc.
