@@ -12,6 +12,7 @@ import com.grabx.app.grabx.ui.dialogs.NativeDialogs;
 import com.grabx.app.grabx.core.service.ThumbnailService;
 import com.grabx.app.grabx.core.service.UrlAnalysisService;
 import com.grabx.app.grabx.core.service.FileManagerService;
+import com.grabx.app.grabx.core.service.DownloadTitleService;
 import com.grabx.app.grabx.core.service.DownloadRunner;
 import com.grabx.app.grabx.core.service.DownloadFolderPreferences;
 import com.grabx.app.grabx.core.service.VideoSizeService;
@@ -200,6 +201,12 @@ public class MainController {
     //  ===========================
     private final com.grabx.app.grabx.core.service.DownloadService downloadService =
             new com.grabx.app.grabx.core.service.DownloadService(downloadItems);
+    private final DownloadTitleService downloadTitleService =
+            new DownloadTitleService(
+                    downloadItems,
+                    Platform::runLater,
+                    text -> { if (statusText != null) statusText.setText(text); }
+            );
     private final ClearAllService clearAllService = new ClearAllService(downloadItems);
     private final DownloadHistoryReconciler downloadHistoryReconciler =
             new DownloadHistoryReconciler(
@@ -373,7 +380,7 @@ public class MainController {
                                     @Override public void installClickToDefocus(DialogPane pane) { MainController.this.installClickToDefocus(pane); }
                                     @Override public void bringWindowToFront(javafx.stage.Window w) { MainController.this.bringWindowToFront(w); }
 
-                                    @Override public String shorten(String s) { return MainController.this.shorten(s); }
+                                    @Override public String shorten(String s) { return DownloadTitleService.shorten(s); }
 
                                     @Override public String getLastDownloadFolderOrDefault() { return downloadFolderPreferences.getLastFolderOrDefault(); }
                                     @Override public void saveLastDownloadFolder(String folder) { downloadFolderPreferences.saveLastFolder(folder); }
@@ -846,7 +853,7 @@ public class MainController {
 
         String folder = downloadFolderPreferences.getLastFolderOrDefault();
 
-        String t = (title == null || title.isBlank()) ? shorten(u) : title;
+        String t = (title == null || title.isBlank()) ? DownloadTitleService.shorten(u) : title;
         if (t == null || t.isBlank()) t = "New item";
 
         String m = (mode == null || mode.isBlank()) ? MODE_VIDEO : mode;
@@ -1028,57 +1035,6 @@ public class MainController {
         });
     }
 
-    private String fetchTitleWithOEmbed(String url) {
-        if (url == null || url.isBlank()) return null;
-        try {
-            String u = url.trim();
-
-            String oembed = "https://www.youtube.com/oembed?format=json&url=" +
-                    java.net.URLEncoder.encode(u, java.nio.charset.StandardCharsets.UTF_8);
-
-            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) new java.net.URL(oembed).openConnection();
-            conn.setInstanceFollowRedirects(true);
-            conn.setConnectTimeout(6000);
-            conn.setReadTimeout(6000);
-            conn.setRequestProperty("User-Agent", "GrabX/1.0");
-
-            int code = conn.getResponseCode();
-            if (code < 200 || code >= 300) return null;
-
-            String json;
-            try (var in = conn.getInputStream()) {
-                json = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
-            }
-
-            if (json == null || json.isBlank()) return null;
-
-            // Extract: "title":"..."
-            java.util.regex.Matcher m = java.util.regex.Pattern
-                    .compile("\\\"title\\\"\\s*:\\s*\\\"(.*?)\\\"", java.util.regex.Pattern.DOTALL)
-                    .matcher(json);
-
-            if (!m.find()) return null;
-
-            String title = m.group(1);
-            if (title == null) return null;
-
-            // Minimal JSON unescape
-            title = title.replace("\\\\\"", "\"")
-                    .replace("\\\\n", " ")
-                    .replace("\\\\r", " ")
-                    .replace("\\\\t", " ")
-                    .replace("\\\\/", "/")
-                    .replace("\\\\\\\\", "\\");
-
-            title = unescapeUnicode(title);
-            title = title.trim();
-            return title.isBlank() ? null : title;
-
-        } catch (Exception ignored) {
-            return null;
-        }
-    }
-
     /** Backwards-compatible helper so existing code can keep calling installTooltip(...) */
     private void installTooltip(javafx.scene.control.Button btn, String text) {
         try {
@@ -1091,7 +1047,7 @@ public class MainController {
     private void addDownloadItemToList(String url, String folder, String mode, String quality) {
         ensureDownloadsListView();
         url = YouTubeUrls.normalizeSingleVideoUrl(url);
-        String initialTitle = shorten(url);
+        String initialTitle = DownloadTitleService.shorten(url);
         if (initialTitle == null || initialTitle.isBlank()) initialTitle = "New item";
 
         DownloadRow row = new DownloadRow(url, initialTitle,downloadOrderSeq.getAndIncrement(),folder, mode, quality);
@@ -1113,130 +1069,13 @@ public class MainController {
 
         if (statusText != null) statusText.setText("Queued: " + row.title.get());
 
-        // ✅ oEmbed title (سريع) وبعدها احفظ التاريخ مرة ثانية
-        if (url != null && !url.isBlank()) {
-            String finalUrl1 = url;
-            new Thread(() -> {
-                String realTitle = fetchTitleWithOEmbed(finalUrl1);
-                Platform.runLater(() -> {
-                    if (realTitle != null && !realTitle.isBlank()) {
-//                        row.setTitleOnce(realTitle);
-                        row.setTitleOnce(makeUniqueUiTitle(realTitle, row));
-                        if (statusText != null) statusText.setText("Queued: " + realTitle);
-                    } else {
-                        String fallback = shorten(finalUrl1);
-                        if (fallback == null || fallback.isBlank()) fallback = "Unknown title";
-//                        row.setTitleOnce(fallback);
-                        row.setTitleOnce(makeUniqueUiTitle(fallback, row));
-                        if (statusText != null) statusText.setText("Queued: " + fallback);
-                    }
-                });
-            }, "title-oembed").start();
-        }
-    }
-
-    private static String safeGet(javafx.beans.property.StringProperty p) {
-        try {
-            if (p == null) return "";
-            String v = p.get();
-            return v == null ? "" : v;
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    // --- tiny JSON helpers (no external libs) ---
-    private static String j(String s) {
-        if (s == null) return "null";
-        String v = s.replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
-        return "\"" + v + "\"";
+        downloadTitleService.resolveAsync(row, url);
     }
 
     // Only keep the version with yt-dlp --progress-template and regex patterns DEST1, DEST2, MERGE, PROG, etc.
 
     private void startDownloadRow(DownloadRow row, boolean resume) {
         downloadRunner.start(row, resume);
-    }
-
-    private String makeUniqueUiTitle(String base, DownloadRow self) {
-        if (base == null) base = "";
-        base = base.trim();
-        if (base.isEmpty()) return base;
-
-        int max = 0;
-
-        for (DownloadRow r : downloadItems) {
-            if (r == null || r == self) continue;
-            if (!hasSameDownloadTarget(r, self)) continue;
-
-            String t = null;
-            try { t = r.title.get(); } catch (Exception ignored) {}
-            if (t == null) continue;
-            t = t.trim();
-
-            if (t.equals(base)) {
-                max = Math.max(max, 1);
-                continue;
-            }
-
-            // match: "base (N)"
-            if (t.startsWith(base + " (") && t.endsWith(")")) {
-                String inside = t.substring((base + " (").length(), t.length() - 1).trim();
-                try {
-                    int n = Integer.parseInt(inside);
-                    max = Math.max(max, n + 1);
-                } catch (Exception ignored) {}
-            }
-        }
-
-        return (max == 0) ? base : (base + " (" + max + ")");
-    }
-
-    /**
-     * UI numbering should represent a possible output-file collision, not merely
-     * two rows that happen to have the same video title.
-     */
-    private static boolean hasSameDownloadTarget(DownloadRow first, DownloadRow second) {
-        if (first == null || second == null) return false;
-        return normalizedPath(first.folder).equals(normalizedPath(second.folder))
-                && java.util.Objects.equals(first.mode, second.mode)
-                && java.util.Objects.equals(first.quality, second.quality);
-    }
-
-    private static String normalizedPath(String folder) {
-        if (folder == null || folder.isBlank()) return "";
-        try {
-            return java.nio.file.Path.of(folder).toAbsolutePath().normalize().toString();
-        } catch (Exception ignored) {
-            return folder.trim();
-        }
-    }
-
-    // Decode Unicode escape sequences like \u0645\u0627 -> ما
-    private static String unescapeUnicode(String s) {
-        if (s == null || !s.contains("\\u")) return s;
-
-        StringBuilder out = new StringBuilder(s.length());
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c == '\\' && i + 5 < s.length() && s.charAt(i + 1) == 'u') {
-                try {
-                    String hex = s.substring(i + 2, i + 6);
-                    int code = Integer.parseInt(hex, 16);
-                    out.append((char) code);
-                    i += 5;
-                } catch (Exception e) {
-                    out.append(c);
-                }
-            } else {
-                out.append(c);
-            }
-        }
-        return out.toString();
     }
 
     private void showMissingFileNotice() {
@@ -1323,12 +1162,6 @@ public class MainController {
     }
 
 
-
-    private static String shorten(String s) {
-        if (s == null) return "";
-        s = s.trim();
-        return s.length() > 46 ? s.substring(0, 43) + "..." : s;
-    }
 
     // ================== Safe deferred open for Add Link dialog ==================
     private final java.util.concurrent.atomic.AtomicBoolean addLinkOpenScheduled =
