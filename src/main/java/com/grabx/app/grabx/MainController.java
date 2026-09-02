@@ -18,16 +18,14 @@ import com.grabx.app.grabx.core.service.AddLinkFlowService;
 import com.grabx.app.grabx.core.service.BulkDownloadActionsService;
 import com.grabx.app.grabx.core.service.AddLinkDialogFactory;
 import com.grabx.app.grabx.core.service.AddLinkDialogService;
+import com.grabx.app.grabx.core.service.DownloadEngineFactory;
 import com.grabx.app.grabx.core.service.SidebarService;
 import com.grabx.app.grabx.core.service.DownloadRunner;
 import com.grabx.app.grabx.core.service.DownloadFolderPreferences;
 import com.grabx.app.grabx.core.service.VideoSizeService;
 import com.grabx.app.grabx.core.service.PlaylistProbeScheduler;
 import com.grabx.app.grabx.core.model.probe.VideoProbeService;
-import com.grabx.app.grabx.util.AppLog;
 import com.grabx.app.grabx.util.YouTubeUrls;
-import com.grabx.app.grabx.util.VideoQualityUtils;
-import com.grabx.app.grabx.util.DownloadRuntimeUtils;
 import com.grabx.app.grabx.core.service.HoverTooltipService;
 
 import java.util.*;
@@ -44,10 +42,8 @@ import javafx.fxml.FXML;
 import java.util.prefs.Preferences;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
-import java.util.logging.Logger;
 
 public class MainController {
-    private static final Logger LOG = AppLog.get(MainController.class);
     private final DownloadFolderPreferences downloadFolderPreferences = new DownloadFolderPreferences();
     private static final VideoProbeService VIDEO_PROBE_SERVICE = new VideoProbeService();
     private final VideoSizeService videoSizeService = new VideoSizeService();
@@ -114,9 +110,6 @@ public class MainController {
     private final DownloadProgressTracker downloadProgressTracker = new DownloadProgressTracker();
 
     private final java.util.Map<DownloadRow, String> stopReasons = new java.util.concurrent.ConcurrentHashMap<>();
-    private static final String YTDLP_OUT_TMPL = "%(title)s.%(ext)s";
-
-
     private com.grabx.app.grabx.core.service.MissingWatcherService missingWatcherService;
 
     // Persist last selected download folder
@@ -212,58 +205,26 @@ public class MainController {
                 cancelAllBtn, clearAllButton, settingsButton
         );
 
-        // Main downloads list will be initialized after DownloadStateCoordinator is ready.
-        downloadStateCoordinator = new DownloadStateCoordinator(
+        sidebarService = new SidebarService(
+                sidebarList, contentTitle, statusText, searchField, downloadItems, downloadService
+        );
+        sidebarService.initialize();
+
+        DownloadEngineFactory.Runtime downloadRuntime = DownloadEngineFactory.create(
                 downloadItems,
                 activeProcesses,
                 stopReasons,
-                (row, isResume) -> startDownloadRow(row, isResume),
-                () -> {
-                    try { updateMissingSidebarItem(); } catch (Exception ignored) {}
-                    try {
-                        if (downloadService != null) {
-                            downloadService.setCombinedFilter(
-                                    sidebarService.currentKey(),
-                                    (searchField == null ? "" : searchField.getText())
-                            );
-                        }
-                    } catch (Exception ignored) {}
-                }
-        );
-
-        downloadRunner = new DownloadRunner(
-                activeProcesses,
-                stopReasons,
-                downloadProgressTracker.progressByRow(),
-                () -> {
-                    try { if (historyService != null) historyService.scheduleSave(); } catch (Exception ignored) {}
-                },
+                downloadProgressTracker,
+                this::startDownloadRow,
+                historyService::scheduleSave,
                 this::updateMissingSidebarItem,
-                () -> {
-                    try {
-                        if (downloadService != null) {
-                            downloadService.setCombinedFilter(
-                                    sidebarService.currentKey(),
-                                    (searchField == null ? "" : searchField.getText())
-                            );
-                        }
-                    } catch (Exception ignored) {}
-                },
-                label -> VideoQualityUtils.parseHeight(String.valueOf(label)),
-                DownloadRuntimeUtils::probeOutputFilename,
-                DownloadRuntimeUtils::supportsAudioThumbnailEmbedding,
-                DownloadRuntimeUtils::isAudioStreamFromDestinationLine,
-                DownloadRuntimeUtils::parseLongSafe,
-                DownloadRuntimeUtils::formatBytesDecimal,
-                DownloadRuntimeUtils::normalizeSpeedUnit,
-                downloadProgressTracker::applyMonotonic,
-                DownloadRuntimeUtils::killProcessTree,
-                MODE_AUDIO,
-                QUALITY_BEST,
-                QUALITY_SEPARATOR,
-                AUDIO_BEST,
-                AUDIO_DEFAULT_FORMAT
+                sidebarService::refilter,
+                new DownloadEngineFactory.Config(
+                        MODE_AUDIO, QUALITY_BEST, QUALITY_SEPARATOR, AUDIO_BEST, AUDIO_DEFAULT_FORMAT
+                )
         );
+        downloadStateCoordinator = downloadRuntime.stateCoordinator();
+        downloadRunner = downloadRuntime.runner();
 
         downloadQueueService = new DownloadQueueService(
                 downloadItems,
@@ -281,11 +242,6 @@ public class MainController {
                 QUALITY_BEST,
                 AUDIO_DEFAULT_FORMAT
         );
-
-        sidebarService = new SidebarService(
-                sidebarList, contentTitle, statusText, searchField, downloadItems, downloadService
-        );
-        sidebarService.initialize();
 
         bulkDownloadActionsService = new BulkDownloadActionsService(
                 downloadStateCoordinator::cancelAll,
