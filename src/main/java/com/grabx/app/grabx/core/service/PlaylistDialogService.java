@@ -2,6 +2,7 @@ package com.grabx.app.grabx.core.service;
 
 import com.grabx.app.grabx.ui.components.NoSelectionModel;
 import com.grabx.app.grabx.ui.playlist.PlaylistEntry;
+import com.grabx.app.grabx.ui.playlist.PlaylistEntryCell;
 import com.grabx.app.grabx.util.DownloadRuntimeUtils;
 import com.grabx.app.grabx.util.VideoQualityUtils;
 import com.grabx.app.grabx.util.YouTubeUrls;
@@ -15,8 +16,6 @@ import javafx.geometry.Insets;
 import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
-import javafx.scene.image.Image;
-import javafx.scene.image.ImageView;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
@@ -24,12 +23,11 @@ import javafx.stage.Stage;
 import javafx.util.Duration;
 
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
 
 public final class PlaylistDialogService {
     public static final String QUALITY_BEST = "Best quality (Recommended)";
     public static final String QUALITY_SEPARATOR = "──────────────";
-    private static final String QUALITY_CUSTOM = "Mixed formats";
+    public static final String QUALITY_CUSTOM = "Mixed formats";
     public static final String MODE_VIDEO = "Video";
     public static final String MODE_AUDIO = "Audio only";
     public static final String AUDIO_BEST = "Best audio (Recommended)";
@@ -37,10 +35,6 @@ public final class PlaylistDialogService {
     public static final String VIDEO_DEFAULT_QUALITY = "480p";
     private static final List<String> AUDIO_FORMATS =
             List.of("m4a", "mp3", "opus", "aac", "wav", "flac");
-
-    private static final java.util.Map<String, Image> THUMB_CACHE = new ConcurrentHashMap<>();
-    private static final java.util.Set<String> THUMB_INFLIGHT = ConcurrentHashMap.newKeySet();
-    private static final String CARD_SELECTED_CLASS = "gx-selected";
 
     private final PlaylistProbeScheduler playlistProbeScheduler;
     private final VideoSizeService videoSizeService;
@@ -510,451 +504,99 @@ public final class PlaylistDialogService {
 
 
 
-        list.setCellFactory(lv -> new ListCell<>() {
-
-            private final CheckBox cb = new CheckBox();
-            private final Label title = new Label();
-            private final javafx.scene.control.Tooltip titleTip = new javafx.scene.control.Tooltip();
-            private final PauseTransition titleTipThrottle = new PauseTransition(Duration.millis(45));
-            private String lastTitleForTip = null;
-            private final Label meta = new Label();
-
-            private final VBox textBox = new VBox(4);
-
-            private final StackPane thumbBox = new StackPane();
-            private final ImageView thumb = new ImageView();
-            private final Label placeholder = new Label("NO PREVIEW");
-
-            private final ComboBox<String> qualityCombo = new ComboBox<>();
-            private boolean updatingRowCombo = false;
-            private boolean suppressQualityListener = false;
-            private boolean suppressCheckListener = false;
-
-            private final HBox card = new HBox(12);
-
-            private boolean isChildOf(javafx.scene.Node n, javafx.scene.Node parent) {
-                if (n == null || parent == null) return false;
-                javafx.scene.Node cur = n;
-                while (cur != null) {
-                    if (cur == parent) return true;
-                    cur = cur.getParent();
-                }
-                return false;
-            }
-
-            {
-                setStyle("-fx-background-color: transparent;");
-
-                cb.getStyleClass().addAll("gx-check", "gx-playlist-check");
-                cb.setFocusTraversable(false);
-
-                thumb.setFitWidth(96);
-                thumb.setFitHeight(54);
-                thumb.setPreserveRatio(true);
-                thumb.setSmooth(true);
-
-                placeholder.getStyleClass().add("gx-playlist-thumb-placeholder");
-
-                thumbBox.getStyleClass().add("gx-playlist-thumb");
-                thumbBox.getChildren().addAll(thumb, placeholder);
-
-                // Use the same typography as the main list (keep playlist class too)
-                title.getStyleClass().addAll("gx-task-title", "gx-playlist-title");
-                // Force numbering to stay on the left even when the title contains RTL text
-                title.setNodeOrientation(javafx.geometry.NodeOrientation.LEFT_TO_RIGHT);
-                title.setTextAlignment(javafx.scene.text.TextAlignment.LEFT);
-                title.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
-
-                title.setWrapText(false);
-                // prevent long titles from expanding the row/card; show ellipsis + tooltip
-                title.setMinWidth(0);
-                title.setMaxWidth(Double.MAX_VALUE);
-                title.setPrefWidth(0);
-                title.setTextOverrun(javafx.scene.control.OverrunStyle.ELLIPSIS);
-
-                titleTip.setWrapText(true);
-                titleTip.setMaxWidth(520);
-
-                // UX timing – feels native & light
-                titleTip.setShowDelay(Duration.millis(300));
-                titleTip.setHideDelay(Duration.millis(80));
-                titleTip.setShowDuration(Duration.hours(1));
-
-                Runnable refreshTitleTooltip = () -> {
-                    try {
-                        PlaylistEntry it = getItem();
-                        if (it == null || isEmpty()) {
-                            title.setTooltip(null);
-                            return;
-                        }
-                        // Only show tooltip when the visible label text is actually truncated.
-                        boolean truncated = isLabelTextTruncated(title);
-                        title.setTooltip(truncated ? titleTip : null);
-                    } catch (Exception ignored) {
-                        try { title.setTooltip(null); } catch (Exception ignored2) {}
-                    }
-                };
-
-                titleTipThrottle.setOnFinished(ev -> refreshTitleTooltip.run());
-
-                // Re-evaluate when width changes (layout) or when text changes.
-                title.widthProperty().addListener((o, a, b) -> {
-                    titleTipThrottle.stop();
-                    titleTipThrottle.playFromStart();
-                });
-                title.textProperty().addListener((o, a, b) -> {
-                    titleTipThrottle.stop();
-                    titleTipThrottle.playFromStart();
-                });
-
-                // Hold ListView refresh while the user is hovering the title (prevents tooltip from disappearing due to cell refresh)
-                title.hoverProperty().addListener((o, was, isNow) -> anyTitleHoverHold.set(isNow));
-
-                // Do NOT install tooltip here; we install/uninstall per-row only when truncated (see updateItem)
-
-                meta.getStyleClass().addAll("gx-task-meta", "gx-playlist-meta");
-
-                textBox.getChildren().addAll(title, meta);
-                HBox.setHgrow(textBox, Priority.ALWAYS);
-                textBox.setMinWidth(0);
-                textBox.setMaxWidth(Double.MAX_VALUE);
-                // Allow the VBox to shrink (so the row doesn't force horizontal expansion)
-                textBox.setPrefWidth(0);
-
-                qualityCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality", "gx-playlist-item-combo");
-                qualityCombo.setPrefWidth(PLAYLIST_Q_COMBO_W);
-                qualityCombo.setMinWidth(PLAYLIST_Q_COMBO_W);
-                qualityCombo.setMaxWidth(240);
-                qualityCombo.setDisable(true);
-
-                qualityCombo.setCellFactory(x -> new ListCell<>() {
+        list.setCellFactory(lv -> new PlaylistEntryCell(
+                lv,
+                new PlaylistEntryCell.Context() {
                     @Override
-                    protected void updateItem(String item, boolean empty) {
-                        super.updateItem(item, empty);
-                        setText(empty ? null : item);
-                        setDisable(QUALITY_SEPARATOR.equals(item));
-                        setOpacity(QUALITY_SEPARATOR.equals(item) ? 0.55 : 1.0);
+                    public String mode() {
+                        return globalDesiredMode.get();
                     }
-                });
-                qualityCombo.setButtonCell(new ListCell<>() {
+
                     @Override
-                    protected void updateItem(String item, boolean empty) {
-                        super.updateItem(item, empty);
-                        setText(empty ? null : item);
-                    }
-                });
-
-                qualityCombo.showingProperty().addListener((obs, was, isNow) -> anyQualityPopupOpen.set(isNow));
-
-                qualityCombo.valueProperty().addListener((obs, old, val) -> {
-                    if (updatingRowCombo || suppressQualityListener) return;
-                    if (val == null) return;
-                    if (QUALITY_SEPARATOR.equals(val) || QUALITY_CUSTOM.equals(val)) return;
-
-                    PlaylistEntry it = getItem();
-                    if (it == null || it.isUnavailable()) return;
-
-                    it.setQuality(val);
-
-                    String modeNow = globalDesiredMode.get();
-                    if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
-
-                    // Playlist screen: no size probing (sizes appear in main downloads list)
-                    String desired = globalDesiredQuality.get();
-                    if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
-
-                    String globalMapped;
-                    if (MODE_AUDIO.equals(modeNow)) {
-                        globalMapped = desired;
-                    } else {
-                        java.util.List<String> avail = it.getAvailableQualities();
-                        globalMapped = (avail == null || avail.isEmpty())
-                                ? desired
-                                : VideoQualityUtils.closestSupportedLabel(desired, avail, QUALITY_BEST, QUALITY_SEPARATOR);
+                    public String desiredQuality() {
+                        return globalDesiredQuality.get();
                     }
 
-                    boolean manual = !val.equals(globalMapped);
-                    it.setManualQuality(manual);
-
-                    meta.setText(buildMetaLine(it)); // (will no longer show sizes because we never fill size map)
-                    refreshAddState.run();
-                    Platform.runLater(updateGlobalMixedState);
-                });
-
-                card.getStyleClass().add("gx-playlist-card");
-                card.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
-                card.getChildren().addAll(cb, thumbBox, textBox, qualityCombo);
-                // Force each cell/card to fit the ListView viewport width (prevents horizontal growth)
-                setMaxWidth(Double.MAX_VALUE);
-                prefWidthProperty().bind(lv.widthProperty().subtract(20));
-                card.setMinWidth(0);
-                card.setMaxWidth(Double.MAX_VALUE);
-                card.prefWidthProperty().bind(prefWidthProperty());
-
-                card.setOnMouseClicked(e -> {
-                    if (isEmpty() || getItem() == null) return;
-
-                    javafx.scene.Node target = (e.getTarget() instanceof javafx.scene.Node)
-                            ? (javafx.scene.Node) e.getTarget()
-                            : null;
-                    if (isChildOf(target, qualityCombo) || isChildOf(target, cb)) {
-                        return;
-                    }
-                    cb.setSelected(!cb.isSelected());
-                });
-
-                cb.selectedProperty().addListener((obs, was, isNow) -> {
-                    if (suppressCheckListener) return;
-                    PlaylistEntry it = getItem();
-                    if (it == null) return;
-
-                    if (it.isUnavailable()) {
-                        cb.setSelected(false);
-                        it.setSelected(false);
-                        return;
+                    @Override
+                    public boolean selectionUpdateInProgress() {
+                        return updatingSelection.get();
                     }
 
-                    if (isNow && !updatingSelection.get()) {
-                        int cur = selectedCount.getAsInt();
-                        if (cur >= PLAYLIST_MAX_SELECTED) {
-                            cb.setSelected(false);
-                            it.setSelected(false);
-                            syncCardSelectedStyle(it, card);
-                            try { if (status != null) status.setText("Selection limit: " + PLAYLIST_MAX_SELECTED + " items"); } catch (Exception ignored) {}
-                            return;
+                    @Override
+                    public boolean canSelect(PlaylistEntry item) {
+                        return selectedCount.getAsInt() < PLAYLIST_MAX_SELECTED;
+                    }
+
+                    @Override
+                    public void selectionLimitReached() {
+                        status.setText("Selection limit: " + PLAYLIST_MAX_SELECTED + " items");
+                    }
+
+                    @Override
+                    public void selectionChanged(PlaylistEntry item, boolean selected) {
+                        if (selected && !updatingSelection.get()) {
+                            ensureProbed.accept(item);
+                        } else if (!selected) {
+                            String videoId = item.getId();
+                            if (playlistProbeScheduler.cancelQueued(playlistProbeSession, videoId)) {
+                                qualitiesInflight.remove(videoId);
+                            }
                         }
-                    }
 
-                    it.setSelected(isNow);
-                    syncCardSelectedStyle(it, card);
-
-                    if (isNow && !updatingSelection.get()) {
-                        ensureProbed.accept(it);
-                    } else if (!isNow) {
-                        String videoId = it.getId();
-                        if (playlistProbeScheduler.cancelQueued(playlistProbeSession, videoId)) {
-                            qualitiesInflight.remove(videoId);
+                        if (!updatingSelection.get()) {
+                            Platform.runLater(updateGlobalMixedState);
                         }
+                        refreshAddState.run();
                     }
 
-                    if (!updatingSelection.get()) {
+                    @Override
+                    public void qualityChanged(PlaylistEntry item, String quality) {
+                        String modeNow = globalDesiredMode.get();
+                        if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
+
+                        String desired = globalDesiredQuality.get();
+                        if (desired == null || desired.isBlank()) desired = QUALITY_BEST;
+
+                        String globalMapped;
+                        if (MODE_AUDIO.equals(modeNow)) {
+                            globalMapped = desired;
+                        } else {
+                            java.util.List<String> available = item.getAvailableQualities();
+                            globalMapped = available == null || available.isEmpty()
+                                    ? desired
+                                    : VideoQualityUtils.closestSupportedLabel(
+                                            desired, available, QUALITY_BEST, QUALITY_SEPARATOR);
+                        }
+                        item.setManualQuality(!quality.equals(globalMapped));
+                        refreshAddState.run();
                         Platform.runLater(updateGlobalMixedState);
                     }
 
-                    try { refreshAddState.run(); } catch (Exception ignored) {}
-                });
-            }
-
-            @Override
-            protected void updateItem(PlaylistEntry item, boolean empty) {
-                super.updateItem(item, empty);
-
-                if (empty || item == null) {
-                    // avoid stale tooltip on reused cells
-                    try { title.setTooltip(null); } catch (Exception ignored) {}
-                    setText(null);
-                    setGraphic(null);
-                    return;
-                }
-
-                // Prefix with LTR mark to keep "1." at the left edge for RTL titles
-                String dt = item.displayTitle();
-                if (dt == null) dt = "";
-                title.setText("\u200E" + dt);
-
-                // Keep full title in tooltip (but only attach tooltip when truncated)
-                titleTip.setText(dt);
-                // Force a re-check after the cell is laid out (virtualized list can report width=0 early)
-                if (!dt.equals(lastTitleForTip)) {
-                    lastTitleForTip = dt;
-                }
-                title.setTooltip(null);
-                titleTipThrottle.stop();
-                titleTipThrottle.playFromStart();
-                Platform.runLater(() -> {
-                    titleTipThrottle.stop();
-                    titleTipThrottle.playFromStart();
-                });
-
-                String itemQuality = item.getQuality();
-                String rowProbeKey = String.valueOf(globalDesiredMode.get()) + "\u0000"
-                        + sizeProbeKey.apply(item, itemQuality);
-                if (playlistSizesInflight.contains(rowProbeKey)) {
-                    meta.setText((itemQuality == null ? "" : itemQuality) + " \u2022 ...");
-                } else {
-                    meta.setText(buildMetaLine(item));
-                }
-
-                suppressCheckListener = true;
-                try {
-                    cb.setSelected(item.isSelected());
-                } finally {
-                    suppressCheckListener = false;
-                }
-                syncCardSelectedStyle(item, card);
-
-                cb.setDisable(false);
-                qualityCombo.setDisable(true); // الافتراضي معطّل
-                // Show the combo, but keep it disabled until qualities are ready
-                qualityCombo.setVisible(true);
-                qualityCombo.setManaged(true);
-
-                // ===== UNAVAILABLE =====
-                if (item.isUnavailable()) {
-                    cb.setDisable(true);
-                    qualityCombo.setDisable(true);
-                    placeholder.setText("UNAVAILABLE");
-                    placeholder.setVisible(true);
-                    thumb.setImage(null);
-                    meta.setText("Unavailable");
-                    card.setOpacity(0.55);
-                    setGraphic(card);
-                    return;
-                } else {
-                    card.setOpacity(1.0);
-                }
-
-                // ===== THUMBNAIL =====
-                placeholder.setText("NO PREVIEW");
-
-                String tid = item.getId();
-                Image cachedThumb = (tid == null) ? null : THUMB_CACHE.get(tid);
-
-                if (cachedThumb != null) {
-                    thumb.setImage(cachedThumb);
-                    placeholder.setVisible(false);
-
-                } else if (item.getThumbUrl() != null && !item.getThumbUrl().isBlank()) {
-                    placeholder.setVisible(true);
-
-                    if (tid != null && THUMB_INFLIGHT.add(tid)) {
-                        Image img = new Image(item.getThumbUrl(), true);
-                        THUMB_CACHE.put(tid, img);
-
-                        img.progressProperty().addListener((o, oldP, newP) -> {
-                            if (newP != null && newP.doubleValue() >= 1.0) {
-                                THUMB_INFLIGHT.remove(tid);
-                                Platform.runLater(() -> {
-                                    PlaylistEntry now = getItem();
-                                    if (now != null && tid.equals(now.getId()) && img.getException() == null) {
-                                        placeholder.setVisible(false);
-                                    }
-                                });
-                            }
-                        });
-
-                        img.exceptionProperty().addListener((o, oldEx, ex) ->
-                                THUMB_INFLIGHT.remove(tid)
-                        );
-                    }
-
-                    thumb.setImage(THUMB_CACHE.get(tid));
-                }
-
-                // ===== MODE =====
-                String modeNow = globalDesiredMode.get();
-                if (modeNow == null || modeNow.isBlank()) modeNow = MODE_VIDEO;
-
-                // ===== AUDIO MODE =====
-                if (MODE_AUDIO.equals(modeNow)) {
-                    updatingRowCombo = true;
-                    try {
-                        qualityCombo.getItems().setAll(buildAudioOptions());
-                        qualityCombo.setDisable(false);
-
-                        String cur = item.getQuality();
-                        if (cur == null || cur.isBlank() || QUALITY_BEST.equals(cur)) {
-                            cur = globalDesiredQuality.get();
-                        }
-                        if (cur == null || cur.isBlank()) cur = AUDIO_DEFAULT_FORMAT;
-
-                        suppressQualityListener = true;
-                        try {
-                            qualityCombo.getSelectionModel().select(cur);
-                        } finally {
-                            suppressQualityListener = false;
-                        }
-                    } finally {
-                        updatingRowCombo = false;
-                    }
-
-                    // Always visible in the row
-                    qualityCombo.setVisible(true);
-                    qualityCombo.setManaged(true);
-
-                    setGraphic(card);
-                    return;
-                }
-
-                // ===== VIDEO MODE – LOADING =====
-                if (!item.isQualitiesLoaded()) {
-                    updatingRowCombo = true;
-                    try {
-                        qualityCombo.getItems().setAll("Loading qualities...");
-                        qualityCombo.setDisable(true);
-
-                        suppressQualityListener = true;
-                        try {
-                            qualityCombo.getSelectionModel().select(0);
-                        } finally {
-                            suppressQualityListener = false;
-                        }
-                    } finally {
-                        updatingRowCombo = false;
-                    }
-
-                    // Keep combo visible but disabled while probing
-                    qualityCombo.setVisible(true);
-                    qualityCombo.setManaged(true);
-
-                    if (item.isSelected()) {
+                    @Override
+                    public void visibleSelectedVideo(PlaylistEntry item, int index) {
                         requestQualityProbe.apply(item, PlaylistProbeScheduler.Priority.VISIBLE);
-                        prefetchAfter.accept(getIndex());
+                        prefetchAfter.accept(index);
                     }
 
-                    setGraphic(card);
-                    return;
-                }
-
-                // ===== VIDEO MODE – READY =====
-                java.util.List<String> q = item.getAvailableQualities();
-                if (q != null && q.size() >= 2) {
-                    updatingRowCombo = true;
-                    try {
-                        qualityCombo.getItems().setAll(q);
-                        qualityCombo.setDisable(false);
-
-                        String cur = item.getQuality();
-                        if (cur == null || cur.isBlank()) cur = QUALITY_BEST;
-
-                        if (!q.contains(cur)) {
-                            cur = VideoQualityUtils.closestSupportedLabel(cur, q, QUALITY_BEST, QUALITY_SEPARATOR);
-                            item.setQuality(cur);
-                        }
-
-                        suppressQualityListener = true;
-                        try {
-                            qualityCombo.getSelectionModel().select(cur);
-                        } finally {
-                            suppressQualityListener = false;
-                        }
-                        // Always visible once ready
-                        qualityCombo.setVisible(true);
-                        qualityCombo.setManaged(true);
-                    } finally {
-                        updatingRowCombo = false;
+                    @Override
+                    public boolean isSizeComputing(PlaylistEntry item, String quality) {
+                        String key = String.valueOf(globalDesiredMode.get()) + "\u0000"
+                                + sizeProbeKey.apply(item, quality);
+                        return playlistSizesInflight.contains(key);
                     }
-                } else {
-                    // fallback
-                    qualityCombo.setDisable(true);
-                    qualityCombo.setVisible(true);
-                    qualityCombo.setManaged(true);
-                }
 
-                setGraphic(card);
-            }
-        });
+                    @Override
+                    public void qualityPopupChanged(boolean open) {
+                        anyQualityPopupOpen.set(open);
+                    }
 
+                    @Override
+                    public void titleHoverChanged(boolean hovering) {
+                        anyTitleHoverHold.set(hovering);
+                    }
+                },
+                PLAYLIST_Q_COMBO_W
+        ));
         HBox actions = new HBox(10);
         actions.setPadding(new Insets(10, 0, 0, 0));
 
@@ -985,7 +627,8 @@ public final class PlaylistDialogService {
                 getClass().getResource("/com/grabx/app/grabx/styles/theme-base.css").toExternalForm(),
                 getClass().getResource("/com/grabx/app/grabx/styles/layout.css").toExternalForm(),
                 getClass().getResource("/com/grabx/app/grabx/styles/buttons.css").toExternalForm(),
-                getClass().getResource("/com/grabx/app/grabx/styles/sidebar.css").toExternalForm()
+                getClass().getResource("/com/grabx/app/grabx/styles/sidebar.css").toExternalForm(),
+                getClass().getResource("/com/grabx/app/grabx/styles/playlist.css").toExternalForm()
         );
 
         rootBox.applyCss();
@@ -1216,13 +859,6 @@ public final class PlaylistDialogService {
         return playlistProbeScheduler.request(session, videoId, videoUrl, priority, onDone);
     }
 
-    private static String buildMetaLine(PlaylistEntry it) {
-        if (it == null) return "";
-        String quality = it.getQuality();
-        String size = it.getSizeForQuality(quality);
-        return size == null || size.isBlank() ? quality : quality + " \u2022 " + size;
-    }
-
     private static java.util.List<String> buildAudioOptions() {
         java.util.ArrayList<String> out = new java.util.ArrayList<>();
         out.add(AUDIO_BEST);
@@ -1237,21 +873,6 @@ public final class PlaylistDialogService {
                 "480p", "360p", "240p", "144p"
         );
         combo.getSelectionModel().select(VIDEO_DEFAULT_QUALITY);
-    }
-
-    private static boolean isLabelTextTruncated(Label label) {
-        if (label == null || label.getWidth() <= 1) return false;
-        try {
-            double available = label.getWidth() - label.getInsets().getLeft()
-                    - label.getInsets().getRight() - 2.0;
-            if (available <= 1) return false;
-            String value = label.getText() == null ? "" : label.getText().replace("\u200E", "");
-            javafx.scene.text.Text text = new javafx.scene.text.Text(value);
-            text.setFont(label.getFont());
-            return text.getLayoutBounds().getWidth() > available;
-        } catch (Exception ignored) {
-            return false;
-        }
     }
 
     private java.util.concurrent.CompletableFuture<Boolean> ensurePlaylistSizeAsync(
@@ -1308,16 +929,6 @@ public final class PlaylistDialogService {
         if (item.getSizeByQuality() != null) sizes.putAll(item.getSizeByQuality());
         sizes.put(quality, DownloadRuntimeUtils.formatBytesDecimal(bytes));
         item.setSizeByQuality(sizes);
-    }
-
-    private static void syncCardSelectedStyle(PlaylistEntry item, Node card) {
-        if (card == null) return;
-        boolean selected = item != null && item.isSelected() && !item.isUnavailable();
-        if (selected && !card.getStyleClass().contains(CARD_SELECTED_CLASS)) {
-            card.getStyleClass().add(CARD_SELECTED_CLASS);
-        } else if (!selected) {
-            card.getStyleClass().remove(CARD_SELECTED_CLASS);
-        }
     }
 
     private static void installClickToDefocus(Node root) {

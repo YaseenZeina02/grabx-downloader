@@ -357,18 +357,28 @@
    =============================== */
 
 .gx-task-thumb {
-    -fx-background-color: rgba(255,255,255,0.05);
+    -fx-background-color: linear-gradient(to bottom right, #20283A, #171E2C);
     -fx-background-radius: 14;
     -fx-border-color: rgba(255,255,255,0.10);
     -fx-border-radius: 14;
     -fx-border-width: 1;
     -fx-min-width: 108;
+    -fx-pref-width: 108;
+    -fx-max-width: 108;
     -fx-min-height: 66;
+    -fx-pref-height: 66;
+    -fx-max-height: 66;
     -fx-alignment: center;
 }
 
 .gx-task-thumb-placeholder {
-    -fx-text-fill: rgba(255,255,255,0.45);
+    -fx-text-fill: rgba(255,255,255,0.46);
     -fx-font-size: 10px;
     -fx-font-weight: 800;
+    -fx-font-family: monospace;
+}
+
+.gx-task-thumb.gx-thumb-loaded {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
 }

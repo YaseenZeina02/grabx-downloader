@@ -1,7 +1,9 @@
 package com.grabx.app.grabx.ui.components;
 
 import com.grabx.app.grabx.core.model.DownloadRow;
+import javafx.animation.Animation;
 import javafx.animation.AnimationTimer;
+import javafx.animation.FadeTransition;
 import javafx.beans.binding.Bindings;
 import javafx.beans.binding.BooleanBinding;
 import javafx.geometry.Insets;
@@ -17,6 +19,8 @@ import javafx.scene.layout.VBox;
 import javafx.application.Platform;
 import javafx.geometry.Rectangle2D;
 import javafx.scene.image.Image;
+import javafx.scene.shape.Rectangle;
+import javafx.util.Duration;
 
 import java.nio.file.Path;
 import java.util.Map;
@@ -114,7 +118,8 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
 
     private final StackPane thumbBox = new StackPane();
     private final ImageView thumb = new ImageView();
-    private final Label thumbPlaceholder = new Label("NO PREVIEW");
+    private final Label thumbPlaceholder = new Label("•••");
+    private final FadeTransition thumbPulse = new FadeTransition(Duration.millis(850), thumbPlaceholder);
 
     private javafx.beans.value.ChangeListener<String> thumbUrlListener;
     private javafx.beans.value.ChangeListener<Path> outputFileListener;
@@ -186,10 +191,19 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         thumb.setFitHeight(66);
         thumb.setPreserveRatio(true);
         thumb.setSmooth(true);
+        Rectangle thumbClip = new Rectangle(108, 66);
+        thumbClip.setArcWidth(24);
+        thumbClip.setArcHeight(24);
+        thumb.setClip(thumbClip);
 
         thumbBox.getStyleClass().add("gx-task-thumb");
         thumbPlaceholder.getStyleClass().add("gx-task-thumb-placeholder");
         thumbBox.getChildren().addAll(thumb, thumbPlaceholder);
+
+        thumbPulse.setFromValue(0.35);
+        thumbPulse.setToValue(0.9);
+        thumbPulse.setAutoReverse(true);
+        thumbPulse.setCycleCount(Animation.INDEFINITE);
 
         setFallbackButtonText();
 
@@ -326,7 +340,8 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
             resetVisibilityRules();
             lastThumbUrl = null;
             thumb.setImage(null);
-            thumbPlaceholder.setVisible(true);
+            thumb.setViewport(null);
+            showThumbMessage("NO PREVIEW");
             setText(null);
             setGraphic(null);
             setPadding(Insets.EMPTY);
@@ -594,44 +609,90 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
 
             if (url == null || url.isBlank()) {
                 thumb.setImage(null);
-                thumbPlaceholder.setVisible(true);
+                thumb.setViewport(null);
+                showThumbMessage("NO PREVIEW");
                 return;
             }
 
             Image cached = THUMB_IMAGE_CACHE.get(url);
             if (cached != null) {
                 thumb.setImage(cached);
-                thumbPlaceholder.setVisible(false);
-                applyCoverViewport(thumb, cached, 108, 66);
+                if (cached.getException() != null) {
+                    showThumbMessage("NO PREVIEW");
+                } else if (cached.getProgress() >= 1.0 && cached.getWidth() > 0 && cached.getHeight() > 0) {
+                    applyCoverViewport(thumb, cached, 108, 66);
+                    showThumbImage();
+                } else {
+                    thumb.setViewport(null);
+                    showThumbLoading();
+                    watchThumbLoad(url, cached);
+                }
                 return;
             }
 
             Image image = new Image(url, true);
             THUMB_IMAGE_CACHE.put(url, image);
+            thumb.setViewport(null);
             thumb.setImage(image);
-            thumbPlaceholder.setVisible(false);
+            showThumbLoading();
 
             if (image.getWidth() > 0 && image.getHeight() > 0) {
                 applyCoverViewport(thumb, image, 108, 66);
+                showThumbImage();
             } else {
-                image.progressProperty().addListener((obs, oldV, newV) -> {
-                    try {
-                        if (newV != null && newV.doubleValue() >= 1.0) {
-                            Platform.runLater(() -> {
-                                try {
-                                    applyCoverViewport(thumb, image, 108, 66);
-                                } catch (Exception ignored) {
-                                }
-                            });
-                        }
-                    } catch (Exception ignored) {
-                    }
-                });
+                watchThumbLoad(url, image);
             }
         } catch (Exception ignored) {
             thumb.setImage(null);
-            thumbPlaceholder.setVisible(true);
+            thumb.setViewport(null);
+            showThumbMessage("NO PREVIEW");
         }
+    }
+
+    private void watchThumbLoad(String url, Image image) {
+        image.progressProperty().addListener((obs, oldV, newV) -> {
+            if (newV == null || newV.doubleValue() < 1.0) return;
+            Platform.runLater(() -> finishThumbLoad(url, image));
+        });
+        image.exceptionProperty().addListener((obs, oldError, error) -> {
+            if (error != null) Platform.runLater(() -> finishThumbLoad(url, image));
+        });
+    }
+
+    private void finishThumbLoad(String url, Image image) {
+        if (url == null || !url.equals(lastThumbUrl) || thumb.getImage() != image) return;
+        if (image.getException() != null || image.getWidth() <= 0 || image.getHeight() <= 0) {
+            showThumbMessage("NO PREVIEW");
+            return;
+        }
+        applyCoverViewport(thumb, image, 108, 66);
+        showThumbImage();
+    }
+
+    private void showThumbLoading() {
+        thumbBox.getStyleClass().remove("gx-thumb-loaded");
+        thumbPlaceholder.setText("•••");
+        thumbPlaceholder.setVisible(true);
+        if (thumbPulse.getStatus() != Animation.Status.RUNNING) {
+            thumbPulse.playFromStart();
+        }
+    }
+
+    private void showThumbImage() {
+        if (!thumbBox.getStyleClass().contains("gx-thumb-loaded")) {
+            thumbBox.getStyleClass().add("gx-thumb-loaded");
+        }
+        thumbPulse.stop();
+        thumbPlaceholder.setOpacity(1.0);
+        thumbPlaceholder.setVisible(false);
+    }
+
+    private void showThumbMessage(String message) {
+        thumbBox.getStyleClass().remove("gx-thumb-loaded");
+        thumbPulse.stop();
+        thumbPlaceholder.setOpacity(1.0);
+        thumbPlaceholder.setText(message);
+        thumbPlaceholder.setVisible(true);
     }
 
     private void applyCoverViewport(ImageView view, Image image, double targetW, double targetH) {

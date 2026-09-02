@@ -3,10 +3,15 @@
    =============================== */
 
 .gx-playlist-thumb {
-    -fx-background-color: #1C2230;
+    -fx-background-color: linear-gradient(to bottom right, #20283A, #171E2C);
     -fx-background-radius: 8;
+    -fx-border-color: rgba(255,255,255,0.12);
+    -fx-border-radius: 8;
+    -fx-border-width: 1;
     -fx-min-width: 96;
+    -fx-pref-width: 96;
     -fx-min-height: 54;
+    -fx-pref-height: 54;
     -fx-max-width: 96;
     -fx-max-height: 54;
 }
@@ -15,8 +20,14 @@
     -fx-background-radius: 8;
 }
 
+.gx-playlist-thumb.gx-thumb-loaded {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+}
+
 .gx-playlist-thumb-placeholder {
-    -fx-text-fill: rgba(255,255,255,0.35);
+    -fx-text-fill: rgba(255,255,255,0.46);
     -fx-font-size: 11px;
     -fx-font-weight: 700;
+    -fx-font-family: monospace;
 }
