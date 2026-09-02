@@ -13,6 +13,7 @@ import com.grabx.app.grabx.core.service.ThumbnailService;
 import com.grabx.app.grabx.core.service.UrlAnalysisService;
 import com.grabx.app.grabx.core.service.FileManagerService;
 import com.grabx.app.grabx.core.service.DownloadTitleService;
+import com.grabx.app.grabx.core.service.DownloadProgressTracker;
 import com.grabx.app.grabx.core.service.DownloadRunner;
 import com.grabx.app.grabx.core.service.DownloadFolderPreferences;
 import com.grabx.app.grabx.core.service.VideoSizeService;
@@ -173,8 +174,7 @@ public class MainController {
 
     private DownloadStateCoordinator downloadStateCoordinator;
     private DownloadRunner downloadRunner;
-    private final java.util.concurrent.ConcurrentHashMap<DownloadRow, Double> lastProgressMap =
-            new java.util.concurrent.ConcurrentHashMap<>();
+    private final DownloadProgressTracker downloadProgressTracker = new DownloadProgressTracker();
 
     private final java.util.Map<DownloadRow, String> stopReasons = new java.util.concurrent.ConcurrentHashMap<>();
     private static final String YTDLP_OUT_TMPL = "%(title)s.%(ext)s";
@@ -322,7 +322,7 @@ public class MainController {
         downloadRunner = new DownloadRunner(
                 activeProcesses,
                 stopReasons,
-                lastProgressMap,
+                downloadProgressTracker.progressByRow(),
                 () -> {
                     try { if (historyService != null) historyService.scheduleSave(); } catch (Exception ignored) {}
                 },
@@ -344,7 +344,7 @@ public class MainController {
                 DownloadRuntimeUtils::parseLongSafe,
                 DownloadRuntimeUtils::formatBytesDecimal,
                 DownloadRuntimeUtils::normalizeSpeedUnit,
-                (row, progress) -> applyProgressMonotonic(row, progress),
+                downloadProgressTracker::applyMonotonic,
                 DownloadRuntimeUtils::killProcessTree,
                 MODE_AUDIO,
                 QUALITY_BEST,
@@ -705,32 +705,6 @@ public class MainController {
         if (g != null) {
             g.setMouseTransparent(true);
         }
-    }
-
-    private void applyProgressMonotonic(DownloadRow row, double newPct) {
-        if (row == null) return;
-        if (newPct < 0) return;
-
-        if (newPct > 1.0) newPct = 1.0;
-
-        Double prevObj = lastProgressMap.get(row);
-        double prev = (prevObj == null) ? -1.0 : prevObj;
-
-        if (prev < 0) {
-            lastProgressMap.put(row, newPct);
-            row.progress.set(newPct);
-            return;
-        }
-
-        // سماحية بسيطة جدًا للـ rounding
-        double epsilon = 0.003; // 0.3%
-        if (newPct + epsilon < prev) {
-            return; // تجاهل الرجعة للخلف
-        }
-
-        if (newPct > prev) lastProgressMap.put(row, newPct);
-
-        row.progress.set(Math.max(prev, newPct));
     }
 
 
