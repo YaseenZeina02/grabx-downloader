@@ -11,6 +11,7 @@ import com.grabx.app.grabx.ui.components.NoSelectionModel;
 import com.grabx.app.grabx.ui.dialogs.NativeDialogs;
 import com.grabx.app.grabx.core.service.ThumbnailService;
 import com.grabx.app.grabx.core.service.UrlAnalysisService;
+import com.grabx.app.grabx.core.service.FileManagerService;
 import com.grabx.app.grabx.core.service.DownloadRunner;
 import com.grabx.app.grabx.core.service.DownloadFolderPreferences;
 import com.grabx.app.grabx.core.service.VideoSizeService;
@@ -78,6 +79,8 @@ public class MainController {
             new PlaylistDialogService(playlistProbeScheduler, videoSizeService);
     private final ThumbnailService thumbnailService = new ThumbnailService(UI_DELAY_EXEC);
     private final UrlAnalysisService urlAnalysisService = new UrlAnalysisService();
+    private final FileManagerService fileManagerService =
+            new FileManagerService(this::showMissingFileNotice);
     @FXML
     private TextField searchField;
 
@@ -1037,7 +1040,7 @@ public class MainController {
                         );
                     } catch (Exception ignored) {}
                 },
-                this::revealInFileManager
+                fileManagerService::reveal
         );
 
         downloadsList.setCellFactory(lv -> new DownloadRowCell(
@@ -1298,46 +1301,15 @@ public class MainController {
         return out.toString();
     }
 
-    // Reveal/select a file in the OS file manager (best-effort)
-    private void revealInFileManager(java.nio.file.Path file) {
-        if (file == null) return;
-
+    private void showMissingFileNotice() {
         try {
-            java.nio.file.Path f = file.toAbsolutePath().normalize();
-
-            // ✅ If file is missing: DO NOT open folder. Show notice instead.
-            if (!java.nio.file.Files.exists(f)) {
-                javafx.application.Platform.runLater(() -> {
-                    try {
-                        javafx.scene.control.Alert a =
-                                new javafx.scene.control.Alert(javafx.scene.control.Alert.AlertType.INFORMATION);
-                        a.setTitle("File not found");
-                        a.setHeaderText("This file is no longer in its original location.");
-                        a.setContentText("It looks like the file was moved, renamed, or deleted.");
-                        a.show();
-                    } catch (Exception ignored) {}
-                });
-                return;
-            }
-
-            String os = System.getProperty("os.name", "")
-                    .toLowerCase(java.util.Locale.ROOT);
-
-            if (os.contains("mac")) {
-                new ProcessBuilder("open", "-R", f.toString()).start();
-                return;
-            }
-
-            if (os.contains("win")) {
-                new ProcessBuilder("explorer", "/select,", f.toString()).start();
-                return;
-            }
-
-            // Linux: best effort (no universal select)
-            java.nio.file.Path parent = f.getParent();
-            if (parent != null) openInFileManager(parent);
-
-        } catch (Exception ignored) {}
+            Alert alert = new Alert(Alert.AlertType.INFORMATION);
+            alert.setTitle("File not found");
+            alert.setHeaderText("This file is no longer in its original location.");
+            alert.setContentText("It looks like the file was moved, renamed, or deleted.");
+            alert.show();
+        } catch (Exception ignored) {
+        }
     }
 
 
@@ -1490,27 +1462,4 @@ public class MainController {
         return "";
     }
 
-    // Open a folder in the OS file manager
-    private static void openInFileManager(java.nio.file.Path folder) {
-        if (folder == null) return;
-        try {
-            java.nio.file.Path dir = folder.toAbsolutePath().normalize();
-            if (java.awt.Desktop.isDesktopSupported()) {
-                java.awt.Desktop.getDesktop().open(dir.toFile());
-                return;
-            }
-        } catch (Exception ignored) {}
-
-        // Fallbacks
-        try {
-            String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
-            if (os.contains("mac")) {
-                new ProcessBuilder("open", folder.toAbsolutePath().toString()).start();
-            } else if (os.contains("win")) {
-                new ProcessBuilder("explorer", folder.toAbsolutePath().toString()).start();
-            } else {
-                new ProcessBuilder("xdg-open", folder.toAbsolutePath().toString()).start();
-            }
-        } catch (Exception ignored) {}
-    }
 }
