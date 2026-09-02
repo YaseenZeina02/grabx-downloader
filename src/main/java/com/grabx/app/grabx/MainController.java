@@ -19,6 +19,7 @@ import com.grabx.app.grabx.core.service.BulkDownloadActionsService;
 import com.grabx.app.grabx.core.service.AddLinkDialogFactory;
 import com.grabx.app.grabx.core.service.AddLinkDialogService;
 import com.grabx.app.grabx.core.service.DownloadEngineFactory;
+import com.grabx.app.grabx.core.service.DownloadMonitoringService;
 import com.grabx.app.grabx.core.service.SidebarService;
 import com.grabx.app.grabx.core.service.DownloadRunner;
 import com.grabx.app.grabx.core.service.DownloadFolderPreferences;
@@ -99,8 +100,8 @@ public class MainController {
 
     // فوق مع حقول الكلاس
 
-    private com.grabx.app.grabx.core.service.ClipboardService clipboardService;
     private SidebarService sidebarService;
+    private DownloadMonitoringService downloadMonitoringService;
 
 
     private final java.util.Map<DownloadRow, Process> activeProcesses = new java.util.concurrent.ConcurrentHashMap<>();
@@ -110,8 +111,6 @@ public class MainController {
     private final DownloadProgressTracker downloadProgressTracker = new DownloadProgressTracker();
 
     private final java.util.Map<DownloadRow, String> stopReasons = new java.util.concurrent.ConcurrentHashMap<>();
-    private com.grabx.app.grabx.core.service.MissingWatcherService missingWatcherService;
-
     // Persist last selected download folder
     private static final Preferences PREFS = Preferences.userNodeForPackage(MainController.class);
 
@@ -318,54 +317,19 @@ public class MainController {
             );
         }
 
-        downloadItems.addListener((javafx.collections.ListChangeListener<DownloadRow>) c -> {
-            boolean addedAny = false;
-            while (c.next()) {
-                if (c.wasAdded()) {
-                    addedAny = true;
-                    for (DownloadRow r : c.getAddedSubList()) {
-                        if (r == null) continue;
-                        historyService.attachAutoSave(r);  // ✅ يراقب تغييرات state/title/outputFile...الخ
-                    }
-                }
-            }
-            if (addedAny) {
-                historyService.scheduleSave(); // ✅ حفظ سريع بعد إضافة عناصر جديدة
-            }
-        });
+        downloadMonitoringService = new DownloadMonitoringService(
+                downloadItems,
+                UI_DELAY_EXEC,
+                root,
+                historyService::attachAutoSave,
+                historyService::scheduleSave,
+                this::updateMissingSidebarItem,
+                sidebarService::refilter,
+                addLinkFlowService == null ? url -> {} : addLinkFlowService::openOrUpdate,
+                urlAnalysisService::isHttpUrl
+        );
+        downloadMonitoringService.start();
 
-        updateMissingSidebarItem();
-
-        // Missing watcher (init after all dependencies are ready)
-        if (missingWatcherService == null) {
-            missingWatcherService = new com.grabx.app.grabx.core.service.MissingWatcherService(
-                    downloadItems,
-                    UI_DELAY_EXEC,
-                    () -> {
-                        // refresh current view + sidebar when a completed file becomes missing
-                        try {
-                            downloadService.setCombinedFilter(
-                                    sidebarService.currentKey(),
-                                    (searchField == null ? "" : searchField.getText())
-                            );
-                        } catch (Exception ignored) {}
-
-                        try {
-                            Platform.runLater(this::updateMissingSidebarItem);
-                        } catch (Exception ignored) {}
-                    }
-            );
-        }
-        try { missingWatcherService.start(); } catch (Exception ignored) {}
-
-        try {
-            clipboardService = new com.grabx.app.grabx.core.service.ClipboardService(
-                    root,
-                    addLinkFlowService == null ? url -> {} : addLinkFlowService::openOrUpdate,
-                    urlAnalysisService::isHttpUrl
-            );
-            clipboardService.start();
-        } catch (Exception ignored) {}
         // + button: open Add Link and prefill from clipboard if URL
         if (addLinkButton != null) {
             addLinkButton.setOnAction(ev -> {
