@@ -8,7 +8,7 @@ import com.grabx.app.grabx.core.service.PlaylistDialogService;
 import com.grabx.app.grabx.ui.components.HoverBubble;
 import com.grabx.app.grabx.ui.components.NoSelectionModel;
 import com.grabx.app.grabx.ui.dialogs.NativeDialogs;
-import com.grabx.app.grabx.thumbs.ThumbnailCacheManager;
+import com.grabx.app.grabx.core.service.ThumbnailService;
 import com.grabx.app.grabx.core.service.DownloadRunner;
 import com.grabx.app.grabx.core.service.DownloadFolderPreferences;
 import com.grabx.app.grabx.core.service.VideoSizeService;
@@ -48,8 +48,6 @@ import javafx.geometry.Insets;
 import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
-import javafx.scene.image.Image;
-import javafx.scene.image.ImageView;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
@@ -76,6 +74,7 @@ public class MainController {
     private final PlaylistProbeScheduler playlistProbeScheduler = new PlaylistProbeScheduler(VIDEO_PROBE_SERVICE);
     private final PlaylistDialogService playlistDialogService =
             new PlaylistDialogService(playlistProbeScheduler, videoSizeService);
+    private final ThumbnailService thumbnailService = new ThumbnailService(UI_DELAY_EXEC);
     @FXML
     private TextField searchField;
 
@@ -224,8 +223,8 @@ public class MainController {
                     },
                     this::reconcileLoadedRowsWithDisk,
                     this::updateMissingSidebarItem,
-                    this::warmMissingThumbnailsAsync,
-                    this::thumbFromUrl
+                    thumbnailService::warmMissingAsync,
+                    thumbnailService::thumbnailUrl
             );
 
 
@@ -549,7 +548,7 @@ public class MainController {
                 try { r.state.set(DownloadRow.State.QUEUED); } catch (Exception ignored) {}
 
                 // ✅ apply thumbnail immediately for playlist rows
-                try { applyThumbForRow(r, url); } catch (Exception ignored) {}
+                try { thumbnailService.applyToRow(r, url); } catch (Exception ignored) {}
 
                 Platform.runLater(() -> {
                     try {
@@ -575,7 +574,7 @@ public class MainController {
                 DownloadRow r = createDownloadRow(url, mode, quality, title);
 
                 // ✅ apply thumbnail immediately for playlist rows
-                try { applyThumbForRow(r, url); } catch (Exception ignored) {}
+                try { thumbnailService.applyToRow(r, url); } catch (Exception ignored) {}
 
                 Platform.runLater(() -> {
                     try {
@@ -926,53 +925,6 @@ public class MainController {
         return s.replace("\\\\", "\\");
     }
 
-    private void warmMissingThumbnailsAsync(java.util.List<DownloadRow> rows) {
-        if (rows == null || rows.isEmpty()) return;
-
-        // Delay a bit so UI shows instantly first.
-        UI_DELAY_EXEC.schedule(() -> {
-            new Thread(() -> {
-                for (DownloadRow r : rows) {
-                    try {
-                        if (r == null) continue;
-                        if (r.url == null || r.url.isBlank()) continue;
-
-                        // If already has a thumb, skip
-                        String cur = null;
-                        try { cur = (r.thumbUrl == null) ? null : r.thumbUrl.get(); } catch (Exception ignored) {}
-                        if (cur != null && !cur.isBlank()) continue;
-
-                        // If cached file exists, use it
-                        java.nio.file.Path cached = com.grabx.app.grabx.thumbs.ThumbnailCacheManager.getCachedPath(r.url);
-                        if (cached != null) {
-                            java.nio.file.Path fCached = cached;
-                            javafx.application.Platform.runLater(() -> {
-                                try { r.thumbUrl.set(fCached.toUri().toString()); } catch (Exception ignored) {}
-                            });
-                            continue;
-                        }
-
-                        // Otherwise: compute thumb URL (YouTube only) and cache it to disk
-                        String thumbUrl = thumbFromUrl(r.url);
-                        if (thumbUrl == null || thumbUrl.isBlank()) continue;
-
-                        // blocking fetch in this background thread (NOT UI)
-                        com.grabx.app.grabx.thumbs.ThumbnailCacheManager.fetchAndCacheBlocking(r.url, thumbUrl);
-
-                        java.nio.file.Path after = com.grabx.app.grabx.thumbs.ThumbnailCacheManager.getCachedPath(r.url);
-                        if (after != null) {
-                            java.nio.file.Path fAfter = after;
-                            javafx.application.Platform.runLater(() -> {
-                                try { r.thumbUrl.set(fAfter.toUri().toString()); } catch (Exception ignored) {}
-                            });
-                        }
-
-                    } catch (Exception ignored) {}
-                }
-            }, "grabx-warm-thumbs").start();
-        }, 1500, java.util.concurrent.TimeUnit.MILLISECONDS);
-    }
-
     private void showAddLinkDialog(String prefillUrl) {
         if (addLinkDialogService == null) {
             if (statusText != null) statusText.setText("Add link service is not ready");
@@ -1255,43 +1207,7 @@ public class MainController {
         // خَلّي “Loading/Preparing” في status مش في العنوان
         row.status.set("Preparing");
 
-        // Thumbnail
-        String thumbUrl = null;
-        try {
-            thumbUrl = thumbFromUrl(url);
-            if (thumbUrl != null && !thumbUrl.isBlank()) {
-
-                // show instantly (cached if exists, else remote)
-                try {
-                    java.nio.file.Path cached =
-                            com.grabx.app.grabx.thumbs.ThumbnailCacheManager.getCachedPath(url);
-
-                    if (cached != null) {
-                        row.thumbUrl.set(cached.toUri().toString());   // file://...
-                    } else {
-                        row.thumbUrl.set(thumbUrl);                   // https://...
-                    }
-                } catch (Exception ignored) {
-                    try { row.thumbUrl.set(thumbUrl); } catch (Exception ignored2) {}
-                }
-
-                // ensure it gets cached on disk once
-                String finalUrl = url;
-                com.grabx.app.grabx.thumbs.ThumbnailCacheManager.fetchAndCacheAsync(
-                        url,
-                        thumbUrl,
-                        () -> {
-                            java.nio.file.Path p =
-                                    com.grabx.app.grabx.thumbs.ThumbnailCacheManager.getCachedPath(finalUrl);
-                            if (p != null) {
-                                javafx.application.Platform.runLater(() -> {
-                                    try { row.thumbUrl.set(p.toUri().toString()); } catch (Exception ignored) {}
-                                });
-                            }
-                        }
-                );
-            }
-        } catch (Exception ignored) {}
+        thumbnailService.applyToRow(row, url);
 
         // ✅ أي تغيير مهم = احفظ التاريخ (العنوان/الحالة/مسار الملف)
 
@@ -1431,17 +1347,6 @@ public class MainController {
         return out.toString();
     }
 
-    // --- Thumbnail helpers and cache ---
-    public static final java.util.Map<String, javafx.scene.image.Image> MAIN_THUMB_CACHE =
-            new java.util.concurrent.ConcurrentHashMap<>();
-
-    public String thumbFromUrl(String url) {
-        String id = YouTubeUrls.extractVideoId(url);
-        if (id == null || id.isBlank()) return null;
-        return "https://img.youtube.com/vi/" + id + "/hqdefault.jpg";
-    }
-
-
     // Reveal/select a file in the OS file manager (best-effort)
     private void revealInFileManager(java.nio.file.Path file) {
         if (file == null) return;
@@ -1484,49 +1389,6 @@ public class MainController {
         } catch (Exception ignored) {}
     }
 
-
-    // === Thumbnail rendering helpers (cover crop + rounded clip) ===
-    public static void applyCoverViewport(ImageView iv, Image img, double targetW, double targetH) {
-        if (iv == null || img == null) return;
-
-        double iw = img.getWidth();
-        double ih = img.getHeight();
-        if (iw <= 0 || ih <= 0 || targetW <= 0 || targetH <= 0) {
-            iv.setViewport(null);
-            return;
-        }
-
-        double targetRatio = targetW / targetH;
-        double imgRatio = iw / ih;
-
-        double cropW, cropH;
-
-        if (imgRatio > targetRatio) {
-            // wider than target -> crop left/right
-            cropH = ih;
-            cropW = ih * targetRatio;
-        } else {
-            // taller than target -> crop top/bottom
-            cropW = iw;
-            cropH = iw / targetRatio;
-        }
-
-        double x = Math.max(0, (iw - cropW) / 2.0);
-        double y = Math.max(0, (ih - cropH) / 2.0);
-
-        iv.setViewport(new javafx.geometry.Rectangle2D(x, y, cropW, cropH));
-    }
-
-    public static void applyRoundedClip(Region region, double arc) {
-        if (region == null) return;
-
-        javafx.scene.shape.Rectangle clip = new javafx.scene.shape.Rectangle();
-        clip.setArcWidth(arc * 2);
-        clip.setArcHeight(arc * 2);
-        clip.widthProperty().bind(region.widthProperty());
-        clip.heightProperty().bind(region.heightProperty());
-        region.setClip(clip);
-    }
 
     // --- Reconcile persisted state with actual files on disk (fixes: completed restored as PAUSED) ---
     private void reconcileLoadedRowsWithDisk() {
@@ -1642,47 +1504,6 @@ public class MainController {
             Platform.runLater(() -> openOrUpdateAddLinkDialog(url));
         }
     }
-    // Reuse across single downloads + playlist pending rows
-    private void applyThumbForRow(DownloadRow row, String url) {
-        if (row == null) return;
-        if (url == null || url.isBlank()) return;
-
-        try {
-            String thumbUrl = thumbFromUrl(url);
-            if (thumbUrl == null || thumbUrl.isBlank()) return;
-
-            // show instantly (cached if exists, else remote)
-            try {
-                java.nio.file.Path cached =
-                        com.grabx.app.grabx.thumbs.ThumbnailCacheManager.getCachedPath(url);
-
-                if (cached != null) {
-                    row.thumbUrl.set(cached.toUri().toString());   // file://...
-                } else {
-                    row.thumbUrl.set(thumbUrl);                   // https://...
-                }
-            } catch (Exception ignored) {
-                try { row.thumbUrl.set(thumbUrl); } catch (Exception ignored2) {}
-            }
-
-            // ensure it gets cached on disk once
-            String finalUrl = url;
-            com.grabx.app.grabx.thumbs.ThumbnailCacheManager.fetchAndCacheAsync(
-                    url,
-                    thumbUrl,
-                    () -> {
-                        java.nio.file.Path p =
-                                com.grabx.app.grabx.thumbs.ThumbnailCacheManager.getCachedPath(finalUrl);
-                        if (p != null) {
-                            javafx.application.Platform.runLater(() -> {
-                                try { row.thumbUrl.set(p.toUri().toString()); } catch (Exception ignored) {}
-                            });
-                        }
-                    }
-            );
-        } catch (Exception ignored) {}
-    }
-
     // UX: prevent “first click just removes focus” feeling
     private static void installClickToDefocus(Node rootNode) {
         if (rootNode == null) return;
