@@ -65,7 +65,7 @@ public final class ClipboardService {
         });
     }
 
-    private static String readClipboardTextSafe() {
+    public static String readClipboardTextSafe() {
         try {
             Clipboard cb = Clipboard.getSystemClipboard();
             if (cb != null && cb.hasString()) return cb.getString().trim();

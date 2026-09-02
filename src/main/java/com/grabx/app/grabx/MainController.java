@@ -7,39 +7,27 @@ import com.grabx.app.grabx.core.service.DownloadHistoryReconciler;
 import com.grabx.app.grabx.core.service.ClearAllService;
 import com.grabx.app.grabx.core.service.PlaylistBatchCoordinator;
 import com.grabx.app.grabx.core.service.PlaylistDialogService;
-import com.grabx.app.grabx.ui.components.HoverBubble;
-import com.grabx.app.grabx.ui.dialogs.NativeDialogs;
 import com.grabx.app.grabx.core.service.ThumbnailService;
 import com.grabx.app.grabx.core.service.UrlAnalysisService;
 import com.grabx.app.grabx.core.service.FileManagerService;
 import com.grabx.app.grabx.core.service.DownloadTitleService;
 import com.grabx.app.grabx.core.service.DownloadProgressTracker;
 import com.grabx.app.grabx.core.service.DownloadQueueService;
+import com.grabx.app.grabx.core.service.AddLinkFlowService;
 import com.grabx.app.grabx.core.service.SidebarService;
 import com.grabx.app.grabx.core.service.DownloadRunner;
 import com.grabx.app.grabx.core.service.DownloadFolderPreferences;
 import com.grabx.app.grabx.core.service.VideoSizeService;
 import com.grabx.app.grabx.core.service.PlaylistProbeScheduler;
 import com.grabx.app.grabx.core.model.probe.VideoProbeService;
-import com.grabx.app.grabx.util.YtDlpManager;
 import com.grabx.app.grabx.util.AppLog;
 import com.grabx.app.grabx.util.YouTubeUrls;
 import com.grabx.app.grabx.util.VideoQualityUtils;
 import com.grabx.app.grabx.util.DownloadRuntimeUtils;
-import javafx.animation.*;
-import javafx.collections.transformation.FilteredList;
-import javafx.collections.transformation.SortedList;
-import javafx.geometry.NodeOrientation;
-import javafx.geometry.Pos;
-import javafx.scene.layout.HBox;
 import com.grabx.app.grabx.core.service.HoverTooltipService;
 
-import java.nio.file.Files;
 import java.util.*;
 import java.util.concurrent.*;
-
-import java.nio.file.Path;
-import java.nio.file.Paths;
 
 import com.grabx.app.grabx.ui.components.ScrollbarAutoHide;
 import com.grabx.app.grabx.ui.sidebar.SidebarItem;
@@ -49,28 +37,14 @@ import javafx.collections.ObservableList;
 import javafx.event.ActionEvent;
 import javafx.fxml.FXML;
 
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.prefs.Preferences;
-import javafx.geometry.Insets;
 import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
-import javafx.stage.DirectoryChooser;
-import javafx.stage.Stage;
-import javafx.util.Duration;
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.util.logging.Logger;
-import javafx.beans.property.SimpleStringProperty;
-import javafx.beans.property.StringProperty;
-
-import java.io.File;
-
-import static com.grabx.app.grabx.util.YtDlpManager.*;
 
 public class MainController {
     private static final Logger LOG = AppLog.get(MainController.class);
@@ -120,6 +94,7 @@ public class MainController {
     private PlaylistBatchCoordinator playlistBatchCoordinator;
 
     private com.grabx.app.grabx.core.service.AddLinkDialogService addLinkDialogService;
+    private AddLinkFlowService addLinkFlowService;
 
     private HoverTooltipService hoverTooltipService;
 
@@ -248,9 +223,6 @@ public class MainController {
     private static final List<String> AUDIO_FORMATS = List.of(
             "m4a", "mp3", "opus", "aac", "wav", "flac"
     );
-
-    private volatile boolean reopenAddLinkAfterPlaylist = false;
-    private volatile String reopenAddLinkPrefillUrl = null;
 
     // ========= Initialize =========
 
@@ -424,10 +396,7 @@ public class MainController {
                                     }
 
                                     @Override public void onPlaylistDetected(String playlistUrl, String folder) {
-                                        // نفس سلوكك الحالي: flags + open playlist
-                                        reopenAddLinkAfterPlaylist = true;
-                                        reopenAddLinkPrefillUrl = playlistUrl;
-
+                                        if (addLinkFlowService != null) addLinkFlowService.beginPlaylist(playlistUrl);
                                         MainController.this.openPlaylistWindow(playlistUrl, folder);
                                     }
 
@@ -450,6 +419,20 @@ public class MainController {
                         );
             }
         } catch (Exception ignored) {}
+
+        if (addLinkDialogService != null) {
+            addLinkFlowService = new AddLinkFlowService(
+                    new AddLinkFlowService.DialogGateway() {
+                        @Override public boolean isOpen() { return addLinkDialogService.isOpen(); }
+                        @Override public void show(String prefillUrl) { addLinkDialogService.show(prefillUrl); }
+                    },
+                    urlAnalysisService::isHttpUrl,
+                    com.grabx.app.grabx.core.service.ClipboardService::readClipboardTextSafe,
+                    (action, delay) -> UI_DELAY_EXEC.schedule(action, delay, TimeUnit.MILLISECONDS),
+                    Platform::runLater,
+                    text -> { if (statusText != null) statusText.setText(text); }
+            );
+        }
 
         downloadItems.addListener((javafx.collections.ListChangeListener<DownloadRow>) c -> {
             boolean addedAny = false;
@@ -494,14 +477,16 @@ public class MainController {
         try {
             clipboardService = new com.grabx.app.grabx.core.service.ClipboardService(
                     root,
-                    this::openOrUpdateAddLinkDialog,
+                    addLinkFlowService == null ? url -> {} : addLinkFlowService::openOrUpdate,
                     urlAnalysisService::isHttpUrl
             );
             clipboardService.start();
         } catch (Exception ignored) {}
         // + button: open Add Link and prefill from clipboard if URL
         if (addLinkButton != null) {
-            addLinkButton.setOnAction(ev -> openAddLinkFromClipboardOrEmpty());
+            addLinkButton.setOnAction(ev -> {
+                if (addLinkFlowService != null) addLinkFlowService.showFromClipboardDeferred();
+            });
         }
     }
 
@@ -528,9 +513,7 @@ public class MainController {
     // ========= Actions =========
     @FXML
     public void onAddLink(ActionEvent event) {
-        String clip = readClipboardTextSafe();
-        clip = (clip == null) ? null : clip.trim();
-        showAddLinkDialog(urlAnalysisService.isHttpUrl(clip) ? clip : null);
+        if (addLinkFlowService != null) addLinkFlowService.showFromClipboard();
     }
 
     @FXML
@@ -604,18 +587,6 @@ public class MainController {
         return t;
     });
 
-    private void openAddLinkFromClipboardOrEmpty() {
-        String clip = readClipboardTextSafe();
-        String prefill = urlAnalysisService.isHttpUrl(clip) ? clip.trim() : null;
-        openAddLinkDialogDeferred(prefill);
-    }
-
-    private void openAddLinkDialogDeferred(String prefillUrl) {
-        // Avoid: IllegalStateException: showAndWait is not allowed during animation or layout processing
-        UI_DELAY_EXEC.schedule(() -> Platform.runLater(() -> showAddLinkDialog(prefillUrl)),
-                80, TimeUnit.MILLISECONDS);
-    }
-
     // ========= Fix icon buttons hover/press =========
 
     private void normalizeIconButton(Button btn) {
@@ -637,15 +608,6 @@ public class MainController {
 
     // ========= Custom in-scene tooltip bubble (no Popup/Tooltip jitter) =========
 
-
-    private void showAddLinkDialog(String prefillUrl) {
-        if (addLinkDialogService == null) {
-            if (statusText != null) statusText.setText("Add link service is not ready");
-            return;
-        }
-
-        addLinkDialogService.show(prefillUrl);
-    }
 
     private void updateMissingSidebarItem() {
         if (sidebarService != null) sidebarService.refreshMissingItem();
@@ -745,17 +707,12 @@ public class MainController {
             if (statusText != null) {
                 statusText.setText("Queued playlist: " + result.batch().size() + " items");
             }
-            reopenAddLinkAfterPlaylist = false;
-            reopenAddLinkPrefillUrl = null;
+            if (addLinkFlowService != null) addLinkFlowService.completePlaylist();
             return;
         }
 
-        if (result.action() == PlaylistDialogService.Action.BACK
-                && reopenAddLinkAfterPlaylist) {
-            String url = reopenAddLinkPrefillUrl;
-            reopenAddLinkAfterPlaylist = false;
-            reopenAddLinkPrefillUrl = null;
-            Platform.runLater(() -> openOrUpdateAddLinkDialog(url));
+        if (result.action() == PlaylistDialogService.Action.BACK && addLinkFlowService != null) {
+            addLinkFlowService.returnFromPlaylist();
         }
     }
     // UX: prevent “first click just removes focus” feeling
@@ -788,55 +745,5 @@ public class MainController {
     }
 
 
-
-    // ================== Safe deferred open for Add Link dialog ==================
-    private final java.util.concurrent.atomic.AtomicBoolean addLinkOpenScheduled =
-            new java.util.concurrent.atomic.AtomicBoolean(false);
-
-
-    /**
-     * Opens Add Link safely OR updates it if already open.
-     */
-    private void openOrUpdateAddLinkDialog(String prefillUrl) {
-        String url = (prefillUrl != null && urlAnalysisService.isHttpUrl(prefillUrl)) ? prefillUrl.trim() : null;
-        if (addLinkDialogService != null && addLinkDialogService.isOpen()) {
-            addLinkDialogService.show(url);
-            return;
-        }
-
-        // prevent rapid duplicate opens
-        if (!addLinkOpenScheduled.compareAndSet(false, true)) return;
-
-        final String captured = (url != null) ? url : null;
-
-        Platform.runLater(() -> {
-            try {
-                // tiny delay avoids "show during layout/animation"
-                PauseTransition pt = new PauseTransition(Duration.millis(80));
-                pt.setOnFinished(e -> {
-                    try {
-                        showAddLinkDialog(captured);
-                    } finally {
-                        addLinkOpenScheduled.set(false);
-                    }
-                });
-                pt.playFromStart();
-            } catch (Exception ex) {
-                addLinkOpenScheduled.set(false);
-            }
-        });
-    }
-
-    // Helper: read clipboard text, never throws
-    private String readClipboardTextSafe() {
-        try {
-            javafx.scene.input.Clipboard cb = javafx.scene.input.Clipboard.getSystemClipboard();
-            if (cb != null && cb.hasString()) {
-                return cb.getString().trim();
-            }
-        } catch (Exception ignored) {
-        }
-        return "";
-    }
 
 }
