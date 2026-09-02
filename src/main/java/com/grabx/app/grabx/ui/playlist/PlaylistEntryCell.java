@@ -5,6 +5,7 @@ import javafx.animation.Animation;
 import javafx.animation.FadeTransition;
 import javafx.animation.PauseTransition;
 import javafx.application.Platform;
+import javafx.beans.value.ChangeListener;
 import javafx.scene.Node;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
@@ -55,6 +56,9 @@ public final class PlaylistEntryCell extends ListCell<PlaylistEntry> {
     private final ImageView thumb = new ImageView();
     private final Label placeholder = new Label("•••");
     private final FadeTransition thumbnailPulse = new FadeTransition(Duration.millis(850), placeholder);
+    private Image watchedThumbnail;
+    private ChangeListener<Number> watchedThumbnailProgress;
+    private ChangeListener<Exception> watchedThumbnailException;
 
     private final ComboBox<String> qualityCombo = new ComboBox<>();
     private boolean updatingRowCombo = false;
@@ -252,6 +256,7 @@ public final class PlaylistEntryCell extends ListCell<PlaylistEntry> {
         if (empty || item == null) {
             // avoid stale tooltip on reused cells
             try { title.setTooltip(null); } catch (Exception ignored) {}
+            stopWatchingThumbnail();
             thumbnailPulse.stop();
             setText(null);
             setGraphic(null);
@@ -313,6 +318,7 @@ public final class PlaylistEntryCell extends ListCell<PlaylistEntry> {
         }
 
         // ===== THUMBNAIL =====
+        stopWatchingThumbnail();
         String tid = item.getId();
         Image cachedThumb = (tid == null) ? null : THUMB_CACHE.get(tid);
 
@@ -325,6 +331,7 @@ public final class PlaylistEntryCell extends ListCell<PlaylistEntry> {
                 showThumbnailImage();
             } else {
                 showThumbnailLoading();
+                watchThumbnailLoad(tid, cachedThumb);
             }
 
         } else if (item.getThumbUrl() != null && !item.getThumbUrl().isBlank()) {
@@ -475,6 +482,50 @@ public final class PlaylistEntryCell extends ListCell<PlaylistEntry> {
         if (thumbnailPulse.getStatus() != Animation.Status.RUNNING) {
             thumbnailPulse.playFromStart();
         }
+    }
+
+    private void watchThumbnailLoad(String thumbnailId, Image image) {
+        if (thumbnailId == null || image == null) return;
+
+        watchedThumbnail = image;
+        watchedThumbnailProgress = (observable, oldProgress, newProgress) -> {
+            if (newProgress != null && newProgress.doubleValue() >= 1.0) {
+                Platform.runLater(() -> finishThumbnailLoad(thumbnailId, image));
+            }
+        };
+        watchedThumbnailException = (observable, oldException, newException) -> {
+            if (newException != null) {
+                Platform.runLater(() -> finishThumbnailLoad(thumbnailId, image));
+            }
+        };
+        image.progressProperty().addListener(watchedThumbnailProgress);
+        image.exceptionProperty().addListener(watchedThumbnailException);
+    }
+
+    private void finishThumbnailLoad(String thumbnailId, Image image) {
+        PlaylistEntry current = getItem();
+        if (current == null || !thumbnailId.equals(current.getId()) || thumb.getImage() != image) return;
+
+        stopWatchingThumbnail();
+        if (image.getException() != null || image.getWidth() <= 0 || image.getHeight() <= 0) {
+            showThumbnailMessage("NO PREVIEW");
+            return;
+        }
+        applyCoverViewport(thumb, image, 96, 54);
+        showThumbnailImage();
+    }
+
+    private void stopWatchingThumbnail() {
+        if (watchedThumbnail == null) return;
+        if (watchedThumbnailProgress != null) {
+            watchedThumbnail.progressProperty().removeListener(watchedThumbnailProgress);
+        }
+        if (watchedThumbnailException != null) {
+            watchedThumbnail.exceptionProperty().removeListener(watchedThumbnailException);
+        }
+        watchedThumbnail = null;
+        watchedThumbnailProgress = null;
+        watchedThumbnailException = null;
     }
 
     private void showThumbnailImage() {
