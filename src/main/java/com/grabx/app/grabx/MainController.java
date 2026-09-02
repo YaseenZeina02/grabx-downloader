@@ -14,6 +14,7 @@ import com.grabx.app.grabx.core.service.UrlAnalysisService;
 import com.grabx.app.grabx.core.service.FileManagerService;
 import com.grabx.app.grabx.core.service.DownloadTitleService;
 import com.grabx.app.grabx.core.service.DownloadProgressTracker;
+import com.grabx.app.grabx.core.service.SidebarService;
 import com.grabx.app.grabx.core.service.DownloadRunner;
 import com.grabx.app.grabx.core.service.DownloadFolderPreferences;
 import com.grabx.app.grabx.core.service.VideoSizeService;
@@ -128,6 +129,7 @@ public class MainController {
     // فوق مع حقول الكلاس
 
     private com.grabx.app.grabx.core.service.ClipboardService clipboardService;
+    private SidebarService sidebarService;
 
 
     private static final String ICON_PLUS =
@@ -182,8 +184,6 @@ public class MainController {
 
     private com.grabx.app.grabx.core.service.MissingWatcherService missingWatcherService;
 
-    // Dynamic Sidebar item for Missing (show only if needed)
-    private final SidebarItem SIDEBAR_MISSING_ITEM = new SidebarItem("MISSING", "Missing");
     // Persist last selected download folder
     private static final Preferences PREFS = Preferences.userNodeForPackage(MainController.class);
 
@@ -233,9 +233,6 @@ public class MainController {
 
     //  ===========================
 
-
-    // Current sidebar filter key (combined with searchField filter)
-    private volatile String currentSidebarFilterKey = "ALL";
 
     // ========= In-scene hover tooltip (no jitter) =========
 
@@ -311,7 +308,7 @@ public class MainController {
                     try {
                         if (downloadService != null) {
                             downloadService.setCombinedFilter(
-                                    currentSidebarFilterKey,
+                                    sidebarService.currentKey(),
                                     (searchField == null ? "" : searchField.getText())
                             );
                         }
@@ -331,7 +328,7 @@ public class MainController {
                     try {
                         if (downloadService != null) {
                             downloadService.setCombinedFilter(
-                                    currentSidebarFilterKey,
+                                    sidebarService.currentKey(),
                                     (searchField == null ? "" : searchField.getText())
                             );
                         }
@@ -357,8 +354,10 @@ public class MainController {
         ensureDownloadsListView();
         installWindowActivationRefresh();
 
-        applyFilter("ALL");
-        setupSearchFilter();
+        sidebarService = new SidebarService(
+                sidebarList, contentTitle, statusText, searchField, downloadItems, downloadService
+        );
+        sidebarService.initialize();
         historyService.loadOnce();
         initPlaylistBatchService();
 
@@ -437,7 +436,7 @@ public class MainController {
                         // refresh current view + sidebar when a completed file becomes missing
                         try {
                             downloadService.setCombinedFilter(
-                                    currentSidebarFilterKey,
+                                    sidebarService.currentKey(),
                                     (searchField == null ? "" : searchField.getText())
                             );
                         } catch (Exception ignored) {}
@@ -462,40 +461,6 @@ public class MainController {
         if (addLinkButton != null) {
             addLinkButton.setOnAction(ev -> openAddLinkFromClipboardOrEmpty());
         }
-        // Sidebar
-        sidebarList.getItems().setAll(
-                new SidebarItem("ALL", "All"),
-                new SidebarItem("DOWNLOADING", "Downloading"),
-                new SidebarItem("PAUSED", "Paused"),
-                new SidebarItem("COMPLETED", "Completed"),
-                new SidebarItem("CANCELLED", "Cancelled")
-        );
-        sidebarList.setFixedCellSize(44);
-        sidebarList.setPrefHeight(javafx.scene.layout.Region.USE_COMPUTED_SIZE);
-        sidebarList.setMaxHeight(Double.MAX_VALUE);
-
-        sidebarList.setCellFactory(lv -> new ListCell<>() {
-            @Override
-            protected void updateItem(SidebarItem item, boolean empty) {
-                super.updateItem(item, empty);
-                setText((empty || item == null) ? null : item.getTitle());
-            }
-        });
-
-        sidebarList.getSelectionModel().selectFirst();
-
-        SidebarItem first = sidebarList.getSelectionModel().getSelectedItem();
-        if (contentTitle != null && first != null) contentTitle.setText(first.getTitle());
-
-        sidebarList.getSelectionModel().selectedItemProperty().addListener((obs, oldV, newV) -> {
-            if (newV == null) return;
-
-            if (contentTitle != null) contentTitle.setText(newV.getTitle());
-            if (statusText != null) statusText.setText("Filter: " + newV.getTitle());
-
-            applyFilter(newV.getKey());
-        });
-
     }
 
     private void initPlaylistBatchService() {
@@ -517,7 +482,7 @@ public class MainController {
                     try {
                         downloadItems.add(r);
                         // keep filters/history consistent
-                        try { downloadService.setCombinedFilter(currentSidebarFilterKey, (searchField == null ? "" : searchField.getText())); } catch (Exception ignored) {}
+                        try { sidebarService.refilter(); } catch (Exception ignored) {}
                         try { if (historyService != null) historyService.attachAutoSave(r); } catch (Exception ignored) {}
                     } catch (Exception ignored) {}
                 });
@@ -542,7 +507,7 @@ public class MainController {
                 Platform.runLater(() -> {
                     try {
                         downloadItems.add(r);
-                        try { downloadService.setCombinedFilter(currentSidebarFilterKey, (searchField == null ? "" : searchField.getText())); } catch (Exception ignored) {}
+                        try { sidebarService.refilter(); } catch (Exception ignored) {}
                         try { if (historyService != null) historyService.attachAutoSave(r); } catch (Exception ignored) {}
                         try { startDownloadRow(r, false); } catch (Exception ignored) {}
                     } catch (Exception ignored) {}
@@ -618,7 +583,7 @@ public class MainController {
             // keep current sidebar/search filter consistent
             try {
                 downloadService.setCombinedFilter(
-                        currentSidebarFilterKey,
+                        sidebarService.currentKey(),
                         (searchField == null ? "" : searchField.getText())
                 );
             } catch (Exception ignored) {}
@@ -638,35 +603,6 @@ public class MainController {
         if (statusText != null) {
             statusText.setText(removed == 0 ? "Nothing to clear" : ("Cleared " + removed + " item(s)"));
         }
-    }
-
-    private void applyFilter(String key) {
-        // sidebar filter changed
-        String k = (key == null) ? "ALL" : key.trim().toUpperCase(java.util.Locale.ROOT);
-        currentSidebarFilterKey = k;
-        downloadService.setCombinedFilter(currentSidebarFilterKey,
-                (searchField == null ? "" : searchField.getText()));
-    }
-
-    private void setupSearchFilter() {
-        if (searchField == null) return;
-
-        // As-you-type filtering (auto-complete feel)
-        searchField.textProperty().addListener((obs, oldV, newV) ->
-                downloadService.setCombinedFilter(currentSidebarFilterKey,
-                        (searchField == null ? "" : searchField.getText()))        );
-
-        // Optional: ESC clears search quickly
-        searchField.setOnKeyPressed(e -> {
-            try {
-                switch (e.getCode()) {
-                    case ESCAPE -> {
-                        searchField.clear();
-                        e.consume();
-                    }
-                }
-            } catch (Exception ignored) {}
-        });
     }
 
 
@@ -745,47 +681,7 @@ public class MainController {
     }
 
     private void updateMissingSidebarItem() {
-        Platform.runLater(() -> {
-            boolean hasMissing = false;
-            try {
-                for (DownloadRow r : downloadItems) {
-                    if (r == null) continue;
-                    if (r.state != null && r.state.get() == DownloadRow.State.MISSING) {
-                        hasMissing = true;
-                        break;
-                    }
-                }
-            } catch (Exception ignored) {}
-
-            int idx = -1;
-            try {
-                for (int i = 0; i < sidebarList.getItems().size(); i++) {
-                    SidebarItem si = sidebarList.getItems().get(i);
-                    if (si != null && "MISSING".equalsIgnoreCase(si.key)) { // <-- غيّر key إذا اسمها مختلف عندك
-                        idx = i;
-                        break;
-                    }
-                }
-            } catch (Exception ignored) {}
-
-            if (hasMissing) {
-                if (idx < 0) {
-                    sidebarList.getItems().add(SIDEBAR_MISSING_ITEM);
-                }
-            } else {
-                if (idx >= 0) {
-                    SidebarItem selected = null;
-                    try { selected = sidebarList.getSelectionModel().getSelectedItem(); } catch (Exception ignored) {}
-                    boolean selectedIsMissing = selected != null && "MISSING".equalsIgnoreCase(selected.key);
-
-                    sidebarList.getItems().remove(idx);
-
-                    if (selectedIsMissing) {
-                        try { sidebarList.getSelectionModel().selectFirst(); } catch (Exception ignored) {}
-                    }
-                }
-            }
-        });
+        if (sidebarService != null) sidebarService.refreshMissingItem();
     }
 
     public static Node svgIcon(String path, double boxSize) {
@@ -838,7 +734,7 @@ public class MainController {
                 () -> {
                     try {
                         downloadService.setCombinedFilter(
-                                currentSidebarFilterKey,
+                                sidebarService.currentKey(),
                                 (searchField == null ? "" : searchField.getText())
                         );
                     } catch (Exception ignored) {}
