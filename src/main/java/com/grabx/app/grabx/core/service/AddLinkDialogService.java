@@ -386,11 +386,16 @@ private static javafx.scene.Node buildSuccessGraphic() {
         };
         Consumer<String> setSizeText = (txt) -> {
             stopSizeLoading.run();
-            sizeInfo.setText(txt);
+            boolean show = txt != null && !txt.isBlank();
+            sizeInfo.setText(show ? txt : "");
+            sizeInfo.setVisible(show);
+            sizeInfo.setManaged(show);
         };
         Runnable startSizeLoading = () -> {
             stopSizeLoading.run();
             sizeInfo.setText("Estimating: .");
+            sizeInfo.setVisible(true);
+            sizeInfo.setManaged(true);
             try { sizeLoadingTl.playFromStart(); } catch (Exception ignored) {}
         };
 
@@ -467,11 +472,8 @@ private static javafx.scene.Node buildSuccessGraphic() {
             }
 
             if (lastType[0] == ContentType.VIDEO) {
-                // Do not run slow yt-dlp size probes in the Add Link dialog.
-                // Download still starts only after the user clicks Download.
-                // The real total size will appear from DownloadRunner progress after download starts.
                 stopSizeLoading.run();
-                setSizeText.accept("Estimated size: will appear during download");
+                setSizeText.accept("");
                 return;
             }
 
@@ -488,7 +490,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
                 qualityCombo.getSelectionModel().select(cfg.QUALITY_BEST);
             }
             if (okBtn != null && !okBtn.isDisabled() && lastType[0] == ContentType.VIDEO) {
-                setSizeText.accept("Estimated size: will appear during download");
+                setSizeText.accept("");
             }
         });
 
@@ -497,7 +499,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
             if (lastType[0] != ContentType.VIDEO) return;
             if (newQ == null) return;
             if (cfg.QUALITY_SEPARATOR.equals(newQ)) return;
-            setSizeText.accept("Estimated size: will appear during download");
+            setSizeText.accept("");
         });
 
         Runnable applyTypeToUi = () -> {
@@ -511,7 +513,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
                 showSuccess.run();
                 if (okBtn != null) okBtn.setDisable(false);
                 setGetButtonLoading(getBtn, false);
-                setSizeText.accept("Estimated size: will appear during download");
+                setSizeText.accept("");
 
             } else if (t == ContentType.PLAYLIST) {
                 modeCombo.setDisable(true);
