@@ -5,7 +5,7 @@ import com.grabx.app.grabx.core.model.DownloadRow;
 import com.grabx.app.grabx.core.service.DownloadStateCoordinator;
 import com.grabx.app.grabx.core.service.DownloadHistoryReconciler;
 import com.grabx.app.grabx.core.service.ClearAllService;
-import com.grabx.app.grabx.core.service.PlaylistBatchService;
+import com.grabx.app.grabx.core.service.PlaylistBatchCoordinator;
 import com.grabx.app.grabx.core.service.PlaylistDialogService;
 import com.grabx.app.grabx.ui.components.HoverBubble;
 import com.grabx.app.grabx.ui.dialogs.NativeDialogs;
@@ -117,7 +117,7 @@ public class MainController {
 
 
     // fields in MainController
-    private PlaylistBatchService playlistBatchService;
+    private PlaylistBatchCoordinator playlistBatchCoordinator;
 
     private com.grabx.app.grabx.core.service.AddLinkDialogService addLinkDialogService;
 
@@ -401,7 +401,7 @@ public class MainController {
         );
         downloadListViewService.initialize();
         historyService.loadOnce();
-        initPlaylistBatchService();
+        initPlaylistBatchCoordinator();
 
 
         try {
@@ -505,77 +505,23 @@ public class MainController {
         }
     }
 
-    private void initPlaylistBatchService() {
+    private void initPlaylistBatchCoordinator() {
         try {
-            PlaylistBatchService.Callbacks cb = new PlaylistBatchService.Callbacks();
-
-            // videoId -> watch URL
-            cb.youtubeWatchUrl = YouTubeUrls::watchUrl;
-
-            // create a PENDING row and add it to main list (no engine start here)
-            cb.addPendingRow = (url, mode, quality, title) -> {
-                DownloadRow r = downloadQueueService.create(url, mode, quality, title);
-                try { r.state.set(DownloadRow.State.QUEUED); } catch (Exception ignored) {}
-
-                // ✅ apply thumbnail immediately for playlist rows
-                try { thumbnailService.applyToRow(r, url); } catch (Exception ignored) {}
-
-                Platform.runLater(() -> {
-                    try {
-                        downloadItems.add(r);
-                        // keep filters/history consistent
-                        try { sidebarService.refilter(); } catch (Exception ignored) {}
-                        try { if (historyService != null) historyService.attachAutoSave(r); } catch (Exception ignored) {}
-                    } catch (Exception ignored) {}
-                });
-                return r;
-            };
-
-            // start download on an existing row
-            cb.startDownloadRow = (row) -> {
-                if (row == null) return;
-                Platform.runLater(() -> {
-                    try { startDownloadRow(row, false); } catch (Exception ignored) {}
-                });
-            };
-
-            // fallback: create row + add + start immediately
-            cb.startDownloadForUrl = (url, mode, quality, title) -> {
-                DownloadRow r = downloadQueueService.create(url, mode, quality, title);
-
-                // ✅ apply thumbnail immediately for playlist rows
-                try { thumbnailService.applyToRow(r, url); } catch (Exception ignored) {}
-
-                Platform.runLater(() -> {
-                    try {
-                        downloadItems.add(r);
-                        try { sidebarService.refilter(); } catch (Exception ignored) {}
-                        try { if (historyService != null) historyService.attachAutoSave(r); } catch (Exception ignored) {}
-                        try { startDownloadRow(r, false); } catch (Exception ignored) {}
-                    } catch (Exception ignored) {}
-                });
-                return r;
-            };
-
-            // extract youtube id from URL
-            cb.extractYoutubeId = YouTubeUrls::extractVideoId;
-
-            // persist history after adding rows
-            cb.scheduleHistorySave = () -> {
-                try { if (historyService != null) historyService.scheduleSave(); } catch (Exception ignored) {}
-            };
-
-            // status text
-            cb.setStatusText = (txt) -> {
-                if (statusText != null && txt != null) {
-                    Platform.runLater(() -> statusText.setText(txt));
-                }
-            };
-
-            playlistBatchService = new PlaylistBatchService(cb);
-
+            playlistBatchCoordinator = new PlaylistBatchCoordinator(
+                    downloadQueueService::create,
+                    downloadItems::add,
+                    thumbnailService::applyToRow,
+                    historyService::attachAutoSave,
+                    historyService::scheduleSave,
+                    row -> startDownloadRow(row, false),
+                    sidebarService::refilter,
+                    Platform::runLater,
+                    YouTubeUrls::watchUrl,
+                    YouTubeUrls::extractVideoId,
+                    text -> { if (statusText != null && text != null) statusText.setText(text); }
+            );
         } catch (Exception ex) {
-            playlistBatchService = null; // خليه يشتغل حتى لو السيرفس مش جاهز
+            playlistBatchCoordinator = null;
         }
     }
 
@@ -789,8 +735,8 @@ public class MainController {
 
         if (result.action() == PlaylistDialogService.Action.DOWNLOAD) {
             downloadFolderPreferences.saveLastFolder(result.folder());
-            if (playlistBatchService != null) {
-                playlistBatchService.enqueue(result.batch(), result.mode(), result.quality());
+            if (playlistBatchCoordinator != null) {
+                playlistBatchCoordinator.enqueue(result.batch(), result.mode(), result.quality());
             } else {
                 if (statusText != null) statusText.setText("Playlist download service is unavailable.");
                 return;

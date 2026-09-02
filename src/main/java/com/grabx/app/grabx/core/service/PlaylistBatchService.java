@@ -16,7 +16,7 @@ import com.grabx.app.grabx.core.model.DownloadRow;
 public final class PlaylistBatchService {
 
 
-    /** Required callbacks (provided by MainController) */
+    /** Required callbacks provided by the application coordinator. */
     public static final class Callbacks {
         /** videoId -> watch URL */
         public Function<String, String> youtubeWatchUrl;
