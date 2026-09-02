@@ -14,6 +14,7 @@ import com.grabx.app.grabx.core.service.DownloadTitleService;
 import com.grabx.app.grabx.core.service.DownloadProgressTracker;
 import com.grabx.app.grabx.core.service.DownloadQueueService;
 import com.grabx.app.grabx.core.service.AddLinkFlowService;
+import com.grabx.app.grabx.core.service.BulkDownloadActionsService;
 import com.grabx.app.grabx.core.service.SidebarService;
 import com.grabx.app.grabx.core.service.DownloadRunner;
 import com.grabx.app.grabx.core.service.DownloadFolderPreferences;
@@ -206,6 +207,7 @@ public class MainController {
             );
 
     private DownloadQueueService downloadQueueService;
+    private BulkDownloadActionsService bulkDownloadActionsService;
 
 
     //  ===========================
@@ -345,6 +347,19 @@ public class MainController {
                 sidebarList, contentTitle, statusText, searchField, downloadItems, downloadService
         );
         sidebarService.initialize();
+
+        bulkDownloadActionsService = new BulkDownloadActionsService(
+                downloadStateCoordinator::cancelAll,
+                downloadStateCoordinator::pauseAll,
+                downloadStateCoordinator::resumeAll,
+                clearAllService::clearNonActive,
+                downloadItems::isEmpty,
+                this::updateMissingSidebarItem,
+                sidebarService::refilter,
+                historyService::clearHistoryFile,
+                historyService::scheduleSave,
+                text -> { if (statusText != null) statusText.setText(text); }
+        );
 
         DownloadRowActions rowActions = new DownloadRowActions(
                 downloadStateCoordinator,
@@ -528,52 +543,22 @@ public class MainController {
 
     @FXML
     public void onCanseleAll(ActionEvent e) {
-        int affected = (downloadStateCoordinator == null) ? 0 : downloadStateCoordinator.cancelAll();
-        if (statusText != null) statusText.setText(affected > 0 ? ("Cancelled " + affected + " item(s)") : "Nothing to cancel");
+        if (bulkDownloadActionsService != null) bulkDownloadActionsService.cancelAll();
     }
 
     @FXML
     public void onPauseAll(ActionEvent e) {
-        int affected = (downloadStateCoordinator == null) ? 0 : downloadStateCoordinator.pauseAll();
-        if (statusText != null) statusText.setText(affected > 0 ? ("Paused " + affected + " item(s)") : "Nothing to pause");
+        if (bulkDownloadActionsService != null) bulkDownloadActionsService.pauseAll();
     }
 
     @FXML
     public void onResumeAll(ActionEvent e) {
-        int affected = (downloadStateCoordinator == null) ? 0 : downloadStateCoordinator.resumeAll();
-        if (statusText != null) statusText.setText(affected > 0 ? ("Resumed " + affected + " item(s)") : "Nothing to resume");
+        if (bulkDownloadActionsService != null) bulkDownloadActionsService.resumeAll();
     }
 
     @FXML
     public void onClearAll(ActionEvent actionEvent) {
-        int removed = (clearAllService == null) ? 0 : clearAllService.clearNonActive();
-
-        if (removed > 0) {
-            updateMissingSidebarItem();
-
-            // keep current sidebar/search filter consistent
-            try {
-                downloadService.setCombinedFilter(
-                        sidebarService.currentKey(),
-                        (searchField == null ? "" : searchField.getText())
-                );
-            } catch (Exception ignored) {}
-
-            // ✅ مهم: ثبت التغيير على ملف الهيستوري
-            try {
-                if (historyService != null) {
-                    if (downloadItems == null || downloadItems.isEmpty()) {
-                        historyService.clearHistoryFile();  // <- جديد
-                    } else {
-                        historyService.scheduleSave();
-                    }
-                }
-            } catch (Exception ignored) {}
-        }
-
-        if (statusText != null) {
-            statusText.setText(removed == 0 ? "Nothing to clear" : ("Cleared " + removed + " item(s)"));
-        }
+        if (bulkDownloadActionsService != null) bulkDownloadActionsService.clearAll();
     }
 
 
