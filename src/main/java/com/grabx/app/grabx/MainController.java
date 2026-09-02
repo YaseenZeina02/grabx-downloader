@@ -2,6 +2,7 @@ package com.grabx.app.grabx;
 import com.grabx.app.grabx.ui.components.DownloadRowActions;
 import com.grabx.app.grabx.core.model.DownloadRow;
 import com.grabx.app.grabx.core.service.DownloadStateCoordinator;
+import com.grabx.app.grabx.core.service.DownloadHistoryReconciler;
 import com.grabx.app.grabx.core.service.ClearAllService;
 import com.grabx.app.grabx.core.service.PlaylistBatchService;
 import com.grabx.app.grabx.core.service.PlaylistDialogService;
@@ -205,6 +206,13 @@ public class MainController {
     private final com.grabx.app.grabx.core.service.DownloadService downloadService =
             new com.grabx.app.grabx.core.service.DownloadService(downloadItems);
     private final ClearAllService clearAllService = new ClearAllService(downloadItems);
+    private final DownloadHistoryReconciler downloadHistoryReconciler =
+            new DownloadHistoryReconciler(
+                    downloadItems,
+                    Platform::runLater,
+                    downloadService::refilter,
+                    this::updateMissingSidebarItem
+            );
 
     private final com.grabx.app.grabx.core.service.HistoryService historyService =
             new com.grabx.app.grabx.core.service.HistoryService(
@@ -221,7 +229,7 @@ public class MainController {
                             return 30;
                         }
                     },
-                    this::reconcileLoadedRowsWithDisk,
+                    downloadHistoryReconciler::reconcileLoadedRows,
                     this::updateMissingSidebarItem,
                     thumbnailService::warmMissingAsync,
                     thumbnailService::thumbnailUrl
@@ -1386,74 +1394,6 @@ public class MainController {
             java.nio.file.Path parent = f.getParent();
             if (parent != null) openInFileManager(parent);
 
-        } catch (Exception ignored) {}
-    }
-
-
-    // --- Reconcile persisted state with actual files on disk (fixes: completed restored as PAUSED) ---
-    private void reconcileLoadedRowsWithDisk() {
-        Platform.runLater(() -> {
-            try {
-                if (downloadItems == null) return;
-                for (DownloadRow r : downloadItems) {
-                    if (r == null) continue;
-                    reconcileOneRowWithDisk(r);
-                }
-            } catch (Exception ignored) {}
-
-            // refresh view + sidebar
-            try { downloadService.refilter();} catch (Exception ignored) {}
-            try { updateMissingSidebarItem(); } catch (Exception ignored) {}
-        });
-    }
-
-    private void reconcileOneRowWithDisk(DownloadRow r) {
-        if (r == null) return;
-
-        // 1) If output file exists -> must be COMPLETED
-        try {
-            java.nio.file.Path out = (r.outputFile != null) ? r.outputFile.get() : null;
-            if (out != null) {
-                java.nio.file.Path abs = out.toAbsolutePath().normalize();
-                if (java.nio.file.Files.exists(abs)) {
-                    r.setState(DownloadRow.State.COMPLETED);
-                    try { r.progress.set(1.0); } catch (Exception ignored) {}
-                    try { r.speed.set(""); } catch (Exception ignored) {}
-                    try { r.eta.set(""); } catch (Exception ignored) {}
-
-                    // fill size if empty
-                    try {
-                        if (r.size != null) {
-                            String cur = r.size.get();
-                            if (cur == null || cur.isBlank()) {
-                                long bytes = java.nio.file.Files.size(abs);
-                                r.size.set(DownloadRuntimeUtils.formatBytesDecimal(bytes));
-                            }
-                        }
-                    } catch (Exception ignored) {}
-
-                    return;
-                }
-            }
-        } catch (Exception ignored) {}
-
-        // 2) If history says COMPLETED but file missing -> MISSING
-        try {
-            if (r.state != null && r.state.get() == DownloadRow.State.COMPLETED) {
-                r.setState(DownloadRow.State.MISSING);
-            }
-        } catch (Exception ignored) {}
-
-        // 3) If app restarts and row was DOWNLOADING but no process is running -> revert to QUEUED
-        // (prevents stuck states after restart)
-        try {
-            DownloadRow.State st = (r.state != null) ? r.state.get() : null;
-            if (st == DownloadRow.State.DOWNLOADING) {
-                r.setState(DownloadRow.State.QUEUED);
-                try { r.progress.set(0); } catch (Exception ignored) {}
-                try { r.speed.set(""); } catch (Exception ignored) {}
-                try { r.eta.set(""); } catch (Exception ignored) {}
-            }
         } catch (Exception ignored) {}
     }
 
