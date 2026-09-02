@@ -184,13 +184,6 @@ public class MainController {
 
     // Dynamic Sidebar item for Missing (show only if needed)
     private final SidebarItem SIDEBAR_MISSING_ITEM = new SidebarItem("MISSING", "Missing");
-    // =====================
-    // Download history (JSON) – lightweight persistence
-    // =====================
-    private static final Path HISTORY_DIR  = Paths.get(System.getProperty("user.home"), ".grabx");
-    private static final Path HISTORY_FILE = HISTORY_DIR.resolve("download_history.json");
-    private static final int HISTORY_MAX_ITEMS = 500; // لاحقاً: user setting
-
     // Persist last selected download folder
     private static final Preferences PREFS = Preferences.userNodeForPackage(MainController.class);
 
@@ -678,18 +671,6 @@ public class MainController {
 
 
 
-    private static boolean containsAny(String haystack, String needle) {
-        if (haystack == null || haystack.isEmpty()) return false;
-        if (needle == null || needle.isEmpty()) return true;
-        return haystack.contains(needle);
-    }
-
-    private static String safeLower(String s) {
-        if (s == null) return "";
-        return s.trim().toLowerCase(java.util.Locale.ROOT);
-    }
-
-
     // ========= AddLink open helpers (safe showAndWait) =========
 
     // Small delay helper (avoids calling showAndWait from animation/layout pulses)
@@ -726,21 +707,6 @@ public class MainController {
         }
     }
 
-    private void cancelAllActiveDownloads() {
-        for (DownloadRow row : downloadItems) {
-            DownloadRow.State st = row.state.get();
-            if (st == DownloadRow.State.DOWNLOADING
-                    || st == DownloadRow.State.PAUSED
-                    || st == DownloadRow.State.QUEUED) {
-
-                downloadStateCoordinator.cancel(row);
-            }
-        }
-        if (statusText != null) {
-            statusText.setText("All active downloads cancelled");
-        }
-    }
-
     private void applyProgressMonotonic(DownloadRow row, double newPct) {
         if (row == null) return;
         if (newPct < 0) return;
@@ -774,68 +740,6 @@ public class MainController {
     // ========= Custom in-scene tooltip bubble (no Popup/Tooltip jitter) =========
 
 
-    private static void setManagedVisible(Node n, boolean visible) {
-        if (n == null) return;
-        n.setVisible(visible);
-        n.setManaged(visible);
-    }
-
-
-
-    private static void fillQualityCombo(ComboBox<String> qualityCombo) {
-        if (qualityCombo == null) return;
-
-        // Default (safe) list: do NOT show 4K/2K unless we actually detect them for the specific video.
-        qualityCombo.getItems().setAll(
-                QUALITY_BEST,
-                QUALITY_SEPARATOR,
-                "1080p",
-                "720p",
-                "540p",
-                "480p",
-                "360p",
-                "240p",
-                "144p"
-        );
-        qualityCombo.getSelectionModel().select(QUALITY_BEST);
-    }
-
-    private static void fillQualityComboFromHeights(ComboBox<String> qualityCombo, java.util.Set<Integer> heights) {
-        if (qualityCombo == null) return;
-
-        // If we couldn't detect anything, keep a SAFE fallback list (no 4K/2K).
-        if (heights == null || heights.isEmpty()) {
-            fillQualityCombo(qualityCombo);
-            return;
-        }
-
-        java.util.List<Integer> sorted = new java.util.ArrayList<>(heights);
-        sorted.removeIf(h -> h == null || h <= 0);
-        sorted.sort(java.util.Comparator.reverseOrder());
-
-        qualityCombo.getItems().clear();
-        qualityCombo.getItems().add(QUALITY_BEST);
-        qualityCombo.getItems().add(QUALITY_SEPARATOR);
-
-        for (Integer h : sorted) {
-            qualityCombo.getItems().add(VideoQualityUtils.formatHeightLabel(h));
-        }
-
-        qualityCombo.getSelectionModel().select(QUALITY_BEST);
-    }
-
-    private static String esc(String s) {
-        if (s == null) return "";
-        return s.replace("\\", "\\\\")
-                .replace("\t", " ")
-                .replace("\n", " ")
-                .replace("\r", " ");
-    }
-    private static String unesc(String s) {
-        if (s == null) return "";
-        return s.replace("\\\\", "\\");
-    }
-
     private void showAddLinkDialog(String prefillUrl) {
         if (addLinkDialogService == null) {
             if (statusText != null) statusText.setText("Add link service is not ready");
@@ -864,26 +768,6 @@ public class MainController {
         DownloadRow r = new DownloadRow(u, t,downloadOrderSeq.getAndIncrement(), folder, m, q);
         try { r.status.set("Preparing"); } catch (Exception ignored) {}
         return r;
-    }
-
-    private Long probeContentLength(String url) {
-        if (url == null || url.isBlank()) return null;
-        java.net.HttpURLConnection conn = null;
-        try {
-            conn = (java.net.HttpURLConnection) new java.net.URL(url.trim()).openConnection();
-            conn.setInstanceFollowRedirects(true);
-            conn.setConnectTimeout(6500);
-            conn.setReadTimeout(6500);
-            conn.setRequestMethod("HEAD");
-            conn.setRequestProperty("User-Agent", "GrabX/1.0");
-            conn.connect();
-            long len = conn.getContentLengthLong();
-            return len > 0 ? len : null;
-        } catch (Exception ignored) {
-            return null;
-        } finally {
-            try { if (conn != null) conn.disconnect(); } catch (Exception ignored) {}
-        }
     }
 
     private void updateMissingSidebarItem() {
