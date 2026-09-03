@@ -243,9 +243,9 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         speed.setNodeOrientation(NodeOrientation.LEFT_TO_RIGHT);
         eta.setNodeOrientation(NodeOrientation.LEFT_TO_RIGHT);
 
-        sizeLabel.setMinWidth(155);
-        sizeLabel.setPrefWidth(155);
-        sizeLabel.setMaxWidth(155);
+        sizeLabel.setMinWidth(225);
+        sizeLabel.setPrefWidth(225);
+        sizeLabel.setMaxWidth(225);
         sizeLabel.setAlignment(Pos.CENTER_RIGHT);
         sizeLabel.setTextOverrun(OverrunStyle.CLIP);
 
