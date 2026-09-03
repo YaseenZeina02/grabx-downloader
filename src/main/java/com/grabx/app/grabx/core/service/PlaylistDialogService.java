@@ -900,7 +900,7 @@ public final class PlaylistDialogService {
 
         String selector;
         if (MODE_AUDIO.equals(mode)) {
-            selector = "bestaudio/best";
+            selector = "bestaudio";
         } else if (QUALITY_BEST.equals(quality)) {
             selector = "bv*+ba/b";
         } else {

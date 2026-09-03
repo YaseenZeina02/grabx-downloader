@@ -205,11 +205,15 @@ public final class DownloadRuntimeUtils {
         return downloadedText + " / " + formatBytesDecimal(total);
     }
 
-    public static String formatDownloadedSource(long downloaded, long total) {
-        long completedSourceBytes = total > 0 ? total : downloaded;
-        return completedSourceBytes > 0
-                ? formatBytesDecimal(completedSourceBytes) + " downloaded"
-                : "";
+    public static long estimateEncodedAudioBytes(String durationSeconds, int bitrateBitsPerSecond) {
+        if (durationSeconds == null || bitrateBitsPerSecond <= 0) return 0;
+        try {
+            double duration = Double.parseDouble(durationSeconds.trim());
+            if (!Double.isFinite(duration) || duration <= 0) return 0;
+            return Math.round(duration * bitrateBitsPerSecond / 8.0);
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
     }
 
     public static String postProcessStatus(String outputLine) {

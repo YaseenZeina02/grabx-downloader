@@ -292,7 +292,7 @@ public final class YtDlpManager {
             cmd.add("-x");
             cmd.add("--audio-format");
             cmd.add(normalizeAudioFormat(req.quality));
-            cmd.add("-f"); cmd.add("bestaudio/best");
+            cmd.add("-f"); cmd.add("bestaudio");
         } else {
             String fmt = buildVideoFormatSelector(req.quality);
             cmd.add("-f"); cmd.add(fmt);

@@ -142,7 +142,7 @@ public final class DownloadRunner {
             // gx:  12.3%| 1.2MiB/s| 00:12
             final java.util.regex.Pattern PROG =
                     java.util.regex.Pattern.compile(
-                            "^(?:gx:|download:gx:)\\s*([0-9.]+)%\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)$"
+                            "^(?:gx:|download:gx:)\\s*([0-9.]+)%\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)$"
                     );
 
             // fallback native progress line
@@ -160,6 +160,13 @@ public final class DownloadRunner {
                         modeAudio.equals(mode) ||
                                 "Audio".equalsIgnoreCase(mode) ||
                                 "Audio only".equalsIgnoreCase(mode);
+                String audioFormat = quality;
+                if (audioFormat == null || audioFormat.isBlank()
+                        || audioBest.equals(audioFormat) || qualitySeparator.equals(audioFormat)) {
+                    audioFormat = audioDefaultFormat;
+                }
+                audioFormat = audioFormat.trim().toLowerCase(java.util.Locale.ROOT);
+                final String resolvedAudioFormat = audioFormat;
 
                 java.nio.file.Path yt = com.grabx.app.grabx.util.YtDlpManager.ensureAvailable();
                 if (yt == null) throw new IllegalStateException("yt-dlp not available");
@@ -194,7 +201,8 @@ public final class DownloadRunner {
                 int requestedHeight = -1; // used for stable filenames by selected quality
 
                 if (audioOnly) {
-                    selector = "bestaudio/best";
+                    // Never fall back to a combined video+audio format in audio mode.
+                    selector = "bestaudio";
 
                 } else {
                     String q = (quality == null) ? qualityBest : quality;
@@ -256,18 +264,15 @@ public final class DownloadRunner {
                                 + "|%(progress.downloaded_bytes)s"
                                 + "|%(progress.total_bytes)s"
                                 + "|%(progress.total_bytes_estimate)s"
+                                + "|%(info.duration)s"
                 );
 
                 if (audioOnly) {
                     cmd.add("-x");
                     cmd.add("--audio-quality");
-                    cmd.add("0");
+                    cmd.add("mp3".equals(resolvedAudioFormat) ? "320K" : "0");
 
-                    String fmt = quality;
-                    if (fmt == null || fmt.isBlank() || audioBest.equals(fmt) || qualitySeparator.equals(fmt)) {
-                        fmt = audioDefaultFormat;
-                    }
-                    fmt = fmt.trim().toLowerCase(java.util.Locale.ROOT);
+                    String fmt = resolvedAudioFormat;
                     cmd.add("--audio-format");
                     cmd.add(fmt);
                     cmd.add("--add-metadata");
@@ -375,10 +380,10 @@ public final class DownloadRunner {
 
                             Platform.runLater(() -> {
                                 try {
-                                    row.size.set(com.grabx.app.grabx.util.DownloadRuntimeUtils
-                                            .formatDownloadedSource(
-                                                    row.downloadedBytes.get(), row.totalBytes.get()
-                                            ));
+                                    long expectedBytes = row.totalBytes.get();
+                                    row.size.set(expectedBytes > 0
+                                            ? formatBytesDecimal.apply(expectedBytes)
+                                            : "");
                                     row.speed.set("");
                                     row.eta.set("");
                                     row.status.set(postProcessStatus);
@@ -448,6 +453,18 @@ public final class DownloadRunner {
                             long downloaded = parseLongSafe.apply(m.group(4));
                             long total = parseLongSafe.apply(m.group(5));
                             if (total <= 0) total = parseLongSafe.apply(m.group(6));
+
+                            long estimatedOutput = 0;
+                            if (audioOnly && "mp3".equals(resolvedAudioFormat)) {
+                                estimatedOutput = com.grabx.app.grabx.util.DownloadRuntimeUtils
+                                        .estimateEncodedAudioBytes(m.group(7), 320_000);
+                            }
+                            if (estimatedOutput > 0) {
+                                total = estimatedOutput;
+                                downloaded = pct < 0
+                                        ? 0
+                                        : Math.round(estimatedOutput * Math.min(1, pct));
+                            }
 
                             // UI size text: downloaded / total (if total known)
                             final String sizeText = com.grabx.app.grabx.util.DownloadRuntimeUtils

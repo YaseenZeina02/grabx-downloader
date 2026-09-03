@@ -785,7 +785,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
         try {
             if (url == null || url.isBlank()) return null;
             String selector = "bv*+ba/b";
-            if (mode != null && mode.toLowerCase().contains("audio")) selector = "bestaudio/best";
+            if (mode != null && mode.toLowerCase().contains("audio")) selector = "bestaudio";
 
             if (quality != null && !quality.isBlank() && !quality.toLowerCase().contains("best")) {
                 int h = VideoQualityUtils.parseHeight(quality);
