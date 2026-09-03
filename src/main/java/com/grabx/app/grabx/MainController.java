@@ -8,6 +8,7 @@ import com.grabx.app.grabx.core.service.DownloadHistoryReconciler;
 import com.grabx.app.grabx.core.service.ClearAllService;
 import com.grabx.app.grabx.core.service.PlaylistBatchCoordinator;
 import com.grabx.app.grabx.core.service.PlaylistDialogService;
+import com.grabx.app.grabx.core.service.PlaylistFlowService;
 import com.grabx.app.grabx.core.service.ThumbnailService;
 import com.grabx.app.grabx.core.service.UrlAnalysisService;
 import com.grabx.app.grabx.core.service.FileManagerService;
@@ -89,6 +90,7 @@ public class MainController {
 
     // fields in MainController
     private PlaylistBatchCoordinator playlistBatchCoordinator;
+    private PlaylistFlowService playlistFlowService;
 
     private AddLinkDialogService addLinkDialogService;
     private AddLinkFlowService addLinkFlowService;
@@ -280,6 +282,7 @@ public class MainController {
         downloadListViewService.initialize();
         historyService.loadOnce();
         initPlaylistBatchCoordinator();
+        initPlaylistFlowService();
 
 
         try {
@@ -291,7 +294,9 @@ public class MainController {
                     downloadQueueService::enqueue,
                     (playlistUrl, folder) -> {
                         if (addLinkFlowService != null) addLinkFlowService.beginPlaylist(playlistUrl);
-                        openPlaylistWindow(playlistUrl, folder);
+                        if (playlistFlowService != null) {
+                            playlistFlowService.open(ownerWindow(), playlistUrl, folder);
+                        }
                     },
                     text -> { if (statusText != null) statusText.setText(text); },
                     AddLinkDialogFactory.defaultConfig(
@@ -356,6 +361,26 @@ public class MainController {
         } catch (Exception ex) {
             playlistBatchCoordinator = null;
         }
+    }
+
+    private void initPlaylistFlowService() {
+        playlistFlowService = new PlaylistFlowService(
+                playlistDialogService::show,
+                new PlaylistFlowService.BatchGateway() {
+                    @Override public boolean isAvailable() {
+                        return playlistBatchCoordinator != null;
+                    }
+
+                    @Override public void enqueue(PlaylistDialogService.Result result) {
+                        playlistBatchCoordinator.enqueue(result.batch(), result.mode(), result.quality());
+                    }
+                },
+                downloadFolderPreferences::getLastFolderOrDefault,
+                downloadFolderPreferences::saveLastFolder,
+                text -> { if (statusText != null) statusText.setText(text); },
+                () -> { if (addLinkFlowService != null) addLinkFlowService.completePlaylist(); },
+                () -> { if (addLinkFlowService != null) addLinkFlowService.returnFromPlaylist(); }
+        );
     }
 
     // ========= Actions =========
@@ -427,41 +452,12 @@ public class MainController {
     }
 
 
-    // Playlist UI and its local state live in PlaylistDialogService.
-    private void openPlaylistWindow(String playlistUrl, String folder) {
-        String playlistFolder = (folder == null || folder.isBlank())
-                ? downloadFolderPreferences.getLastFolderOrDefault()
-                : folder;
-
-        javafx.stage.Window owner = null;
+    private javafx.stage.Window ownerWindow() {
         try {
             if (root != null && root.getScene() != null) {
-                owner = root.getScene().getWindow();
+                return root.getScene().getWindow();
             }
         } catch (Exception ignored) {}
-
-        PlaylistDialogService.Result result =
-                playlistDialogService.show(owner, playlistUrl, playlistFolder);
-        if (result == null) return;
-
-        if (result.action() == PlaylistDialogService.Action.DOWNLOAD) {
-            downloadFolderPreferences.saveLastFolder(result.folder());
-            if (playlistBatchCoordinator != null) {
-                playlistBatchCoordinator.enqueue(result.batch(), result.mode(), result.quality());
-            } else {
-                if (statusText != null) statusText.setText("Playlist download service is unavailable.");
-                return;
-            }
-
-            if (statusText != null) {
-                statusText.setText("Queued playlist: " + result.batch().size() + " items");
-            }
-            if (addLinkFlowService != null) addLinkFlowService.completePlaylist();
-            return;
-        }
-
-        if (result.action() == PlaylistDialogService.Action.BACK && addLinkFlowService != null) {
-            addLinkFlowService.returnFromPlaylist();
-        }
+        return null;
     }
 }
