@@ -16,7 +16,7 @@ import com.grabx.app.grabx.core.service.DownloadQueueService;
 import com.grabx.app.grabx.core.service.AddLinkFlowService;
 import com.grabx.app.grabx.core.service.BulkDownloadActionsService;
 import com.grabx.app.grabx.core.service.AddLinkDialogFactory;
-import com.grabx.app.grabx.core.service.AddLinkDialogService;
+import com.grabx.app.grabx.core.service.AddLinkServicesFactory;
 import com.grabx.app.grabx.core.service.DownloadServicesFactory;
 import com.grabx.app.grabx.core.service.DownloadMonitoringService;
 import com.grabx.app.grabx.core.service.SidebarService;
@@ -36,7 +36,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import com.grabx.app.grabx.ui.components.ScrollbarAutoHide;
@@ -97,7 +96,6 @@ public class MainController {
     private PlaylistBatchCoordinator playlistBatchCoordinator;
     private PlaylistFlowService playlistFlowService;
 
-    private AddLinkDialogService addLinkDialogService;
     private AddLinkFlowService addLinkFlowService;
 
     private HoverTooltipService hoverTooltipService;
@@ -267,42 +265,29 @@ public class MainController {
     }
 
     private void initializeAddLink() {
-        try {
-            addLinkDialogService = AddLinkDialogFactory.create(
-                    root,
-                    UI_DELAY_EXEC,
-                    downloadFolderPreferences::getLastFolderOrDefault,
-                    downloadFolderPreferences::saveLastFolder,
-                    downloadQueueService::enqueue,
-                    (playlistUrl, folder) -> {
-                        if (addLinkFlowService != null) addLinkFlowService.beginPlaylist(playlistUrl);
-                        if (playlistFlowService != null) {
-                            playlistFlowService.open(ownerWindow(), playlistUrl, folder);
-                        }
-                    },
-                    text -> { if (statusText != null) statusText.setText(text); },
-                    AddLinkDialogFactory.defaultConfig(
-                            MODE_VIDEO, MODE_AUDIO, QUALITY_BEST, QUALITY_SEPARATOR,
-                            AUDIO_DEFAULT_FORMAT, AUDIO_FORMATS
-                    )
-            );
-        } catch (Exception ignored) {
-            addLinkDialogService = null;
-        }
-
-        if (addLinkDialogService != null) {
-            addLinkFlowService = new AddLinkFlowService(
-                    new AddLinkFlowService.DialogGateway() {
-                        @Override public boolean isOpen() { return addLinkDialogService.isOpen(); }
-                        @Override public void show(String prefillUrl) { addLinkDialogService.show(prefillUrl); }
-                    },
-                    urlAnalysisService::isHttpUrl,
-                    ClipboardService::readClipboardTextSafe,
-                    (action, delay) -> UI_DELAY_EXEC.schedule(action, delay, TimeUnit.MILLISECONDS),
-                    Platform::runLater,
-                text -> { if (statusText != null) statusText.setText(text); }
-            );
-        }
+        AddLinkServicesFactory.Runtime addLinkRuntime = AddLinkServicesFactory.create(
+                root,
+                UI_DELAY_EXEC,
+                new AddLinkServicesFactory.Dependencies(
+                        downloadFolderPreferences::getLastFolderOrDefault,
+                        downloadFolderPreferences::saveLastFolder,
+                        downloadQueueService::enqueue,
+                        (playlistUrl, folder) -> {
+                            if (playlistFlowService != null) {
+                                playlistFlowService.open(ownerWindow(), playlistUrl, folder);
+                            }
+                        },
+                        text -> { if (statusText != null) statusText.setText(text); },
+                        urlAnalysisService::isHttpUrl,
+                        ClipboardService::readClipboardTextSafe,
+                        Platform::runLater
+                ),
+                AddLinkDialogFactory.defaultConfig(
+                        MODE_VIDEO, MODE_AUDIO, QUALITY_BEST, QUALITY_SEPARATOR,
+                        AUDIO_DEFAULT_FORMAT, AUDIO_FORMATS
+                )
+        );
+        addLinkFlowService = addLinkRuntime.flow();
 
         if (addLinkButton != null) {
             addLinkButton.setOnAction(ev -> {
