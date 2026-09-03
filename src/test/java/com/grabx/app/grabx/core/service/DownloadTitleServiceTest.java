@@ -21,7 +21,7 @@ class DownloadTitleServiceTest {
     }
 
     @Test
-    void keepsDisplayTitleUnnumberedForMatchingDownloadTarget() {
+    void addsSuffixForMatchingDownloadTarget() {
         List<DownloadRow> rows = new ArrayList<>();
         DownloadRow first = row("Song", "/downloads", "Video", "720p");
         DownloadRow second = row("Song (1)", "/downloads", "Video", "720p");
@@ -29,7 +29,7 @@ class DownloadTitleServiceTest {
         rows.addAll(List.of(first, second, current));
         DownloadTitleService service = service(rows, null);
 
-        assertEquals("Song", service.uniqueTitle("Song", current));
+        assertEquals("Song (2)", service.uniqueTitle("Song", current));
     }
 
     @Test

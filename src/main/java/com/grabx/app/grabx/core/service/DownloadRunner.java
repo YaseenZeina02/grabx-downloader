@@ -137,8 +137,6 @@ public final class DownloadRunner {
                     java.util.regex.Pattern.compile("\\[ExtractAudio\\]\\s+Destination:\\s+(.+)$");
             final java.util.regex.Pattern MERGE =
                     java.util.regex.Pattern.compile("\\[Merger\\]\\s+Merging formats into\\s+\\\"(.+)\\\"");
-            final java.util.regex.Pattern FINAL_FILE =
-                    java.util.regex.Pattern.compile("^gx-file:(.+)$");
 
             // our progress template (percent may have padding)
             // gx:  12.3%| 1.2MiB/s| 00:12
@@ -259,9 +257,6 @@ public final class DownloadRunner {
                                 + "|%(progress.total_bytes)s"
                                 + "|%(progress.total_bytes_estimate)s"
                 );
-                cmd.add("--print");
-                cmd.add("after_move:gx-file:%(filepath)s");
-                cmd.add("--no-simulate");
 
                 if (audioOnly) {
                     cmd.add("-x");
@@ -395,11 +390,9 @@ public final class DownloadRunner {
                             var d1 = DEST1.matcher(s);
                             var d2 = DEST2.matcher(s);
                             var mg = MERGE.matcher(s);
-                            var finalFile = FINAL_FILE.matcher(s);
 
                             String pathStr = null;
-                            if (finalFile.find()) pathStr = finalFile.group(1);
-                            else if (d1.find()) pathStr = d1.group(1);
+                            if (d1.find()) pathStr = d1.group(1);
                             else if (d2.find()) pathStr = d2.group(1);
                             else if (mg.find()) pathStr = mg.group(1);
 

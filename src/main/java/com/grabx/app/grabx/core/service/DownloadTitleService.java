@@ -64,15 +64,31 @@ public final class DownloadTitleService {
         if (resolved.isBlank()) resolved = shorten(mediaUrl);
         if (resolved.isBlank()) resolved = "Unknown title";
 
-        // The card title describes the media. Filename collision suffixes belong
-        // only to the file on disk and must not leak into the displayed title.
-        row.setTitleOnce(resolved);
+        row.setTitleOnce(uniqueTitle(resolved, row));
         if (statusUpdater != null) statusUpdater.accept("Queued: " + resolved);
     }
 
     String uniqueTitle(String baseTitle, DownloadRow currentRow) {
         String base = baseTitle == null ? "" : baseTitle.trim();
-        return base;
+        if (base.isEmpty()) return base;
+
+        int nextSuffix = 0;
+        if (rows != null) {
+            for (DownloadRow row : rows) {
+                if (row == null || row == currentRow || !hasSameDownloadTarget(row, currentRow)) continue;
+                String title = getTitle(row).trim();
+                if (title.equals(base)) {
+                    nextSuffix = Math.max(nextSuffix, 1);
+                } else if (title.startsWith(base + " (") && title.endsWith(")")) {
+                    String suffix = title.substring((base + " (").length(), title.length() - 1).trim();
+                    try {
+                        nextSuffix = Math.max(nextSuffix, Integer.parseInt(suffix) + 1);
+                    } catch (NumberFormatException ignored) {
+                    }
+                }
+            }
+        }
+        return nextSuffix == 0 ? base : base + " (" + nextSuffix + ")";
     }
 
     public static String shorten(String value) {
