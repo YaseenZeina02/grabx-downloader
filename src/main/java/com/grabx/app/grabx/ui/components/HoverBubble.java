@@ -12,6 +12,7 @@ import javafx.beans.value.ObservableValue;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.Pane;
 import javafx.scene.layout.StackPane;
+import javafx.scene.text.Text;
 import javafx.util.Duration;
 import javafx.scene.robot.Robot;
 
@@ -157,6 +158,9 @@ public final class HoverBubble {
             showTimer.stop();
             showTimer.setOnFinished(ev -> {
                 if (!owner.isHover()) return;
+                // A title bubble is useful only when the label has actually
+                // been shortened by its available layout width.
+                if (owner instanceof Label ownerLabel && !isTextTruncated(ownerLabel)) return;
                 Object value = owner.getProperties().get("gx-hover-value");
                 String txt = value instanceof ObservableValue<?> observable
                         ? String.valueOf(observable.getValue()) : "";
@@ -182,6 +186,28 @@ public final class HoverBubble {
                 }
             });
         }
+    }
+
+    private static boolean isTextTruncated(Label owner) {
+        String value = owner.getText();
+        if (value == null || value.isBlank() || owner.getWidth() <= 0) return false;
+
+        Text measurement = new Text(value);
+        measurement.setFont(owner.getFont());
+
+        double availableWidth = owner.getWidth()
+                - owner.getInsets().getLeft()
+                - owner.getInsets().getRight();
+        Node graphic = owner.getGraphic();
+        if (graphic != null) {
+            availableWidth -= graphic.getLayoutBounds().getWidth() + owner.getGraphicTextGap();
+        }
+
+        return isOverflowing(measurement.getLayoutBounds().getWidth(), availableWidth);
+    }
+
+    static boolean isOverflowing(double textWidth, double availableWidth) {
+        return availableWidth > 0 && textWidth > availableWidth + 1.0;
     }
 
     private void show(Node owner, String text) {
