@@ -8,6 +8,7 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -65,7 +66,6 @@ public final class DownloadTitleService {
         if (resolved.isBlank()) resolved = "Unknown title";
 
         row.setTitleOnce(uniqueTitle(resolved, row));
-        if (statusUpdater != null) statusUpdater.accept("Queued: " + resolved);
     }
 
     String uniqueTitle(String baseTitle, DownloadRow currentRow) {
@@ -75,7 +75,8 @@ public final class DownloadTitleService {
         int nextSuffix = 0;
         if (rows != null) {
             for (DownloadRow row : rows) {
-                if (row == null || row == currentRow || !hasSameDownloadTarget(row, currentRow)) continue;
+                if (row == null || row == currentRow || !hasSameDownloadTarget(row, currentRow)
+                        || !occupiesOutputName(row)) continue;
                 String title = getTitle(row).trim();
                 if (title.equals(base)) {
                     nextSuffix = Math.max(nextSuffix, 1);
@@ -89,6 +90,25 @@ public final class DownloadTitleService {
             }
         }
         return nextSuffix == 0 ? base : base + " (" + nextSuffix + ")";
+    }
+
+    private static boolean occupiesOutputName(DownloadRow row) {
+        if (row == null) return false;
+        DownloadRow.State state = row.getState();
+        if (state == DownloadRow.State.QUEUED
+                || state == DownloadRow.State.PENDING
+                || state == DownloadRow.State.DOWNLOADING
+                || state == DownloadRow.State.PAUSED) {
+            return true;
+        }
+        if (state != DownloadRow.State.COMPLETED) return false;
+
+        try {
+            Path output = row.outputFile == null ? null : row.outputFile.get();
+            return output != null && Files.isRegularFile(output);
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     public static String shorten(String value) {

@@ -100,7 +100,6 @@ public final class DownloadQueueService {
         };
         if (uiExecutor != null) uiExecutor.accept(addAndStart); else addAndStart.run();
 
-        if (statusUpdater != null) statusUpdater.accept("Queued: " + row.title.get());
         if (resolveTitle != null) resolveTitle.accept(row, row.url);
         return row;
     }

@@ -2,7 +2,10 @@ package com.grabx.app.grabx.core.service;
 
 import com.grabx.app.grabx.core.model.DownloadRow;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
@@ -11,6 +14,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 class DownloadTitleServiceTest {
+    @TempDir
+    Path tempDir;
+
     @Test
     void parsesEscapedAndUnicodeJsonTitles() {
         assertEquals("A \"quoted\" عنوان", DownloadTitleService.parseTitle(
@@ -43,7 +49,7 @@ class DownloadTitleServiceTest {
     }
 
     @Test
-    void appliesFetchedTitleAndUpdatesStatus() {
+    void appliesFetchedTitleWithoutReplacingFooterSummary() {
         List<DownloadRow> rows = new ArrayList<>();
         DownloadRow current = row("Preparing", "/downloads", "Video", "720p");
         rows.add(current);
@@ -53,7 +59,28 @@ class DownloadTitleServiceTest {
         service.applyResolvedTitle(current, "https://youtu.be/id", "  Video title  ");
 
         assertEquals("Video title", current.title.get());
-        assertEquals("Queued: Video title", status.get());
+        assertNull(status.get());
+    }
+
+    @Test
+    void ignoresCompletedHistoryWhenItsOutputWasDeleted() {
+        DownloadRow old = row("Song (3)", tempDir.toString(), "Audio only", "mp3");
+        old.setState(DownloadRow.State.COMPLETED);
+        old.outputFile.set(tempDir.resolve("deleted.mp3"));
+        DownloadRow current = row("Preparing", tempDir.toString(), "Audio only", "mp3");
+
+        assertEquals("Song", service(List.of(old, current), null).uniqueTitle("Song", current));
+    }
+
+    @Test
+    void keepsNumberingWhenCompletedOutputStillExists() throws Exception {
+        Path output = Files.writeString(tempDir.resolve("song.mp3"), "audio");
+        DownloadRow old = row("Song", tempDir.toString(), "Audio only", "mp3");
+        old.setState(DownloadRow.State.COMPLETED);
+        old.outputFile.set(output);
+        DownloadRow current = row("Preparing", tempDir.toString(), "Audio only", "mp3");
+
+        assertEquals("Song (1)", service(List.of(old, current), null).uniqueTitle("Song", current));
     }
 
     @Test

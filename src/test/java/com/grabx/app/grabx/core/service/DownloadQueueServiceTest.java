@@ -41,7 +41,7 @@ class DownloadQueueServiceTest {
         assertEquals("/chosen", row.folder);
         assertEquals(List.of(
                 "history", "thumbnail", "save", "start",
-                "Queued: https://example.com/video", "title"
+                "title"
         ), events);
     }
 
