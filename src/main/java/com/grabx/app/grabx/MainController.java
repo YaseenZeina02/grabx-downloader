@@ -24,14 +24,22 @@ import com.grabx.app.grabx.core.service.DownloadMonitoringService;
 import com.grabx.app.grabx.core.service.SidebarService;
 import com.grabx.app.grabx.core.service.DownloadRunner;
 import com.grabx.app.grabx.core.service.DownloadFolderPreferences;
+import com.grabx.app.grabx.core.service.DownloadService;
+import com.grabx.app.grabx.core.service.HistoryService;
+import com.grabx.app.grabx.core.service.ClipboardService;
 import com.grabx.app.grabx.core.service.VideoSizeService;
 import com.grabx.app.grabx.core.service.PlaylistProbeScheduler;
 import com.grabx.app.grabx.core.model.probe.VideoProbeService;
 import com.grabx.app.grabx.util.YouTubeUrls;
 import com.grabx.app.grabx.core.service.HoverTooltipService;
 
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 import com.grabx.app.grabx.ui.components.ScrollbarAutoHide;
 import com.grabx.app.grabx.ui.sidebar.SidebarItem;
@@ -88,7 +96,6 @@ public class MainController {
     private ListView<DownloadRow> downloadsList;
 
 
-    // fields in MainController
     private PlaylistBatchCoordinator playlistBatchCoordinator;
     private PlaylistFlowService playlistFlowService;
 
@@ -97,32 +104,25 @@ public class MainController {
 
     private HoverTooltipService hoverTooltipService;
 
-    private final java.util.concurrent.atomic.AtomicLong downloadOrderSeq =
-            new java.util.concurrent.atomic.AtomicLong(0);
-
-    // فوق مع حقول الكلاس
+    private final AtomicLong downloadOrderSeq = new AtomicLong(0);
 
     private SidebarService sidebarService;
     private DownloadMonitoringService downloadMonitoringService;
 
 
-    private final java.util.Map<DownloadRow, Process> activeProcesses = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<DownloadRow, Process> activeProcesses = new ConcurrentHashMap<>();
 
     private DownloadStateCoordinator downloadStateCoordinator;
     private DownloadRunner downloadRunner;
     private final DownloadProgressTracker downloadProgressTracker = new DownloadProgressTracker();
 
-    private final java.util.Map<DownloadRow, String> stopReasons = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<DownloadRow, String> stopReasons = new ConcurrentHashMap<>();
     // Persist last selected download folder
     private static final Preferences PREFS = Preferences.userNodeForPackage(MainController.class);
 
     private final ObservableList<DownloadRow> downloadItems = FXCollections.observableArrayList();
 
-    //  ===========================
-    //  ========= Classes =========
-    //  ===========================
-    private final com.grabx.app.grabx.core.service.DownloadService downloadService =
-            new com.grabx.app.grabx.core.service.DownloadService(downloadItems);
+    private final DownloadService downloadService = new DownloadService(downloadItems);
     private final DownloadTitleService downloadTitleService =
             new DownloadTitleService(
                     downloadItems,
@@ -138,8 +138,8 @@ public class MainController {
                     this::updateMissingSidebarItem
             );
 
-    private final com.grabx.app.grabx.core.service.HistoryService historyService =
-            new com.grabx.app.grabx.core.service.HistoryService(
+    private final HistoryService historyService =
+            new HistoryService(
                     downloadItems,
                     downloadOrderSeq,
                     UI_DELAY_EXEC,
@@ -163,11 +163,6 @@ public class MainController {
     private BulkDownloadActionsService bulkDownloadActionsService;
 
 
-    //  ===========================
-
-
-    // ========= In-scene hover tooltip (no jitter) =========
-
     public static final String QUALITY_BEST = "Best quality (Recommended)";
     public static final String QUALITY_SEPARATOR = "──────────────";
     private static final String MODE_VIDEO = "Video";
@@ -179,24 +174,32 @@ public class MainController {
             "m4a", "mp3", "opus", "aac", "wav", "flac"
     );
 
-    // ========= Initialize =========
-
     @FXML
     public void initialize() {
+        IconButtonService iconButtons = initializeWindowUi();
+        initializeSidebar();
+        initializeDownloadEngine();
+        initializeDownloadQueue();
+        initializeBulkActions();
+        initializeDownloadsList(iconButtons);
 
-        // Global modern scrollbar auto-hide
+        historyService.loadOnce();
+        initPlaylistBatchCoordinator();
+        initPlaylistFlowService();
+        initializeAddLink();
+        initializeMonitoring();
+    }
+
+    private IconButtonService initializeWindowUi() {
         Platform.runLater(() -> ScrollbarAutoHide.enableGlobalAutoHide(root));
-
-        // remove initial focus from topbar buttons
         Platform.runLater(() -> {
             if (root != null) root.requestFocus();
         });
-
         AddLinkDialogFactory.installClickToDefocus(root);
 
         try {
             if (hoverTooltipService == null && root != null) {
-                hoverTooltipService = new com.grabx.app.grabx.core.service.HoverTooltipService(root, MainController.class);
+                hoverTooltipService = new HoverTooltipService(root, MainController.class);
             }
         } catch (Exception ignored) {}
 
@@ -205,12 +208,17 @@ public class MainController {
                 addLinkButton, pauseAllButton, resumeAllButton,
                 cancelAllBtn, clearAllButton, settingsButton
         );
+        return iconButtons;
+    }
 
+    private void initializeSidebar() {
         sidebarService = new SidebarService(
                 sidebarList, contentTitle, statusText, searchField, downloadItems, downloadService
         );
         sidebarService.initialize();
+    }
 
+    private void initializeDownloadEngine() {
         DownloadEngineFactory.Runtime downloadRuntime = DownloadEngineFactory.create(
                 downloadItems,
                 activeProcesses,
@@ -226,7 +234,9 @@ public class MainController {
         );
         downloadStateCoordinator = downloadRuntime.stateCoordinator();
         downloadRunner = downloadRuntime.runner();
+    }
 
+    private void initializeDownloadQueue() {
         downloadQueueService = new DownloadQueueService(
                 downloadItems,
                 downloadOrderSeq,
@@ -243,7 +253,9 @@ public class MainController {
                 QUALITY_BEST,
                 AUDIO_DEFAULT_FORMAT
         );
+    }
 
+    private void initializeBulkActions() {
         bulkDownloadActionsService = new BulkDownloadActionsService(
                 downloadStateCoordinator::cancelAll,
                 downloadStateCoordinator::pauseAll,
@@ -256,7 +268,9 @@ public class MainController {
                 historyService::scheduleSave,
                 text -> { if (statusText != null) statusText.setText(text); }
         );
+    }
 
+    private void initializeDownloadsList(IconButtonService iconButtons) {
         DownloadRowActions rowActions = new DownloadRowActions(
                 downloadStateCoordinator,
                 activeProcesses,
@@ -280,11 +294,9 @@ public class MainController {
                 IconButtonService.downloadIcons()
         );
         downloadListViewService.initialize();
-        historyService.loadOnce();
-        initPlaylistBatchCoordinator();
-        initPlaylistFlowService();
+    }
 
-
+    private void initializeAddLink() {
         try {
             addLinkDialogService = AddLinkDialogFactory.create(
                     root,
@@ -315,13 +327,21 @@ public class MainController {
                         @Override public void show(String prefillUrl) { addLinkDialogService.show(prefillUrl); }
                     },
                     urlAnalysisService::isHttpUrl,
-                    com.grabx.app.grabx.core.service.ClipboardService::readClipboardTextSafe,
+                    ClipboardService::readClipboardTextSafe,
                     (action, delay) -> UI_DELAY_EXEC.schedule(action, delay, TimeUnit.MILLISECONDS),
                     Platform::runLater,
-                    text -> { if (statusText != null) statusText.setText(text); }
+                text -> { if (statusText != null) statusText.setText(text); }
             );
         }
 
+        if (addLinkButton != null) {
+            addLinkButton.setOnAction(ev -> {
+                if (addLinkFlowService != null) addLinkFlowService.showFromClipboardDeferred();
+            });
+        }
+    }
+
+    private void initializeMonitoring() {
         downloadMonitoringService = new DownloadMonitoringService(
                 downloadItems,
                 UI_DELAY_EXEC,
@@ -334,13 +354,6 @@ public class MainController {
                 urlAnalysisService::isHttpUrl
         );
         downloadMonitoringService.start();
-
-        // + button: open Add Link and prefill from clipboard if URL
-        if (addLinkButton != null) {
-            addLinkButton.setOnAction(ev -> {
-                if (addLinkFlowService != null) addLinkFlowService.showFromClipboardDeferred();
-            });
-        }
     }
 
     private void initPlaylistBatchCoordinator() {
@@ -383,7 +396,6 @@ public class MainController {
         );
     }
 
-    // ========= Actions =========
     @FXML
     public void onAddLink(ActionEvent event) {
         if (addLinkFlowService != null) addLinkFlowService.showFromClipboard();
@@ -418,12 +430,6 @@ public class MainController {
     public void onClearAll(ActionEvent actionEvent) {
         if (bulkDownloadActionsService != null) bulkDownloadActionsService.clearAll();
     }
-
-
-
-    // ========= AddLink open helpers (safe showAndWait) =========
-
-    // Small delay helper (avoids calling showAndWait from animation/layout pulses)
     private static final ScheduledExecutorService UI_DELAY_EXEC = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "ui-delay");
         t.setDaemon(true);
@@ -433,8 +439,6 @@ public class MainController {
     private void updateMissingSidebarItem() {
         if (sidebarService != null) sidebarService.refreshMissingItem();
     }
-
-    // Only keep the version with yt-dlp --progress-template and regex patterns DEST1, DEST2, MERGE, PROG, etc.
 
     private void startDownloadRow(DownloadRow row, boolean resume) {
         downloadRunner.start(row, resume);
