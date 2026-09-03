@@ -457,6 +457,7 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         } else if (isFailed) {
             showButton(retryBtn, true);
         } else if (isCompleted) {
+            showButton(openLinkBtn, true);
             showButton(folderBtn, true);
             folderBtn.setDisable(!canOpenCompletedFile());
         }
