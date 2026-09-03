@@ -17,7 +17,7 @@ import java.util.logging.Logger;
 
 public final class DownloadRunner {
     private static final Logger LOG = AppLog.get(DownloadRunner.class);
-    private static final int MP3_BITRATE_BITS_PER_SECOND = 192_000;
+    private static final int MP3_BITRATE_BITS_PER_SECOND = 320_000;
 
     @FunctionalInterface
     public interface OutputFilenameProbe {
@@ -152,6 +152,8 @@ public final class DownloadRunner {
 
             final java.util.concurrent.atomic.AtomicBoolean startedDownloading =
                     new java.util.concurrent.atomic.AtomicBoolean(false);
+            final java.util.concurrent.atomic.AtomicReference<java.nio.file.Path> detectedOutput =
+                    new java.util.concurrent.atomic.AtomicReference<>();
 
             try {
                 java.nio.file.Path outDir = java.nio.file.Paths.get(folder);
@@ -272,7 +274,7 @@ public final class DownloadRunner {
                 if (audioOnly) {
                     cmd.add("-x");
                     cmd.add("--audio-quality");
-                    cmd.add("mp3".equals(resolvedAudioFormat) ? "192K" : "0");
+                    cmd.add("mp3".equals(resolvedAudioFormat) ? "320K" : "0");
 
                     String fmt = resolvedAudioFormat;
                     cmd.add("--audio-format");
@@ -421,6 +423,7 @@ public final class DownloadRunner {
                                 } catch (Exception ignored) {}
 
                                 final java.nio.file.Path finalOut2 = finalOut;
+                                detectedOutput.set(finalOut2);
                                 Platform.runLater(() -> {
                                     try { row.outputFile.set(finalOut2); } catch (Exception ignored) {}
                                 });
@@ -573,6 +576,12 @@ public final class DownloadRunner {
 
                 int code = p.waitFor();
                 String reason = stopReasons.get(row);
+
+                if (code == 0 && audioOnly) {
+                    com.grabx.app.grabx.util.MacFileIconService.applyEmbeddedArtwork(
+                            detectedOutput.get(), ffmpeg
+                    );
+                }
 
                 Platform.runLater(() -> {
                     activeProcesses.remove(row);
