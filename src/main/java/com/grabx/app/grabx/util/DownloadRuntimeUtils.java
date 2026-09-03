@@ -3,6 +3,7 @@ package com.grabx.app.grabx.util;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -104,6 +105,52 @@ public final class DownloadRuntimeUtils {
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    /**
+     * Turns a probed filename into a literal yt-dlp template whose stem does not
+     * collide with an existing output, regardless of the existing file's extension.
+     */
+    public static String uniqueOutputTemplate(Path outputDirectory, String probedFilename) {
+        if (outputDirectory == null || probedFilename == null || probedFilename.isBlank()) return null;
+        try {
+            Path probedPath = Path.of(probedFilename.trim());
+            String filename = probedPath.getFileName().toString();
+            String stem = stripExtension(filename);
+            if (stem.isBlank()) return null;
+
+            int suffix = 0;
+            while (stemExists(outputDirectory, stem, suffix)) suffix++;
+
+            String uniqueStem = suffix == 0 ? stem : stem + " (" + suffix + ")";
+            // Literal '%' characters in media titles must not become template fields.
+            String escapedStem = uniqueStem.replace("%", "%%");
+            return outputDirectory.resolve(escapedStem + ".%(ext)s").toString();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static boolean stemExists(Path directory, String stem, int suffix) {
+        String candidate = suffix == 0 ? stem : stem + " (" + suffix + ")";
+        try (var files = Files.list(directory)) {
+            return files.anyMatch(path -> {
+                try {
+                    return Files.isRegularFile(path)
+                            && stripExtension(path.getFileName().toString()).equals(candidate);
+                } catch (Exception ignored) {
+                    return false;
+                }
+            });
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static String stripExtension(String filename) {
+        if (filename == null) return "";
+        int dot = filename.lastIndexOf('.');
+        return dot > 0 ? filename.substring(0, dot) : filename;
     }
 
     public static void killProcessTree(Process process) {

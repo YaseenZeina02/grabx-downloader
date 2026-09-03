@@ -137,6 +137,8 @@ public final class DownloadRunner {
                     java.util.regex.Pattern.compile("\\[ExtractAudio\\]\\s+Destination:\\s+(.+)$");
             final java.util.regex.Pattern MERGE =
                     java.util.regex.Pattern.compile("\\[Merger\\]\\s+Merging formats into\\s+\\\"(.+)\\\"");
+            final java.util.regex.Pattern FINAL_FILE =
+                    java.util.regex.Pattern.compile("^gx-file:(.+)$");
 
             // our progress template (percent may have padding)
             // gx:  12.3%| 1.2MiB/s| 00:12
@@ -215,9 +217,9 @@ public final class DownloadRunner {
 
                 }
 
-                // Decide output template:
-                // - First download: NO (1)
-                // - If the exact same filename already exists: use autonumber => (1), (2), ...
+                // Decide the base output template. A concrete collision-free name is
+                // selected after probing because yt-dlp's autonumber restarts at 1
+                // for every process and is not a collision resolver.
                 String baseTpl;
                 if (audioOnly) {
                     baseTpl = "%(title)s [audio].%(ext)s";
@@ -229,43 +231,22 @@ public final class DownloadRunner {
                     }
                 }
 
-                boolean needsAutonumber = false;
+                String outTpl = baseTpl;
                 try {
-                    // Probe the would-be output filename with the SAME format selector.
-                    // If it already exists on disk, we switch to autonumber template.
                     long probeStartMs = System.currentTimeMillis();
                     String probed = probeOutputFilename.probe(yt, url, selector, outDir, baseTpl);
                     LOG.fine(() -> "Output filename probe took "
                             + (System.currentTimeMillis() - probeStartMs) + " ms");
-                    if (probed != null && !probed.isBlank()) {
-                        java.nio.file.Path probedPath = java.nio.file.Paths.get(probed.trim());
-                        if (!probedPath.isAbsolute()) probedPath = outDir.resolve(probedPath).normalize();
-                        needsAutonumber = java.nio.file.Files.exists(probedPath);
-                    }
+                    String uniqueTemplate = com.grabx.app.grabx.util.DownloadRuntimeUtils
+                            .uniqueOutputTemplate(outDir, probed);
+                    if (uniqueTemplate != null && !uniqueTemplate.isBlank()) outTpl = uniqueTemplate;
                 } catch (Exception ignored) {
-                    needsAutonumber = false;
-                }
-
-                String outTpl;
-                if (needsAutonumber) {
-                    // Auto-number duplicates: (1), (2), ... (no leading zeros)
-                    cmd.add("--autonumber-start");
-                    cmd.add("1");
-                    if (audioOnly) {
-                        outTpl = "%(title)s [audio] (%(autonumber)d).%(ext)s";
-                    } else {
-                        if (requestedHeight > 0) {
-                            outTpl = "%(title)s [" + requestedHeight + "p] (%(autonumber)d).%(ext)s";
-                        } else {
-                            outTpl = "%(title)s [%(height)sp] (%(autonumber)d).%(ext)s";
-                        }
-                    }
-                } else {
-                    outTpl = baseTpl;
                 }
 
                 cmd.add("-o");
-                cmd.add(outDir.resolve(outTpl).toString());
+                cmd.add(java.nio.file.Path.of(outTpl).isAbsolute()
+                        ? outTpl
+                        : outDir.resolve(outTpl).toString());
 
 
                 // progress template
@@ -278,6 +259,9 @@ public final class DownloadRunner {
                                 + "|%(progress.total_bytes)s"
                                 + "|%(progress.total_bytes_estimate)s"
                 );
+                cmd.add("--print");
+                cmd.add("after_move:gx-file:%(filepath)s");
+                cmd.add("--no-simulate");
 
                 if (audioOnly) {
                     cmd.add("-x");
@@ -411,9 +395,11 @@ public final class DownloadRunner {
                             var d1 = DEST1.matcher(s);
                             var d2 = DEST2.matcher(s);
                             var mg = MERGE.matcher(s);
+                            var finalFile = FINAL_FILE.matcher(s);
 
                             String pathStr = null;
-                            if (d1.find()) pathStr = d1.group(1);
+                            if (finalFile.find()) pathStr = finalFile.group(1);
+                            else if (d1.find()) pathStr = d1.group(1);
                             else if (d2.find()) pathStr = d2.group(1);
                             else if (mg.find()) pathStr = mg.group(1);
 
@@ -606,7 +592,7 @@ public final class DownloadRunner {
                         return;
                     }
 
-                    if (code == 0) {
+                    if (code == 0 && hasCompletedOutput(row)) {
                         row.setState(DownloadRow.State.COMPLETED);
                         // CHANGED: set final size from disk if possible
                         try {
@@ -636,6 +622,8 @@ public final class DownloadRunner {
                             if (msg.startsWith("ERROR:")) msg = msg.substring("ERROR:".length()).trim();
                             if (msg.length() > 90) msg = msg.substring(0, 90) + "…";
                             row.status.set("Failed: " + msg);
+                        } else if (code == 0) {
+                            row.status.set("Failed: no output file was created");
                         } else {
                             row.status.set("Failed (exit " + code + ")");
                         }
@@ -691,6 +679,16 @@ public final class DownloadRunner {
 
     private void saveHistory() {
         try { historySaver.scheduleSave(); } catch (Exception ignored) {}
+    }
+
+    private static boolean hasCompletedOutput(DownloadRow row) {
+        try {
+            Path output = row == null || row.outputFile == null ? null : row.outputFile.get();
+            return output != null && java.nio.file.Files.isRegularFile(output)
+                    && java.nio.file.Files.size(output) > 0;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private void refreshFilters() {
