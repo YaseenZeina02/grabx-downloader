@@ -121,30 +121,21 @@ public final class DownloadRowActions {
     public void clearDownloadRow(DownloadRow row) {
         if (row == null) return;
 
-        boolean risky = true;
-        try {
-            if (row.state != null && row.state.get() == DownloadRow.State.COMPLETED) {
-                risky = false;
-            }
-        } catch (Exception ignored) {}
-
         Path absOut = null;
         try {
             Path out = (row.outputFile != null) ? row.outputFile.get() : null;
             if (out != null) {
                 absOut = out.toAbsolutePath().normalize();
-                if (Files.exists(absOut)) risky = true;
             }
         } catch (Exception ignored) {}
 
+        boolean processAlive = false;
         try {
             Process pr = activeProcesses == null ? null : activeProcesses.get(row);
-            if (pr != null && pr.isAlive()) risky = true;
+            processAlive = pr != null && pr.isAlive();
         } catch (Exception ignored) {}
 
-        try {
-            if (row.progress != null && row.progress.get() > 0.0001) risky = true;
-        } catch (Exception ignored) {}
+        boolean risky = requiresRemovalConfirmation(row, absOut, processAlive);
 
         String fileName = null;
         try { fileName = (row.title == null) ? null : row.title.get(); } catch (Exception ignored) {}
@@ -181,6 +172,27 @@ public final class DownloadRowActions {
                 updateMissingSidebarItem.run();
             } catch (Exception ignored) {}
         });
+    }
+
+    static boolean requiresRemovalConfirmation(DownloadRow row, Path outputFile, boolean processAlive) {
+        if (row == null) return false;
+        if (processAlive) return true;
+
+        try {
+            if (outputFile != null && Files.exists(outputFile)) return true;
+        } catch (Exception ignored) {}
+
+        DownloadRow.State state = null;
+        try { state = row.getState(); } catch (Exception ignored) {}
+        if (state == DownloadRow.State.COMPLETED || state == DownloadRow.State.MISSING) {
+            return false;
+        }
+
+        try {
+            return row.progress != null && row.progress.get() > 0.0001;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private void deleteKnownOutputFiles(Path absOut) {
