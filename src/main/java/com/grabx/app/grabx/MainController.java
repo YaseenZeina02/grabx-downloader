@@ -5,9 +5,9 @@ import com.grabx.app.grabx.ui.components.IconButtonService;
 import com.grabx.app.grabx.core.model.DownloadRow;
 import com.grabx.app.grabx.core.service.DownloadStateCoordinator;
 import com.grabx.app.grabx.core.service.DownloadHistoryReconciler;
-import com.grabx.app.grabx.core.service.PlaylistBatchCoordinator;
 import com.grabx.app.grabx.core.service.PlaylistDialogService;
 import com.grabx.app.grabx.core.service.PlaylistFlowService;
+import com.grabx.app.grabx.core.service.PlaylistServicesFactory;
 import com.grabx.app.grabx.core.service.ThumbnailService;
 import com.grabx.app.grabx.core.service.UrlAnalysisService;
 import com.grabx.app.grabx.core.service.FileManagerService;
@@ -28,7 +28,6 @@ import com.grabx.app.grabx.core.service.ClipboardService;
 import com.grabx.app.grabx.core.service.VideoSizeService;
 import com.grabx.app.grabx.core.service.PlaylistProbeScheduler;
 import com.grabx.app.grabx.core.model.probe.VideoProbeService;
-import com.grabx.app.grabx.util.YouTubeUrls;
 import com.grabx.app.grabx.core.service.HoverTooltipService;
 
 import java.util.List;
@@ -93,7 +92,6 @@ public class MainController {
     private ListView<DownloadRow> downloadsList;
 
 
-    private PlaylistBatchCoordinator playlistBatchCoordinator;
     private PlaylistFlowService playlistFlowService;
 
     private AddLinkFlowService addLinkFlowService;
@@ -175,8 +173,7 @@ public class MainController {
         initializeDownloadsList(iconButtons);
 
         historyService.loadOnce();
-        initPlaylistBatchCoordinator();
-        initPlaylistFlowService();
+        initializePlaylistServices();
         initializeAddLink();
         initializeMonitoring();
     }
@@ -311,44 +308,28 @@ public class MainController {
         downloadMonitoringService.start();
     }
 
-    private void initPlaylistBatchCoordinator() {
-        try {
-            playlistBatchCoordinator = new PlaylistBatchCoordinator(
-                    downloadQueueService::create,
-                    downloadItems::add,
-                    thumbnailService::applyToRow,
-                    historyService::attachAutoSave,
-                    historyService::scheduleSave,
-                    row -> startDownloadRow(row, false),
-                    sidebarService::refilter,
-                    Platform::runLater,
-                    YouTubeUrls::watchUrl,
-                    YouTubeUrls::extractVideoId,
-                    text -> { if (statusText != null && text != null) statusText.setText(text); }
-            );
-        } catch (Exception ex) {
-            playlistBatchCoordinator = null;
-        }
-    }
-
-    private void initPlaylistFlowService() {
-        playlistFlowService = new PlaylistFlowService(
+    private void initializePlaylistServices() {
+        PlaylistServicesFactory.Runtime playlistRuntime = PlaylistServicesFactory.create(
                 playlistDialogService::show,
-                new PlaylistFlowService.BatchGateway() {
-                    @Override public boolean isAvailable() {
-                        return playlistBatchCoordinator != null;
-                    }
-
-                    @Override public void enqueue(PlaylistDialogService.Result result) {
-                        playlistBatchCoordinator.enqueue(result.batch(), result.mode(), result.quality());
-                    }
-                },
-                downloadFolderPreferences::getLastFolderOrDefault,
-                downloadFolderPreferences::saveLastFolder,
-                text -> { if (statusText != null) statusText.setText(text); },
-                () -> { if (addLinkFlowService != null) addLinkFlowService.completePlaylist(); },
-                () -> { if (addLinkFlowService != null) addLinkFlowService.returnFromPlaylist(); }
+                new PlaylistServicesFactory.Dependencies(
+                        downloadQueueService::create,
+                        downloadItems::add,
+                        thumbnailService::applyToRow,
+                        historyService::attachAutoSave,
+                        historyService::scheduleSave,
+                        row -> startDownloadRow(row, false),
+                        sidebarService::refilter,
+                        Platform::runLater,
+                        com.grabx.app.grabx.util.YouTubeUrls::watchUrl,
+                        com.grabx.app.grabx.util.YouTubeUrls::extractVideoId,
+                        text -> { if (statusText != null && text != null) statusText.setText(text); },
+                        downloadFolderPreferences::getLastFolderOrDefault,
+                        downloadFolderPreferences::saveLastFolder,
+                        () -> { if (addLinkFlowService != null) addLinkFlowService.completePlaylist(); },
+                        () -> { if (addLinkFlowService != null) addLinkFlowService.returnFromPlaylist(); }
+                )
         );
+        playlistFlowService = playlistRuntime.flow();
     }
 
     @FXML
