@@ -21,18 +21,20 @@ class GlobalSpeedServiceTest {
         DownloadRow completed = row(DownloadRow.State.COMPLETED, "9.0 MB/s");
         rows.addAll(first, second, completed);
 
-        assertEquals("2.0 MB/s", footer.get());
+        assertEquals("2 MB/s", footer.get());
 
         first.speed.set("1.0 MB/s");
         assertEquals("2.5 MB/s", footer.get());
 
         second.setState(DownloadRow.State.PAUSED);
-        assertEquals("1.0 MB/s", footer.get());
+        assertEquals("1 MB/s", footer.get());
     }
 
     @Test
     void formatsZeroSpeedForAnIdleList() {
-        assertEquals("0.0 KB/s", GlobalSpeedService.formatSpeed(0));
+        assertEquals("0 KB/s", GlobalSpeedService.formatSpeed(0));
+        assertEquals("211 KB/s", GlobalSpeedService.formatSpeed(211_000));
+        assertEquals("1.5 MB/s", GlobalSpeedService.formatSpeed(1_500_000));
     }
 
     private static DownloadRow row(DownloadRow.State state, String speed) {

@@ -114,9 +114,8 @@
             <Label fx:id="statusText" styleClass="gx-text-strong" text="Ready" />
             <Region HBox.hgrow="ALWAYS" />
             <Label styleClass="gx-text-muted" text="Speed:" />
-            <Label fx:id="globalSpeed" alignment="CENTER_RIGHT" minWidth="120" prefWidth="120" maxWidth="120"
-                   style="-fx-font-family: 'Menlo', 'Consolas', 'Monospaced';"
-                   styleClass="gx-text-strong" text="0.0 KB/s" textOverrun="CLIP" />
+            <Label fx:id="globalSpeed" alignment="CENTER_RIGHT" minWidth="96" prefWidth="96" maxWidth="96"
+                   styleClass="gx-text-muted" text="0 KB/s" textOverrun="CLIP" />
         </HBox>
     </bottom>
 

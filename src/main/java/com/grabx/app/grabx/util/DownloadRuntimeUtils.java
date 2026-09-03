@@ -198,12 +198,18 @@ public final class DownloadRuntimeUtils {
         return String.format(Locale.US, "%.1f %s", value, units[unit]);
     }
 
-    public static String formatTransferSize(long downloaded, long total, boolean convertedAudio) {
+    public static String formatTransferSize(long downloaded, long total) {
         if (downloaded <= 0) return "";
         String downloadedText = formatBytesDecimal(downloaded);
         if (total <= 0) return downloadedText;
-        String transfer = downloadedText + " / " + formatBytesDecimal(total);
-        return convertedAudio ? transfer + " source" : transfer;
+        return downloadedText + " / " + formatBytesDecimal(total);
+    }
+
+    public static String formatDownloadedSource(long downloaded, long total) {
+        long completedSourceBytes = total > 0 ? total : downloaded;
+        return completedSourceBytes > 0
+                ? formatBytesDecimal(completedSourceBytes) + " downloaded"
+                : "";
     }
 
     public static String postProcessStatus(String outputLine) {

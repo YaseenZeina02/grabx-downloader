@@ -77,12 +77,18 @@ public final class GlobalSpeedService {
 
     static String formatSpeed(double bytesPerSecond) {
         if (bytesPerSecond >= 1_000_000_000d) {
-            return String.format(Locale.US, "%.1f GB/s", bytesPerSecond / 1_000_000_000d);
+            return compact(bytesPerSecond / 1_000_000_000d, "GB/s");
         }
         if (bytesPerSecond >= 1_000_000d) {
-            return String.format(Locale.US, "%.1f MB/s", bytesPerSecond / 1_000_000d);
+            return compact(bytesPerSecond / 1_000_000d, "MB/s");
         }
-        return String.format(Locale.US, "%.1f KB/s", Math.max(0, bytesPerSecond) / 1_000d);
+        return compact(Math.max(0, bytesPerSecond) / 1_000d, "KB/s");
+    }
+
+    private static String compact(double value, String unit) {
+        String number = String.format(Locale.US, "%.1f", value);
+        if (number.endsWith(".0")) number = number.substring(0, number.length() - 2);
+        return number + " " + unit;
     }
 
     @SuppressWarnings("unchecked")

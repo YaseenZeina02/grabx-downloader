@@ -375,9 +375,10 @@ public final class DownloadRunner {
 
                             Platform.runLater(() -> {
                                 try {
-                                    row.downloadedBytes.set(0);
-                                    row.totalBytes.set(-1);
-                                    row.size.set("");
+                                    row.size.set(com.grabx.app.grabx.util.DownloadRuntimeUtils
+                                            .formatDownloadedSource(
+                                                    row.downloadedBytes.get(), row.totalBytes.get()
+                                            ));
                                     row.speed.set("");
                                     row.eta.set("");
                                     row.status.set(postProcessStatus);
@@ -450,7 +451,7 @@ public final class DownloadRunner {
 
                             // UI size text: downloaded / total (if total known)
                             final String sizeText = com.grabx.app.grabx.util.DownloadRuntimeUtils
-                                    .formatTransferSize(downloaded, total, audioOnly);
+                                    .formatTransferSize(downloaded, total);
 
                             double fpct = pct;
                             long finalDownloaded = downloaded;
