@@ -5,7 +5,6 @@ import com.grabx.app.grabx.ui.components.IconButtonService;
 import com.grabx.app.grabx.core.model.DownloadRow;
 import com.grabx.app.grabx.core.service.DownloadStateCoordinator;
 import com.grabx.app.grabx.core.service.DownloadHistoryReconciler;
-import com.grabx.app.grabx.core.service.ClearAllService;
 import com.grabx.app.grabx.core.service.PlaylistBatchCoordinator;
 import com.grabx.app.grabx.core.service.PlaylistDialogService;
 import com.grabx.app.grabx.core.service.PlaylistFlowService;
@@ -13,13 +12,12 @@ import com.grabx.app.grabx.core.service.ThumbnailService;
 import com.grabx.app.grabx.core.service.UrlAnalysisService;
 import com.grabx.app.grabx.core.service.FileManagerService;
 import com.grabx.app.grabx.core.service.DownloadTitleService;
-import com.grabx.app.grabx.core.service.DownloadProgressTracker;
 import com.grabx.app.grabx.core.service.DownloadQueueService;
 import com.grabx.app.grabx.core.service.AddLinkFlowService;
 import com.grabx.app.grabx.core.service.BulkDownloadActionsService;
 import com.grabx.app.grabx.core.service.AddLinkDialogFactory;
 import com.grabx.app.grabx.core.service.AddLinkDialogService;
-import com.grabx.app.grabx.core.service.DownloadEngineFactory;
+import com.grabx.app.grabx.core.service.DownloadServicesFactory;
 import com.grabx.app.grabx.core.service.DownloadMonitoringService;
 import com.grabx.app.grabx.core.service.SidebarService;
 import com.grabx.app.grabx.core.service.DownloadRunner;
@@ -114,8 +112,6 @@ public class MainController {
 
     private DownloadStateCoordinator downloadStateCoordinator;
     private DownloadRunner downloadRunner;
-    private final DownloadProgressTracker downloadProgressTracker = new DownloadProgressTracker();
-
     private final Map<DownloadRow, String> stopReasons = new ConcurrentHashMap<>();
     // Persist last selected download folder
     private static final Preferences PREFS = Preferences.userNodeForPackage(MainController.class);
@@ -129,7 +125,6 @@ public class MainController {
                     Platform::runLater,
                     text -> { if (statusText != null) statusText.setText(text); }
             );
-    private final ClearAllService clearAllService = new ClearAllService(downloadItems);
     private final DownloadHistoryReconciler downloadHistoryReconciler =
             new DownloadHistoryReconciler(
                     downloadItems,
@@ -178,9 +173,7 @@ public class MainController {
     public void initialize() {
         IconButtonService iconButtons = initializeWindowUi();
         initializeSidebar();
-        initializeDownloadEngine();
-        initializeDownloadQueue();
-        initializeBulkActions();
+        initializeDownloadServices();
         initializeDownloadsList(iconButtons);
 
         historyService.loadOnce();
@@ -218,56 +211,33 @@ public class MainController {
         sidebarService.initialize();
     }
 
-    private void initializeDownloadEngine() {
-        DownloadEngineFactory.Runtime downloadRuntime = DownloadEngineFactory.create(
+    private void initializeDownloadServices() {
+        DownloadServicesFactory.Runtime downloadRuntime = DownloadServicesFactory.create(
                 downloadItems,
                 activeProcesses,
                 stopReasons,
-                downloadProgressTracker,
-                this::startDownloadRow,
-                historyService::scheduleSave,
-                this::updateMissingSidebarItem,
-                sidebarService::refilter,
-                new DownloadEngineFactory.Config(
-                        MODE_AUDIO, QUALITY_BEST, QUALITY_SEPARATOR, AUDIO_BEST, AUDIO_DEFAULT_FORMAT
+                downloadOrderSeq,
+                new DownloadServicesFactory.Dependencies(
+                        downloadFolderPreferences::getLastFolderOrDefault,
+                        historyService::attachAutoSave,
+                        historyService::scheduleSave,
+                        thumbnailService::applyToRow,
+                        downloadTitleService::resolveAsync,
+                        Platform::runLater,
+                        text -> { if (statusText != null) statusText.setText(text); },
+                        this::updateMissingSidebarItem,
+                        sidebarService::refilter,
+                        historyService::clearHistoryFile
+                ),
+                new DownloadServicesFactory.Config(
+                        MODE_VIDEO, MODE_AUDIO, QUALITY_BEST, QUALITY_SEPARATOR,
+                        AUDIO_BEST, AUDIO_DEFAULT_FORMAT
                 )
         );
         downloadStateCoordinator = downloadRuntime.stateCoordinator();
         downloadRunner = downloadRuntime.runner();
-    }
-
-    private void initializeDownloadQueue() {
-        downloadQueueService = new DownloadQueueService(
-                downloadItems,
-                downloadOrderSeq,
-                downloadFolderPreferences::getLastFolderOrDefault,
-                historyService::attachAutoSave,
-                historyService::scheduleSave,
-                thumbnailService::applyToRow,
-                downloadTitleService::resolveAsync,
-                this::startDownloadRow,
-                Platform::runLater,
-                text -> { if (statusText != null) statusText.setText(text); },
-                MODE_VIDEO,
-                MODE_AUDIO,
-                QUALITY_BEST,
-                AUDIO_DEFAULT_FORMAT
-        );
-    }
-
-    private void initializeBulkActions() {
-        bulkDownloadActionsService = new BulkDownloadActionsService(
-                downloadStateCoordinator::cancelAll,
-                downloadStateCoordinator::pauseAll,
-                downloadStateCoordinator::resumeAll,
-                clearAllService::clearNonActive,
-                downloadItems::isEmpty,
-                this::updateMissingSidebarItem,
-                sidebarService::refilter,
-                historyService::clearHistoryFile,
-                historyService::scheduleSave,
-                text -> { if (statusText != null) statusText.setText(text); }
-        );
+        downloadQueueService = downloadRuntime.queue();
+        bulkDownloadActionsService = downloadRuntime.bulkActions();
     }
 
     private void initializeDownloadsList(IconButtonService iconButtons) {
