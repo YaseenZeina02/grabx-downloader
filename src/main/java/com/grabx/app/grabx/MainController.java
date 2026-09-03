@@ -214,7 +214,8 @@ public class MainController {
     private void initializeGlobalSpeed() {
         globalSpeedService = new GlobalSpeedService(
                 downloadItems,
-                text -> { if (globalSpeed != null) globalSpeed.setText(text); }
+                text -> { if (globalSpeed != null) globalSpeed.setText(text); },
+                text -> { if (statusText != null) statusText.setText(text); }
         );
         globalSpeedService.start();
     }

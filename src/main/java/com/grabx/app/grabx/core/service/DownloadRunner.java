@@ -201,8 +201,9 @@ public final class DownloadRunner {
                 int requestedHeight = -1; // used for stable filenames by selected quality
 
                 if (audioOnly) {
-                    // Never fall back to a combined video+audio format in audio mode.
-                    selector = "bestaudio";
+                    // Prefer an audio-only stream. Some YouTube clients expose no
+                    // standalone audio format, so retain a compatible fallback.
+                    selector = "bestaudio/best";
 
                 } else {
                     String q = (quality == null) ? qualityBest : quality;

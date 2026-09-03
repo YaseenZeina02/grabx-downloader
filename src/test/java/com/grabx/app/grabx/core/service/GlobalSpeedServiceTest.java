@@ -13,7 +13,8 @@ class GlobalSpeedServiceTest {
     void sumsOnlyActiveDownloadSpeedsAndRefreshesOnChanges() {
         var rows = FXCollections.<DownloadRow>observableArrayList();
         AtomicReference<String> footer = new AtomicReference<>();
-        GlobalSpeedService service = new GlobalSpeedService(rows, footer::set);
+        AtomicReference<String> summary = new AtomicReference<>();
+        GlobalSpeedService service = new GlobalSpeedService(rows, footer::set, summary::set);
         service.start();
 
         DownloadRow first = row(DownloadRow.State.DOWNLOADING, "500.0 KB/S");
@@ -21,13 +22,15 @@ class GlobalSpeedServiceTest {
         DownloadRow completed = row(DownloadRow.State.COMPLETED, "9.0 MB/s");
         rows.addAll(first, second, completed);
 
-        assertEquals("2 MB/s", footer.get());
+        assertEquals("↓  2 MB/s", footer.get());
+        assertEquals("2 active  ·  0 queued  ·  1 completed", summary.get());
 
         first.speed.set("1.0 MB/s");
-        assertEquals("2.5 MB/s", footer.get());
+        assertEquals("↓  2.5 MB/s", footer.get());
 
         second.setState(DownloadRow.State.PAUSED);
-        assertEquals("1 MB/s", footer.get());
+        assertEquals("↓  1 MB/s", footer.get());
+        assertEquals("1 active  ·  0 queued  ·  1 completed", summary.get());
     }
 
     @Test

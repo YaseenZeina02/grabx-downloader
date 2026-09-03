@@ -21,12 +21,22 @@ public final class GlobalSpeedService {
 
     private final ObservableList<DownloadRow> rows;
     private final Consumer<String> speedUpdater;
+    private final Consumer<String> summaryUpdater;
     private final Map<DownloadRow, ChangeListener<Object>> listeners = new IdentityHashMap<>();
     private boolean started;
 
     public GlobalSpeedService(ObservableList<DownloadRow> rows, Consumer<String> speedUpdater) {
+        this(rows, speedUpdater, null);
+    }
+
+    public GlobalSpeedService(
+            ObservableList<DownloadRow> rows,
+            Consumer<String> speedUpdater,
+            Consumer<String> summaryUpdater
+    ) {
         this.rows = rows;
         this.speedUpdater = speedUpdater;
+        this.summaryUpdater = summaryUpdater;
     }
 
     public void start() {
@@ -55,7 +65,24 @@ public final class GlobalSpeedService {
                 bytesPerSecond += parseBytesPerSecond(row.speed == null ? null : row.speed.get());
             }
         }
-        if (speedUpdater != null) speedUpdater.accept(formatSpeed(bytesPerSecond));
+        if (speedUpdater != null) speedUpdater.accept("↓  " + formatSpeed(bytesPerSecond));
+        if (summaryUpdater != null) summaryUpdater.accept(formatSummary(rows));
+    }
+
+    static String formatSummary(Iterable<DownloadRow> rows) {
+        int active = 0;
+        int queued = 0;
+        int completed = 0;
+        if (rows != null) {
+            for (DownloadRow row : rows) {
+                if (row == null) continue;
+                DownloadRow.State state = row.getState();
+                if (state == DownloadRow.State.DOWNLOADING) active++;
+                else if (state == DownloadRow.State.QUEUED || state == DownloadRow.State.PENDING) queued++;
+                else if (state == DownloadRow.State.COMPLETED) completed++;
+            }
+        }
+        return active + " active  ·  " + queued + " queued  ·  " + completed + " completed";
     }
 
     static double parseBytesPerSecond(String value) {

@@ -110,12 +110,10 @@
     <!-- FOOTER -->
     <bottom>
         <HBox alignment="CENTER_LEFT" spacing="10" styleClass="gx-footer">
-            <Label styleClass="gx-text-muted" text="Status:" />
-            <Label fx:id="statusText" styleClass="gx-text-strong" text="Ready" />
+            <Label fx:id="statusText" styleClass="gx-text-muted" text="0 active  ·  0 queued  ·  0 completed" />
             <Region HBox.hgrow="ALWAYS" />
-            <Label styleClass="gx-text-muted" text="Speed:" />
-            <Label fx:id="globalSpeed" alignment="CENTER_RIGHT" minWidth="96" prefWidth="96" maxWidth="96"
-                   styleClass="gx-text-muted" text="0 KB/s" textOverrun="CLIP" />
+            <Label fx:id="globalSpeed" alignment="CENTER_RIGHT" minWidth="112" prefWidth="112" maxWidth="112"
+                   styleClass="gx-text-muted" text="↓  0 KB/s" textOverrun="CLIP" />
         </HBox>
     </bottom>
 
