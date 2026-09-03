@@ -45,6 +45,23 @@ class DownloadRuntimeUtilsTest {
     }
 
     @Test
+    void labelsPostProcessingAsASeparatePhase() {
+        assertEquals(
+                "Converting audio...",
+                DownloadRuntimeUtils.postProcessStatus("[ExtractAudio] Destination: song.mp3")
+        );
+        assertEquals(
+                "Merging audio and video...",
+                DownloadRuntimeUtils.postProcessStatus("[Merger] Merging formats into \"video.mp4\"")
+        );
+        assertEquals(
+                "Finalizing...",
+                DownloadRuntimeUtils.postProcessStatus("Deleting original file source.webm")
+        );
+        assertEquals(null, DownloadRuntimeUtils.postProcessStatus("[download] 50%"));
+    }
+
+    @Test
     void choosesNextAvailableFilenameAcrossDifferentExtensions() throws Exception {
         Files.writeString(tempDir.resolve("Song [audio].mp3"), "first");
         Files.writeString(tempDir.resolve("Song [audio] (1).m4a"), "second");

@@ -206,6 +206,21 @@ public final class DownloadRuntimeUtils {
         return convertedAudio ? transfer + " source" : transfer;
     }
 
+    public static String postProcessStatus(String outputLine) {
+        if (outputLine == null || outputLine.isBlank()) return null;
+        String line = outputLine.trim();
+        if (line.startsWith("[ExtractAudio]")) return "Converting audio...";
+        if (line.startsWith("[Merger]") || line.contains("Merging formats into")) {
+            return "Merging audio and video...";
+        }
+        if (line.contains("Post-process") || line.contains("Postprocessing")
+                || line.contains("Fixing") || line.contains("Deleting original file")
+                || line.contains("Deleting original files")) {
+            return "Finalizing...";
+        }
+        return null;
+    }
+
     public static String normalizeSpeedUnit(String speed) {
         if (speed == null) return null;
         String normalized = speed.trim();

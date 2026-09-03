@@ -335,8 +335,8 @@ public final class DownloadRunner {
                             break;
                         }
 
-                        // NEWFILE: yt-dlp started a new stream/file (audio/video). Reset monotonic progress so it can start from 0 again.
-                        if (s.startsWith("[download] Destination:") || s.startsWith("[ExtractAudio] Destination:")) {
+                        // DOWNLOAD PHASE: yt-dlp started a source stream/file.
+                        if (s.startsWith("[download] Destination:")) {
 
                             final String phaseLabel;
                             if (audioOnly || modeAudio.equals(mode) || "Audio".equalsIgnoreCase(mode) || "Audio only".equalsIgnoreCase(mode)) {
@@ -367,18 +367,21 @@ public final class DownloadRunner {
                             });
                         }
 
-                        // POST: merging/postprocessing (progress is misleading here)
-                        if (s.contains("Merging formats into") || s.startsWith("[Merger]") ||
-                                s.contains("Post-process") || s.contains("Postprocessing") ||
-                                s.contains("Fixing") || s.contains("Extracting") ||
-                                s.contains("Deleting original file") || s.contains("Deleting original files")) {
+                        // POST-PROCESS PHASE: yt-dlp does not expose a reliable
+                        // percentage here, so start a distinct animated phase.
+                        String postProcessStatus = com.grabx.app.grabx.util.DownloadRuntimeUtils
+                                .postProcessStatus(s);
+                        if (postProcessStatus != null) {
 
                             Platform.runLater(() -> {
                                 try {
+                                    row.downloadedBytes.set(0);
+                                    row.totalBytes.set(-1);
+                                    row.size.set("");
                                     row.speed.set("");
                                     row.eta.set("");
-                                    row.status.set("Merging . . .");
-                                    row.progress.set(-1); // indeterminate
+                                    row.status.set(postProcessStatus);
+                                    row.progress.set(-1);
                                 } catch (Exception ignored) {}
                             });
                         }
