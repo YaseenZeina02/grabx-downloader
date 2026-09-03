@@ -17,6 +17,7 @@ import java.util.logging.Logger;
 
 public final class DownloadRunner {
     private static final Logger LOG = AppLog.get(DownloadRunner.class);
+    private static final int MP3_BITRATE_BITS_PER_SECOND = 192_000;
 
     @FunctionalInterface
     public interface OutputFilenameProbe {
@@ -271,7 +272,7 @@ public final class DownloadRunner {
                 if (audioOnly) {
                     cmd.add("-x");
                     cmd.add("--audio-quality");
-                    cmd.add("mp3".equals(resolvedAudioFormat) ? "320K" : "0");
+                    cmd.add("mp3".equals(resolvedAudioFormat) ? "192K" : "0");
 
                     String fmt = resolvedAudioFormat;
                     cmd.add("--audio-format");
@@ -458,7 +459,7 @@ public final class DownloadRunner {
                             long estimatedOutput = 0;
                             if (audioOnly && "mp3".equals(resolvedAudioFormat)) {
                                 estimatedOutput = com.grabx.app.grabx.util.DownloadRuntimeUtils
-                                        .estimateEncodedAudioBytes(m.group(7), 320_000);
+                                        .estimateEncodedAudioBytes(m.group(7), MP3_BITRATE_BITS_PER_SECOND);
                             }
                             if (estimatedOutput > 0) {
                                 total = estimatedOutput;
