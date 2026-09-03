@@ -40,6 +40,8 @@ class DownloadRuntimeUtilsTest {
     void formatsDecimalSizesAndSpeeds() {
         assertEquals("1.5 MB", DownloadRuntimeUtils.formatBytesDecimal(1_500_000));
         assertEquals("2.5 MB/S", DownloadRuntimeUtils.normalizeSpeedUnit("2.5 MiB/s"));
+        assertEquals("37.7 MB", DownloadRuntimeUtils.formatTransferSize(37_700_000, 164_900_000, true));
+        assertEquals("37.7 MB / 164.9 MB", DownloadRuntimeUtils.formatTransferSize(37_700_000, 164_900_000, false));
     }
 
     @Test

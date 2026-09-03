@@ -24,6 +24,7 @@ import com.grabx.app.grabx.core.service.DownloadRunner;
 import com.grabx.app.grabx.core.service.DownloadFolderPreferences;
 import com.grabx.app.grabx.core.service.DownloadService;
 import com.grabx.app.grabx.core.service.HistoryService;
+import com.grabx.app.grabx.core.service.GlobalSpeedService;
 import com.grabx.app.grabx.core.service.ClipboardService;
 import com.grabx.app.grabx.core.service.VideoSizeService;
 import com.grabx.app.grabx.core.service.PlaylistProbeScheduler;
@@ -66,6 +67,8 @@ public class MainController {
     @FXML
     private Label statusText;
     @FXML
+    private Label globalSpeed;
+    @FXML
     private BorderPane root;
 
     @FXML
@@ -102,6 +105,7 @@ public class MainController {
 
     private SidebarService sidebarService;
     private DownloadMonitoringService downloadMonitoringService;
+    private GlobalSpeedService globalSpeedService;
 
 
     private final Map<DownloadRow, Process> activeProcesses = new ConcurrentHashMap<>();
@@ -169,6 +173,7 @@ public class MainController {
     public void initialize() {
         IconButtonService iconButtons = initializeWindowUi();
         initializeSidebar();
+        initializeGlobalSpeed();
         initializeDownloadServices();
         initializeDownloadsList(iconButtons);
 
@@ -204,6 +209,14 @@ public class MainController {
                 sidebarList, contentTitle, statusText, searchField, downloadItems, downloadService
         );
         sidebarService.initialize();
+    }
+
+    private void initializeGlobalSpeed() {
+        globalSpeedService = new GlobalSpeedService(
+                downloadItems,
+                text -> { if (globalSpeed != null) globalSpeed.setText(text); }
+        );
+        globalSpeedService.start();
     }
 
     private void initializeDownloadServices() {

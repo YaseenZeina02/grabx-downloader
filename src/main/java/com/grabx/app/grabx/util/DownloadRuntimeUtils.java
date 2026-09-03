@@ -198,6 +198,13 @@ public final class DownloadRuntimeUtils {
         return String.format(Locale.US, "%.1f %s", value, units[unit]);
     }
 
+    public static String formatTransferSize(long downloaded, long total, boolean convertedAudio) {
+        if (downloaded <= 0) return "";
+        String downloadedText = formatBytesDecimal(downloaded);
+        if (convertedAudio || total <= 0) return downloadedText;
+        return downloadedText + " / " + formatBytesDecimal(total);
+    }
+
     public static String normalizeSpeedUnit(String speed) {
         if (speed == null) return null;
         String normalized = speed.trim();

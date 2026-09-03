@@ -446,14 +446,8 @@ public final class DownloadRunner {
                             if (total <= 0) total = parseLongSafe.apply(m.group(6));
 
                             // UI size text: downloaded / total (if total known)
-                            final String sizeText;
-                            if (downloaded > 0 && total > 0) {
-                                sizeText = formatBytesDecimal.apply(downloaded) + " / " + formatBytesDecimal.apply(total);
-                            } else if (downloaded > 0) {
-                                sizeText = formatBytesDecimal.apply(downloaded);
-                            } else {
-                                sizeText = "";
-                            }
+                            final String sizeText = com.grabx.app.grabx.util.DownloadRuntimeUtils
+                                    .formatTransferSize(downloaded, total, audioOnly);
 
                             double fpct = pct;
                             long finalDownloaded = downloaded;
