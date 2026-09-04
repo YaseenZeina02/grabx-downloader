@@ -123,6 +123,7 @@ public class MainController {
     private static final String SEARCH_ICON_PATH =
             "M4,9.5 A5.5,5.5 0 1,0 15,9.5 A5.5,5.5 0 1,0 4,9.5 M13.5,13.5 L20,20";
     private static final String CLOSE_SEARCH_ICON_PATH = "M6,6 L18,18 M18,6 L6,18";
+    private static final double SEARCH_COLLAPSED_WIDTH = 38.0;
 
 
     private final Map<DownloadRow, Process> activeProcesses = new ConcurrentHashMap<>();
@@ -238,8 +239,8 @@ public class MainController {
         searchToggleIcon = new SVGPath();
         searchToggleIcon.setContent(SEARCH_ICON_PATH);
         searchToggleIcon.getStyleClass().add("gx-search-icon");
-        searchToggleIcon.setScaleX(1.15);
-        searchToggleIcon.setScaleY(1.15);
+        searchToggleIcon.setScaleX(0.92);
+        searchToggleIcon.setScaleY(0.92);
         searchToggleButton.setGraphic(searchToggleIcon);
         searchToggleButton.setFocusTraversable(false);
 
@@ -261,8 +262,8 @@ public class MainController {
         if (searchAnimation != null) searchAnimation.stop();
         if (searchToggleIcon != null) {
             searchToggleIcon.setContent(expanded ? CLOSE_SEARCH_ICON_PATH : SEARCH_ICON_PATH);
-            searchToggleIcon.setScaleX(expanded ? 1.0 : 1.15);
-            searchToggleIcon.setScaleY(expanded ? 1.0 : 1.15);
+            searchToggleIcon.setScaleX(expanded ? 0.82 : 0.92);
+            searchToggleIcon.setScaleY(expanded ? 0.82 : 0.92);
         }
         searchToggleButton.getStyleClass().remove("gx-search-toggle-expanded");
         if (expanded) searchToggleButton.getStyleClass().add("gx-search-toggle-expanded");
@@ -279,7 +280,7 @@ public class MainController {
         searchBox.setPrefWidth(currentWidth);
         searchAnimation = new Timeline(new KeyFrame(
                 Duration.millis(220),
-                new KeyValue(searchBox.prefWidthProperty(), expanded ? 260.0 : 46.0,
+                new KeyValue(searchBox.prefWidthProperty(), expanded ? 260.0 : SEARCH_COLLAPSED_WIDTH,
                         javafx.animation.Interpolator.EASE_BOTH),
                 new KeyValue(searchField.opacityProperty(), expanded ? 1.0 : 0.0,
                         javafx.animation.Interpolator.EASE_BOTH)

@@ -102,13 +102,17 @@
                     <Label fx:id="contentTitle" styleClass="gx-section-title" text="Downloads" />
                     <Region HBox.hgrow="ALWAYS" />
                     <StackPane fx:id="searchBox" alignment="CENTER_RIGHT" maxWidth="260"
-                               minWidth="46" prefWidth="46" styleClass="gx-search-box">
-                        <TextField fx:id="searchField" maxWidth="Infinity" promptText="Search..."
+                               minHeight="38" minWidth="38" prefHeight="38" prefWidth="38"
+                               maxHeight="38" styleClass="gx-search-box">
+                        <TextField fx:id="searchField" maxHeight="38" maxWidth="Infinity" minHeight="38"
+                                   prefHeight="38" promptText="Search..."
                                    styleClass="gx-search,gx-search-expandable" />
-                        <Button fx:id="searchToggleButton" minHeight="42" minWidth="42"
-                                prefHeight="42" prefWidth="42" styleClass="gx-search-toggle" />
+                        <Button fx:id="searchToggleButton" maxHeight="38" maxWidth="38"
+                                minHeight="38" minWidth="38" prefHeight="38" prefWidth="38"
+                                styleClass="gx-search-toggle" />
                     </StackPane>
-                    <ComboBox fx:id="historyFilter" maxWidth="145" minWidth="125" prefWidth="135">
+                    <ComboBox fx:id="historyFilter" maxHeight="38" maxWidth="145" minHeight="38"
+                              minWidth="125" prefHeight="38" prefWidth="135">
                         <styleClass>
                             <String fx:value="gx-combo" />
                             <String fx:value="gx-history-filter" />
