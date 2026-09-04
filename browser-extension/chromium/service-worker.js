@@ -10,10 +10,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   chrome.runtime.sendNativeMessage(NATIVE_HOST, capture, async (response) => {
     if (chrome.runtime.lastError) {
+      const nativeError = chrome.runtime.lastError.message || "Unknown native messaging error";
       sendResponse({
         ok: false,
         status: "unavailable",
-        message: "GrabX bridge is not installed"
+        message: `GrabX bridge error: ${nativeError}`
       });
       return;
     }

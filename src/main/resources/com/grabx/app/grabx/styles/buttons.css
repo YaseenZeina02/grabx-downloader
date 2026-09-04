@@ -444,16 +444,21 @@
 }
 
 .gx-icon-btn.gx-compact-restore {
-    -fx-min-width: 38;
-    -fx-pref-width: 38;
-    -fx-max-width: 38;
-    -fx-min-height: 38;
-    -fx-pref-height: 38;
-    -fx-max-height: 38;
-    -fx-background-radius: 13;
-    -fx-border-radius: 13;
-    -fx-background-color: rgba(159,182,255,0.10);
-    -fx-border-color: rgba(159,182,255,0.20);
+    -fx-min-width: 34;
+    -fx-pref-width: 34;
+    -fx-max-width: 34;
+    -fx-min-height: 34;
+    -fx-pref-height: 34;
+    -fx-max-height: 34;
+    -fx-background-radius: 11;
+    -fx-border-radius: 11;
+    -fx-background-color: rgba(159,182,255,0.07);
+    -fx-border-color: rgba(159,182,255,0.14);
+}
+
+.gx-icon-btn.gx-compact-restore:hover {
+    -fx-background-color: rgba(159,182,255,0.14);
+    -fx-border-color: rgba(159,182,255,0.26);
 }
 
 /* ===============================

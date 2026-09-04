@@ -10,12 +10,33 @@ async function scanActivePage() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id || !/^https?:/.test(tab.url || '')) throw new Error('This page cannot be scanned');
-    const [{ result }] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: detectPageMedia
-    });
-    pageInfo = result.page;
-    candidates = result.candidates;
+    let result = null;
+    try {
+      const injectionResults = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: detectPageMedia
+      });
+      result = injectionResults?.[0]?.result || null;
+    } catch {
+      // Restricted or unusually scripted pages can still be analyzed by GrabX
+      // using the trusted tab URL supplied by the browser extension API.
+    }
+    pageInfo = result?.page || {
+      url: tab.url,
+      title: tab.title || new URL(tab.url).hostname,
+      thumbnailUrl: youtubeThumbnail(tab.url)
+    };
+    if (!pageInfo.thumbnailUrl) pageInfo.thumbnailUrl = youtubeThumbnail(pageInfo.url);
+    candidates = Array.isArray(result?.candidates) ? result.candidates : [];
+    if (!candidates.length) {
+      candidates = [{
+        url: null,
+        kind: 'page',
+        title: pageInfo.title,
+        mimeType: 'Analyze with GrabX',
+        thumbnailUrl: pageInfo.thumbnailUrl
+      }];
+    }
     render();
   } catch (error) {
     document.getElementById('loading').classList.add('hidden');
@@ -31,11 +52,17 @@ function detectPageMedia() {
       return ['http:', 'https:'].includes(url.protocol) ? url.href : null;
     } catch { return null; }
   };
+  const pageThumbnail = absolute(
+    document.querySelector('meta[property="og:image"]')?.content
+    || document.querySelector('meta[name="twitter:image"]')?.content
+    || document.querySelector('meta[property="twitter:image"]')?.content
+  );
   const items = [];
   const add = (url, kind, title, mimeType = '') => {
     const resolved = absolute(url);
     if (!resolved) return;
-    items.push({ url: resolved, kind, title: title || document.title, mimeType });
+    items.push({ url: resolved, kind, title: title || document.title, mimeType,
+      thumbnailUrl: pageThumbnail });
   };
 
   document.querySelectorAll('video, audio').forEach(media => {
@@ -64,7 +91,8 @@ function detectPageMedia() {
 
   const unique = [...new Map(items.map(item => [item.url, item])).values()].slice(0, 50);
   return {
-    page: { url: location.href, title: document.title || location.hostname },
+    page: { url: location.href, title: document.title || location.hostname,
+      thumbnailUrl: pageThumbnail },
     candidates: unique
   };
 }
@@ -89,6 +117,16 @@ function createCard(candidate, index) {
   const kind = document.createElement('span');
   kind.className = 'kind';
   kind.textContent = candidate.kind;
+  let visual = kind;
+  if (candidate.thumbnailUrl) {
+    const thumbnail = document.createElement('img');
+    thumbnail.className = 'media-thumb';
+    thumbnail.src = candidate.thumbnailUrl;
+    thumbnail.alt = '';
+    thumbnail.referrerPolicy = 'no-referrer';
+    thumbnail.addEventListener('error', () => thumbnail.replaceWith(kind), { once: true });
+    visual = thumbnail;
+  }
   const copy = document.createElement('span');
   copy.className = 'media-copy';
   const title = document.createElement('strong');
@@ -99,7 +137,7 @@ function createCard(candidate, index) {
   meta.className = 'media-meta';
   meta.textContent = candidate.mimeType || safeHostname(candidate.url);
   copy.append(title, meta);
-  top.append(kind, copy);
+  top.append(visual, copy);
 
   const actions = document.createElement('div');
   actions.className = 'actions';
@@ -149,6 +187,20 @@ async function sendCapture(candidate, action) {
 
 function safeHostname(value) {
   try { return new URL(value).hostname; } catch { return 'Direct media'; }
+}
+
+function youtubeThumbnail(value) {
+  try {
+    const url = new URL(value);
+    let videoId = null;
+    if (url.hostname === 'youtu.be') videoId = url.pathname.split('/').filter(Boolean)[0];
+    else if (url.hostname.endsWith('youtube.com')) videoId = url.searchParams.get('v');
+    return /^[A-Za-z0-9_-]{6,20}$/.test(videoId || '')
+      ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function showNotice(message, error = false) {

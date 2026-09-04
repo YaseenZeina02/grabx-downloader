@@ -64,6 +64,29 @@ class AddLinkFlowServiceTest {
         assertEquals("audio", action.get());
     }
 
+    @Test
+    void forwardsAutomaticAnalysisForBrowserRequests() {
+        AtomicBoolean autoAnalyze = new AtomicBoolean(false);
+        AddLinkFlowService service = new AddLinkFlowService(
+                new AddLinkFlowService.DialogGateway() {
+                    @Override public boolean isOpen() { return false; }
+                    @Override public void show(String prefillUrl) { }
+                    @Override public void show(String prefillUrl, String preferredAction, boolean shouldAutoAnalyze) {
+                        autoAnalyze.set(shouldAutoAnalyze);
+                    }
+                },
+                value -> value != null && value.startsWith("http"),
+                () -> "",
+                (task, delay) -> task.run(),
+                Runnable::run,
+                text -> { }
+        );
+
+        service.openOrUpdate("https://example.com/video", "video", true);
+
+        assertEquals(true, autoAnalyze.get());
+    }
+
     private static AddLinkFlowService service(
             List<String> shown,
             java.util.function.Supplier<String> clipboard,

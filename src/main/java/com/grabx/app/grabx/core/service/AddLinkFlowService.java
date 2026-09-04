@@ -15,6 +15,10 @@ public final class AddLinkFlowService {
         default void show(String prefillUrl, String preferredAction) {
             show(prefillUrl);
         }
+
+        default void show(String prefillUrl, String preferredAction, boolean autoAnalyze) {
+            show(prefillUrl, preferredAction);
+        }
     }
 
     private static final long OPEN_DELAY_MILLIS = 80;
@@ -67,15 +71,19 @@ public final class AddLinkFlowService {
     }
 
     public void openOrUpdate(String prefillUrl, String preferredAction) {
+        openOrUpdate(prefillUrl, preferredAction, false);
+    }
+
+    public void openOrUpdate(String prefillUrl, String preferredAction, boolean autoAnalyze) {
         String normalizedUrl = normalizeUrl(prefillUrl);
         if (dialog != null && dialog.isOpen()) {
-            dialog.show(normalizedUrl, preferredAction);
+            dialog.show(normalizedUrl, preferredAction, autoAnalyze);
             return;
         }
         if (!openScheduled.compareAndSet(false, true)) return;
         schedule(() -> uiExecutor.accept(() -> {
             try {
-                if (dialog != null) dialog.show(normalizedUrl, preferredAction);
+                if (dialog != null) dialog.show(normalizedUrl, preferredAction, autoAnalyze);
             } finally {
                 openScheduled.set(false);
             }

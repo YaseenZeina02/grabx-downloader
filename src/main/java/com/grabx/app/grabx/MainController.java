@@ -133,6 +133,21 @@ public class MainController {
     private Node fullCenter;
     private Node fullBottom;
     private VBox compactRoot;
+    private javafx.stage.Stage compactStage;
+    private javafx.stage.Stage fullStage;
+    private double compactDragX;
+    private double compactDragY;
+    private boolean compactResizing;
+    private double compactResizeScreenX;
+    private double compactResizeScreenY;
+    private double compactResizeWidth;
+    private double compactResizeHeight;
+    private double compactResizeStageX;
+    private double compactResizeStageY;
+    private boolean compactResizeLeft;
+    private boolean compactResizeRight;
+    private boolean compactResizeTop;
+    private boolean compactResizeBottom;
     private double fullWidth;
     private double fullHeight;
     private double fullMinWidth;
@@ -140,6 +155,8 @@ public class MainController {
     private double fullX;
     private double fullY;
     private boolean fullAlwaysOnTop;
+    private boolean fullMaximized;
+    private boolean fullFullScreen;
     private double windowedWidth = Double.NaN;
     private double windowedHeight = Double.NaN;
     private double windowedX = Double.NaN;
@@ -496,25 +513,41 @@ public class MainController {
                 (node, text) -> hoverTooltipService.install(node, text)
         ));
 
-        Label brandMark = new Label("GX");
-        brandMark.getStyleClass().add("gx-brand");
-        Label brand = new Label("GrabX");
-        brand.getStyleClass().add("gx-compact-brand");
-        Label subtitle = new Label("Compact View");
-        subtitle.getStyleClass().add("gx-compact-subtitle");
-        VBox heading = new VBox(1, brand, subtitle);
-
         Button restoreButton = new Button();
         IconButtonService.setupSvgButton(restoreButton, IconButtonService.FULL_VIEW);
         restoreButton.getStyleClass().add("gx-compact-restore");
         iconButtons.installTooltip(restoreButton, "Full View");
         restoreButton.setOnAction(event -> exitCompactView());
 
-        Region headerSpacer = new Region();
-        HBox.setHgrow(headerSpacer, Priority.ALWAYS);
-        HBox compactHeader = new HBox(10, brandMark, heading, headerSpacer, restoreButton);
-        compactHeader.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
-        compactHeader.getStyleClass().add("gx-compact-header");
+        Button closeButton = new Button("×");
+        Button minimizeButton = new Button("−");
+        closeButton.getStyleClass().addAll("gx-window-control", "gx-window-close");
+        minimizeButton.getStyleClass().addAll("gx-window-control", "gx-window-minimize");
+        closeButton.setOnAction(event -> {
+            shutdown();
+            Platform.exit();
+        });
+        minimizeButton.setOnAction(event -> {
+            if (compactStage != null) compactStage.setIconified(true);
+        });
+        HBox windowControls = new HBox(7, closeButton, minimizeButton);
+        windowControls.getStyleClass().add("gx-window-controls");
+
+        BorderPane compactToolbar = new BorderPane();
+        boolean mac = System.getProperty("os.name", "").toLowerCase().contains("mac");
+        compactToolbar.setLeft(mac ? windowControls : restoreButton);
+        compactToolbar.setRight(mac ? restoreButton : windowControls);
+        compactToolbar.getStyleClass().add("gx-compact-toolbar");
+        compactToolbar.setPickOnBounds(true);
+        compactToolbar.setOnMousePressed(event -> {
+            compactDragX = event.getSceneX();
+            compactDragY = event.getSceneY();
+        });
+        compactToolbar.setOnMouseDragged(event -> {
+            if (compactStage == null) return;
+            compactStage.setX(event.getScreenX() - compactDragX);
+            compactStage.setY(event.getScreenY() - compactDragY);
+        });
 
         Label activeCount = new Label();
         activeCount.textProperty().bind(javafx.beans.binding.Bindings.size(downloadService.activeView())
@@ -529,8 +562,77 @@ public class MainController {
         compactFooter.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         compactFooter.getStyleClass().add("gx-compact-footer");
 
-        compactRoot = new VBox(8, compactHeader, compactList, compactFooter);
+        compactRoot = new VBox(6, compactToolbar, compactList, compactFooter);
         compactRoot.getStyleClass().add("gx-compact-root");
+        compactRoot.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_MOVED, event -> {
+            if (compactStage == null) return;
+            boolean nearLeft = event.getSceneX() <= 10;
+            boolean nearRight = event.getSceneX() >= compactStage.getWidth() - 10;
+            boolean nearTop = event.getSceneY() <= 10;
+            boolean nearBottom = event.getSceneY() >= compactStage.getHeight() - 10;
+            if (nearLeft && nearTop) compactRoot.setCursor(javafx.scene.Cursor.NW_RESIZE);
+            else if (nearRight && nearTop) compactRoot.setCursor(javafx.scene.Cursor.NE_RESIZE);
+            else if (nearLeft && nearBottom) compactRoot.setCursor(javafx.scene.Cursor.SW_RESIZE);
+            else if (nearRight && nearBottom) compactRoot.setCursor(javafx.scene.Cursor.SE_RESIZE);
+            else if (nearLeft) compactRoot.setCursor(javafx.scene.Cursor.W_RESIZE);
+            else if (nearRight) compactRoot.setCursor(javafx.scene.Cursor.E_RESIZE);
+            else if (nearTop) compactRoot.setCursor(javafx.scene.Cursor.N_RESIZE);
+            else if (nearBottom) compactRoot.setCursor(javafx.scene.Cursor.S_RESIZE);
+            else compactRoot.setCursor(javafx.scene.Cursor.DEFAULT);
+        });
+        compactRoot.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_PRESSED, event -> {
+            compactResizeLeft = event.getSceneX() <= 10;
+            compactResizeRight = compactStage != null && event.getSceneX() >= compactStage.getWidth() - 10;
+            compactResizeTop = event.getSceneY() <= 10;
+            compactResizeBottom = compactStage != null && event.getSceneY() >= compactStage.getHeight() - 10;
+            boolean resizeEdge = compactStage != null && (compactResizeLeft || compactResizeRight
+                    || compactResizeTop || compactResizeBottom);
+            if (resizeEdge) {
+                compactResizing = true;
+                compactResizeScreenX = event.getScreenX();
+                compactResizeScreenY = event.getScreenY();
+                compactResizeWidth = compactStage.getWidth();
+                compactResizeHeight = compactStage.getHeight();
+                compactResizeStageX = compactStage.getX();
+                compactResizeStageY = compactStage.getY();
+                event.consume();
+                return;
+            }
+            if (event.getSceneY() > 62 || event.getTarget() instanceof Button) return;
+            compactDragX = event.getSceneX();
+            compactDragY = event.getSceneY();
+        });
+        compactRoot.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_DRAGGED, event -> {
+            if (compactResizing && compactStage != null) {
+                double dx = event.getScreenX() - compactResizeScreenX;
+                double dy = event.getScreenY() - compactResizeScreenY;
+                if (compactResizeLeft || compactResizeRight) {
+                    double requestedWidth = compactResizeWidth + (compactResizeLeft ? -dx : dx);
+                    double newWidth = Math.max(350, Math.min(390, requestedWidth));
+                    if (compactResizeLeft) {
+                        compactStage.setX(compactResizeStageX + compactResizeWidth - newWidth);
+                    }
+                    compactStage.setWidth(newWidth);
+                }
+                if (compactResizeTop || compactResizeBottom) {
+                    double requestedHeight = compactResizeHeight + (compactResizeTop ? -dy : dy);
+                    double newHeight = Math.max(270, Math.min(290, requestedHeight));
+                    if (compactResizeTop) {
+                        compactStage.setY(compactResizeStageY + compactResizeHeight - newHeight);
+                    }
+                    compactStage.setHeight(newHeight);
+                }
+                event.consume();
+                return;
+            }
+            if (event.getSceneY() > 80 || compactStage == null || event.getTarget() instanceof Button) return;
+            compactStage.setX(event.getScreenX() - compactDragX);
+            compactStage.setY(event.getScreenY() - compactDragY);
+        });
+        compactRoot.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_RELEASED, event -> {
+            compactResizing = false;
+            compactResizeLeft = compactResizeRight = compactResizeTop = compactResizeBottom = false;
+        });
         VBox.setVgrow(compactList, Priority.ALWAYS);
     }
 
@@ -539,65 +641,72 @@ public class MainController {
                 || compactRoot == null || root.getScene() == null) return;
         javafx.stage.Window window = root.getScene().getWindow();
         if (!(window instanceof javafx.stage.Stage stage)) return;
+        fullStage = stage;
 
         captureWindowedBounds(stage);
         compactView = true;
         fullTop = root.getTop();
         fullCenter = root.getCenter();
         fullBottom = root.getBottom();
-        boolean hasWindowedBounds = Double.isFinite(windowedWidth) && Double.isFinite(windowedHeight);
-        fullWidth = hasWindowedBounds ? windowedWidth : Math.min(stage.getWidth(), 1280);
-        fullHeight = hasWindowedBounds ? windowedHeight : Math.min(stage.getHeight(), 820);
+        fullWidth = stage.getWidth();
+        fullHeight = stage.getHeight();
         fullMinWidth = stage.getMinWidth();
         fullMinHeight = stage.getMinHeight();
-        fullX = hasWindowedBounds ? windowedX : stage.getX();
-        fullY = hasWindowedBounds ? windowedY : stage.getY();
+        fullX = stage.getX();
+        fullY = stage.getY();
         fullAlwaysOnTop = stage.isAlwaysOnTop();
+        fullMaximized = stage.isMaximized();
+        fullFullScreen = stage.isFullScreen();
 
         double compactWidth = 390;
         double compactHeight = 290;
-        transitionStage(stage, () -> {
-            if (stage.isFullScreen()) stage.setFullScreen(false);
-            if (stage.isMaximized()) stage.setMaximized(false);
-            root.setTop(null);
-            root.setCenter(compactRoot);
-            root.setBottom(null);
-            stage.setMinWidth(350);
-            stage.setMinHeight(240);
-            stage.setWidth(compactWidth);
-            stage.setHeight(compactHeight);
-            stage.setX(fullX + Math.max(0, (fullWidth - compactWidth) / 2));
-            stage.setY(fullY + Math.max(0, (fullHeight - compactHeight) / 2));
-            stage.setAlwaysOnTop(true);
-            stage.setTitle("GrabX — Compact View");
-        });
+        if (compactStage == null) {
+            compactStage = new javafx.stage.Stage(javafx.stage.StageStyle.TRANSPARENT);
+            javafx.scene.Scene compactScene = new javafx.scene.Scene(compactRoot, compactWidth, compactHeight);
+            compactScene.setFill(javafx.scene.paint.Color.TRANSPARENT);
+            // The theme is declared on the FXML root rather than the original
+            // Scene, so copy both sources when Compact View gets its own Scene.
+            compactScene.getStylesheets().setAll(root.getScene().getStylesheets());
+            compactScene.getStylesheets().addAll(root.getStylesheets());
+            compactStage.setScene(compactScene);
+            compactStage.setMinWidth(350);
+            compactStage.setMaxWidth(compactWidth);
+            compactStage.setMinHeight(270);
+            compactStage.setMaxHeight(compactHeight);
+            compactStage.setAlwaysOnTop(true);
+        }
+        compactStage.setWidth(compactWidth);
+        compactStage.setHeight(compactHeight);
+        compactStage.setX(fullX + Math.max(0, (fullWidth - compactWidth) / 2));
+        compactStage.setY(fullY + Math.max(0, (fullHeight - compactHeight) / 2));
+        stage.hide();
+        compactStage.show();
+        if (compactStage.getProperties().putIfAbsent("grabx-smart-scroll", Boolean.TRUE) == null) {
+            Platform.runLater(() -> ScrollbarAutoHide.enableGlobalAutoHide(compactRoot));
+        }
+        compactStage.toFront();
     }
 
     private void exitCompactView() {
         if (!compactView || compactTransitioning || root == null || root.getScene() == null) return;
-        javafx.stage.Window window = root.getScene().getWindow();
-        if (!(window instanceof javafx.stage.Stage stage)) return;
-
-        transitionStage(stage, () -> {
-            root.setTop(fullTop);
-            root.setCenter(fullCenter);
-            root.setBottom(fullBottom);
-            stage.setAlwaysOnTop(fullAlwaysOnTop);
-            stage.setMaximized(false);
-            stage.setFullScreen(false);
-            stage.setMinWidth(fullMinWidth);
-            stage.setMinHeight(fullMinHeight);
+        javafx.stage.Stage stage = fullStage;
+        if (stage == null) return;
+        if (compactStage != null) compactStage.hide();
+        stage.show();
+        if (!fullMaximized && !fullFullScreen) {
             stage.setWidth(fullWidth);
             stage.setHeight(fullHeight);
             stage.setX(fullX);
             stage.setY(fullY);
-            stage.setTitle("GrabX");
-            compactView = false;
-            windowedWidth = fullWidth;
-            windowedHeight = fullHeight;
-            windowedX = fullX;
-            windowedY = fullY;
-        });
+        }
+        stage.setMaximized(fullMaximized);
+        stage.setFullScreen(fullFullScreen);
+        stage.toFront();
+        compactView = false;
+        windowedWidth = fullWidth;
+        windowedHeight = fullHeight;
+        windowedX = fullX;
+        windowedY = fullY;
     }
 
     private void transitionStage(javafx.stage.Stage stage, Runnable applyLayout) {
@@ -685,7 +794,7 @@ public class MainController {
             }
             if (statusText != null) statusText.setText("Received from browser: " + capture.title());
             if (addLinkFlowService != null) {
-                addLinkFlowService.openOrUpdate(capture.effectiveUrl(), capture.action());
+                addLinkFlowService.openOrUpdate(capture.effectiveUrl(), capture.action(), true);
             }
         } catch (Exception ignored) {
         }

@@ -58,9 +58,10 @@ public final class AddLinkDialogService {
 
 private static javafx.scene.Node buildSuccessGraphic() {
     try {
-        // Outer soft circle (slightly larger for better balance)
-        Circle bg = new Circle(8);
-        bg.setFill(Color.web("#8CC63F"));
+        // GrabX blue communicates a detected/ready state; green remains reserved
+        // for completed downloads elsewhere in the application.
+        Circle bg = new Circle(9);
+        bg.setFill(Color.web("#3F6FE5"));
         bg.setStroke(null);
 
         bg.setStrokeWidth(1.2);
@@ -68,21 +69,21 @@ private static javafx.scene.Node buildSuccessGraphic() {
         // Check mark (cleaner proportions)
         SVGPath check = new SVGPath();
         check.setContent("M6 10.5L9 13.5L15 7.5");
-        check.setStroke(Color.web("#121826")); // same as dialog background
-        check.setStrokeWidth(2.6);
+        check.setStroke(Color.web("#F4F7FF"));
+        check.setStrokeWidth(2.2);
         check.setFill(null);
         check.setSmooth(true);
 
         StackPane box = new StackPane(bg, check);
-        box.setMinSize(20, 20);
-        box.setPrefSize(20, 20);
-        box.setMaxSize(20, 20);
+        box.setMinSize(22, 22);
+        box.setPrefSize(22, 22);
+        box.setMaxSize(22, 22);
 
         return box;
 
     } catch (Exception e) {
         Label l = new Label("✓");
-        l.setTextFill(Color.web("#2ecc71"));
+        l.setTextFill(Color.web("#69A7FF"));
         l.setStyle("-fx-font-size: 17px; -fx-font-weight: bold;");
         return l;
     }
@@ -142,7 +143,11 @@ private static javafx.scene.Node buildSuccessGraphic() {
     }
 
     public void show(String prefillUrl, String preferredAction) {
-        showAddLinkDialog(prefillUrl, preferredAction);
+        showAddLinkDialog(prefillUrl, preferredAction, false);
+    }
+
+    public void show(String prefillUrl, String preferredAction, boolean autoAnalyze) {
+        showAddLinkDialog(prefillUrl, preferredAction, autoAnalyze);
     }
 
     public boolean isOpen() {
@@ -157,6 +162,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
         addLinkDialogOpen = false;
         activeAddLinkUrlField = null;
         activeAddLinkModeCombo = null;
+        activeAddLinkGetButton = null;
         activeAddLinkDialog = null;
     }
 
@@ -173,6 +179,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
     private volatile boolean addLinkDialogOpen = false;
     private volatile TextField activeAddLinkUrlField;
     private volatile ComboBox<String> activeAddLinkModeCombo;
+    private volatile Button activeAddLinkGetButton;
     private volatile Dialog<ButtonType> activeAddLinkDialog;
 
     // cache for sizes
@@ -208,6 +215,10 @@ private static javafx.scene.Node buildSuccessGraphic() {
     }
 
     private void showAddLinkDialog(String prefillUrl, String preferredAction) {
+        showAddLinkDialog(prefillUrl, preferredAction, false);
+    }
+
+    private void showAddLinkDialog(String prefillUrl, String preferredAction, boolean autoAnalyze) {
         if (addLinkDialogOpen) {
             if (prefillUrl != null && urlAnalysisService.isHttpUrl(prefillUrl) && activeAddLinkUrlField != null) {
                 activeAddLinkUrlField.setText(prefillUrl.trim());
@@ -215,6 +226,9 @@ private static javafx.scene.Node buildSuccessGraphic() {
                 Platform.runLater(activeAddLinkUrlField::requestFocus);
             }
             applyPreferredAction(activeAddLinkModeCombo, preferredAction);
+            if (autoAnalyze && activeAddLinkGetButton != null) {
+                Platform.runLater(activeAddLinkGetButton::fire);
+            }
             return;
         }
 
@@ -282,6 +296,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
         activeAddLinkUrlField = urlField;
 
         Button getBtn = new Button("Get");
+        activeAddLinkGetButton = getBtn;
         getBtn.getStyleClass().addAll("gx-btn", "gx-btn-ghost");
         getBtn.setMinWidth(130);
         getBtn.setPrefWidth(130);
@@ -527,7 +542,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
             if (t == ContentType.VIDEO) {
                 modeCombo.setDisable(false);
                 qualityCombo.setDisable(false);
-                info.setText("Detected: Video. Choose mode/quality then Download.");
+                info.setText("Ready. Choose format/quality, then download.");
                 info.setTextFill(Color.web("#9aa4b2"));
                 showSuccess.run();
                 if (okBtn != null) okBtn.setDisable(false);
@@ -596,11 +611,14 @@ private static javafx.scene.Node buildSuccessGraphic() {
                         Set<Integer> heights = probeError == null && cachedProbe != null
                                 ? cachedProbe.heights()
                                 : Set.of();
-                        if (heights.isEmpty()) {
+                        if (!heights.isEmpty()) lastProbedHeights[0] = heights;
+                        if (cfg.MODE_AUDIO.equals(modeCombo.getValue())) {
+                            qualityCombo.getItems().setAll(buildAudioOptions());
+                            qualityCombo.getSelectionModel().select(cfg.AUDIO_DEFAULT_FORMAT);
+                        } else if (heights.isEmpty()) {
                             fillQualityCombo(qualityCombo);
                         } else {
                             fillQualityComboFromHeights(qualityCombo, heights);
-                            lastProbedHeights[0] = heights;
                         }
                         applyTypeToUi.run();
                         if (okBtn != null) okBtn.setDisable(false);
@@ -647,13 +665,17 @@ private static javafx.scene.Node buildSuccessGraphic() {
         pane.setMaxWidth(760);
         dialog.setResizable(false);
 
-        applyPreferredAction(modeCombo, preferredAction);
         if (prefillUrl != null && !prefillUrl.isBlank()) urlField.setText(prefillUrl.trim());
+        // Setting the URL resets the dependent controls to their safe defaults.
+        // Apply the browser-requested mode afterwards so an audio request keeps
+        // its audio format list instead of being reset to video qualities.
+        applyPreferredAction(modeCombo, preferredAction);
 
         dialog.setOnShown(ev -> Platform.runLater(() -> {
             try { cb.bringWindowToFront(pane.getScene() == null ? null : pane.getScene().getWindow()); } catch (Exception ignored) {}
             urlField.requestFocus();
             urlField.positionCaret(urlField.getText() == null ? 0 : urlField.getText().length());
+            if (autoAnalyze) getBtn.fire();
         }));
 
         dialog.setOnHidden(ev -> {
@@ -663,6 +685,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
             addLinkDialogOpen = false;
             activeAddLinkUrlField = null;
             activeAddLinkModeCombo = null;
+            activeAddLinkGetButton = null;
             activeAddLinkDialog = null;
         });
 
