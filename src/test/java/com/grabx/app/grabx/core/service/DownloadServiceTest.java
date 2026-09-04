@@ -24,17 +24,15 @@ class DownloadServiceTest {
     }
 
     @Test
-    void movesARowBelowActiveWorkOnlyAfterItFinishes() {
+    void automaticallyMovesARowBelowActiveWorkOnlyAfterItFinishes() {
         DownloadRow first = row(0, DownloadRow.State.DOWNLOADING);
         DownloadRow second = row(1, DownloadRow.State.QUEUED);
         DownloadService service = new DownloadService(FXCollections.observableArrayList(first, second));
 
         first.setState(DownloadRow.State.PAUSED);
-        service.refilter();
         assertEquals(java.util.List.of(first, second), java.util.List.copyOf(service.view()));
 
         first.setState(DownloadRow.State.COMPLETED);
-        service.refilter();
         assertEquals(java.util.List.of(second, first), java.util.List.copyOf(service.view()));
     }
 

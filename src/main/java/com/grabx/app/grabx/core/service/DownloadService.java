@@ -2,12 +2,16 @@ package com.grabx.app.grabx.core.service;
 
 import com.grabx.app.grabx.core.model.DownloadRow;
 import javafx.collections.FXCollections;
+import javafx.collections.ListChangeListener;
 import javafx.collections.ObservableList;
 import javafx.collections.transformation.FilteredList;
 import javafx.collections.transformation.SortedList;
+import javafx.beans.value.ChangeListener;
 
 import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.function.Predicate;
 
@@ -32,6 +36,8 @@ public final class DownloadService {
 
     private final FilteredList<DownloadRow> filtered;
     private final SortedList<DownloadRow> sorted;
+    private final Map<DownloadRow, ChangeListener<DownloadRow.State>> stateListeners =
+            new IdentityHashMap<>();
 
     private volatile String sidebarKey = "ALL";
     private volatile String searchQuery = "";
@@ -50,6 +56,17 @@ public final class DownloadService {
         this.filtered = new FilteredList<>(this.items, r -> true);
         this.sorted = new SortedList<>(this.filtered);
         this.sorted.setComparator(this.comparator);
+        for (DownloadRow row : this.items) observeState(row);
+        this.items.addListener((ListChangeListener<DownloadRow>) change -> {
+            while (change.next()) {
+                if (change.wasRemoved()) {
+                    for (DownloadRow row : change.getRemoved()) stopObservingState(row);
+                }
+                if (change.wasAdded()) {
+                    for (DownloadRow row : change.getAddedSubList()) observeState(row);
+                }
+            }
+        });
         // predicate initially
         applyCombinedFilters();
     }
@@ -113,10 +130,27 @@ public final class DownloadService {
     public void refilter() {
         Predicate<? super DownloadRow> p = filtered.getPredicate();
         filtered.setPredicate(p);
+        resort();
+    }
+
+    private void resort() {
         // A SortedList does not observe properties inside its rows. Re-applying the
         // comparator makes a terminal state change move the row below active work.
         sorted.setComparator(null);
         sorted.setComparator(comparator);
+    }
+
+    private void observeState(DownloadRow row) {
+        if (row == null || row.stateProperty() == null || stateListeners.containsKey(row)) return;
+        ChangeListener<DownloadRow.State> listener = (observable, oldState, newState) -> resort();
+        stateListeners.put(row, listener);
+        row.stateProperty().addListener(listener);
+    }
+
+    private void stopObservingState(DownloadRow row) {
+        if (row == null || row.stateProperty() == null) return;
+        ChangeListener<DownloadRow.State> listener = stateListeners.remove(row);
+        if (listener != null) row.stateProperty().removeListener(listener);
     }
 
     // ===================== Internals =====================

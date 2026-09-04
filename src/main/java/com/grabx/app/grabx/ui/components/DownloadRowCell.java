@@ -376,8 +376,13 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         meta.setText(item.mode + " • " + item.quality + " • " + item.folder);
 
         if (stateListener == null) {
-            stateListener = (obs, oldV, newV) ->
-                    Platform.runLater(() -> applyButtonsForState(newV));
+            stateListener = (obs, oldV, newV) -> Platform.runLater(() -> {
+                applyButtonsForState(newV);
+                updateSectionDivider(getItem());
+                try {
+                    if (getListView() != null) getListView().refresh();
+                } catch (Exception ignored) {}
+            });
         }
 
         if (outputFileListener == null) {
