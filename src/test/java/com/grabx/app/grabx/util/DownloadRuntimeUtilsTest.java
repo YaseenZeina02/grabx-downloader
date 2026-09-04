@@ -83,4 +83,44 @@ class DownloadRuntimeUtilsTest {
                 )
         );
     }
+
+    @Test
+    void resumeReusesTheRecordedStemEvenWhenItsPartFileExists() throws Exception {
+        Path recorded = tempDir.resolve("Song [audio] (3).webm");
+        Files.writeString(Path.of(recorded + ".part"), "partial data");
+
+        assertEquals(
+                tempDir.resolve("Song [audio] (3).%(ext)s").toString(),
+                DownloadRuntimeUtils.resumeOutputTemplate(tempDir, recorded)
+        );
+    }
+
+    @Test
+    void resolvesThePlannedOutputUsingTheProbedExtension() {
+        assertEquals(
+                tempDir.resolve("100% Song [audio].webm"),
+                DownloadRuntimeUtils.concreteOutputPath(
+                        tempDir.resolve("100%% Song [audio].%(ext)s").toString(),
+                        tempDir.resolve("100% Song [audio].webm").toString()
+                )
+        );
+    }
+
+    @Test
+    void cleansOnlyPartialAndThumbnailArtifactsFromTheCompletedFilesFamily() throws Exception {
+        Path completed = Files.writeString(tempDir.resolve("Song [audio] (3).mp3"), "done");
+        Path oldPart = Files.writeString(tempDir.resolve("Song [audio].webm.part"), "old");
+        Path numberedPart = Files.writeString(tempDir.resolve("Song [audio] (2).webm.part"), "old");
+        Path thumbnail = Files.writeString(tempDir.resolve("Song [audio] (3).jpg"), "cover");
+        Path otherPartial = Files.writeString(tempDir.resolve("Other song.webm.part"), "keep");
+        Path olderCompleted = Files.writeString(tempDir.resolve("Song [audio] (1).mp3"), "keep");
+
+        assertEquals(3, DownloadRuntimeUtils.cleanupSupersededArtifacts(completed));
+        assertEquals(false, Files.exists(oldPart));
+        assertEquals(false, Files.exists(numberedPart));
+        assertEquals(false, Files.exists(thumbnail));
+        assertEquals(true, Files.exists(otherPartial));
+        assertEquals(true, Files.exists(olderCompleted));
+        assertEquals(true, Files.exists(completed));
+    }
 }

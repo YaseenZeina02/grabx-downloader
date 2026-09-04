@@ -242,15 +242,36 @@ public final class DownloadRunner {
                 }
 
                 String outTpl = baseTpl;
+                String probedOutput = null;
                 try {
                     long probeStartMs = System.currentTimeMillis();
                     String probed = probeOutputFilename.probe(yt, url, selector, outDir, baseTpl);
+                    probedOutput = probed;
                     LOG.fine(() -> "Output filename probe took "
                             + (System.currentTimeMillis() - probeStartMs) + " ms");
-                    String uniqueTemplate = com.grabx.app.grabx.util.DownloadRuntimeUtils
-                            .uniqueOutputTemplate(outDir, probed);
-                    if (uniqueTemplate != null && !uniqueTemplate.isBlank()) outTpl = uniqueTemplate;
+                    String selectedTemplate = resume
+                            ? com.grabx.app.grabx.util.DownloadRuntimeUtils.resumeOutputTemplate(
+                                    outDir, row.outputFile == null ? null : row.outputFile.get())
+                            : null;
+                    if (selectedTemplate == null || selectedTemplate.isBlank()) {
+                        selectedTemplate = com.grabx.app.grabx.util.DownloadRuntimeUtils
+                                .uniqueOutputTemplate(outDir, probed);
+                    }
+                    if (selectedTemplate != null && !selectedTemplate.isBlank()) outTpl = selectedTemplate;
                 } catch (Exception ignored) {
+                }
+
+                // Persist the chosen source path before yt-dlp starts. If the app is
+                // closed before the first Destination line, the next launch can still
+                // reuse the exact stem and continue its .part file.
+                java.nio.file.Path plannedOutput = com.grabx.app.grabx.util.DownloadRuntimeUtils
+                        .concreteOutputPath(outTpl, probedOutput);
+                if (plannedOutput != null) {
+                    detectedOutput.set(plannedOutput);
+                    final java.nio.file.Path savedPlannedOutput = plannedOutput;
+                    Platform.runLater(() -> {
+                        try { row.outputFile.set(savedPlannedOutput); } catch (Exception ignored) {}
+                    });
                 }
 
                 cmd.add("-o");
@@ -630,6 +651,10 @@ public final class DownloadRunner {
                         lastProgressMap.put(row, 1.0);
                         row.speed.set("");
                         row.eta.set("");
+                        try {
+                            com.grabx.app.grabx.util.DownloadRuntimeUtils
+                                    .cleanupSupersededArtifacts(row.outputFile.get());
+                        } catch (Exception ignored) {}
                         saveHistory();
 
                     } else {

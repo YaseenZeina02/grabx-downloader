@@ -131,6 +131,103 @@ public final class DownloadRuntimeUtils {
         }
     }
 
+    /**
+     * Reuses the exact stem recorded for a paused row. A .part file is not a
+     * collision: it is the data yt-dlp must see under the same output template
+     * in order for --continue to resume it.
+     */
+    public static String resumeOutputTemplate(Path outputDirectory, Path recordedOutput) {
+        if (outputDirectory == null || recordedOutput == null) return null;
+        try {
+            Path directory = outputDirectory.toAbsolutePath().normalize();
+            Path recorded = recordedOutput.toAbsolutePath().normalize();
+            if (recorded.getParent() == null || !recorded.getParent().equals(directory)) return null;
+
+            String filename = recorded.getFileName().toString();
+            if (filename.endsWith(".part")) filename = filename.substring(0, filename.length() - 5);
+            String stem = stripExtension(filename);
+            if (stem.isBlank()) return null;
+            return directory.resolve(stem.replace("%", "%%") + ".%(ext)s").toString();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /** Resolves a literal %(ext)s template to the extension returned by the probe. */
+    public static Path concreteOutputPath(String outputTemplate, String probedFilename) {
+        if (outputTemplate == null || outputTemplate.isBlank()
+                || probedFilename == null || probedFilename.isBlank()) return null;
+        try {
+            String probeName = Path.of(probedFilename.trim()).getFileName().toString();
+            int dot = probeName.lastIndexOf('.');
+            if (dot < 0 || dot == probeName.length() - 1) return null;
+            String extension = probeName.substring(dot + 1);
+            return Path.of(outputTemplate.replace("%(ext)s", extension).replace("%%", "%"));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * Removes abandoned partials and thumbnail sidecars for the same media stem
+     * after a download completes. Finished audio/video files are never removed.
+     */
+    public static int cleanupSupersededArtifacts(Path completedOutput) {
+        if (completedOutput == null) return 0;
+        try {
+            Path completed = completedOutput.toAbsolutePath().normalize();
+            Path directory = completed.getParent();
+            if (directory == null || !Files.isDirectory(directory)) return 0;
+            String familyStem = canonicalNumberedStem(stripExtension(completed.getFileName().toString()));
+            int removed = 0;
+            try (var files = Files.list(directory)) {
+                for (Path path : files.toList()) {
+                    if (path == null || path.toAbsolutePath().normalize().equals(completed)) continue;
+                    String name = path.getFileName().toString();
+                    if (!isDisposableArtifact(name)) continue;
+                    if (!familyStem.equals(canonicalArtifactStem(name))) continue;
+                    try {
+                        if (Files.deleteIfExists(path)) removed++;
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+            return removed;
+        } catch (Exception ignored) {
+            return 0;
+        }
+    }
+
+    private static boolean isDisposableArtifact(String filename) {
+        String lower = filename.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".part")
+                || lower.endsWith(".ytdl")
+                || lower.endsWith(".tmp")
+                || lower.endsWith(".temp")
+                || lower.endsWith(".jpg")
+                || lower.endsWith(".jpeg")
+                || lower.endsWith(".webp")
+                || lower.endsWith(".png");
+    }
+
+    private static String canonicalArtifactStem(String filename) {
+        String value = filename;
+        String lower = value.toLowerCase(Locale.ROOT);
+        for (String suffix : List.of(".part", ".ytdl", ".tmp", ".temp")) {
+            if (lower.endsWith(suffix)) {
+                value = value.substring(0, value.length() - suffix.length());
+                break;
+            }
+        }
+        value = stripExtension(value);
+        value = value.replaceFirst("(?i)\\.f\\d{2,4}$", "");
+        return canonicalNumberedStem(value);
+    }
+
+    private static String canonicalNumberedStem(String stem) {
+        return stem == null ? "" : stem.replaceFirst(" \\(\\d+\\)$", "");
+    }
+
     private static boolean stemExists(Path directory, String stem, int suffix) {
         String candidate = suffix == 0 ? stem : stem + " (" + suffix + ")";
         try (var files = Files.list(directory)) {
