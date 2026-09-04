@@ -119,6 +119,10 @@ public class MainController {
     private GlobalSpeedService globalSpeedService;
     private Timeline searchAnimation;
     private boolean searchExpanded;
+    private SVGPath searchToggleIcon;
+    private static final String SEARCH_ICON_PATH =
+            "M4,9.5 A5.5,5.5 0 1,0 15,9.5 A5.5,5.5 0 1,0 4,9.5 M13.5,13.5 L20,20";
+    private static final String CLOSE_SEARCH_ICON_PATH = "M6,6 L18,18 M18,6 L6,18";
 
 
     private final Map<DownloadRow, Process> activeProcesses = new ConcurrentHashMap<>();
@@ -231,12 +235,12 @@ public class MainController {
     private void initializeExpandableSearch() {
         if (searchBox == null || searchField == null || searchToggleButton == null) return;
 
-        SVGPath searchIcon = new SVGPath();
-        searchIcon.setContent("M4,9.5 A5.5,5.5 0 1,0 15,9.5 A5.5,5.5 0 1,0 4,9.5 M13.5,13.5 L20,20");
-        searchIcon.getStyleClass().add("gx-search-icon");
-        searchIcon.setScaleX(1.15);
-        searchIcon.setScaleY(1.15);
-        searchToggleButton.setGraphic(searchIcon);
+        searchToggleIcon = new SVGPath();
+        searchToggleIcon.setContent(SEARCH_ICON_PATH);
+        searchToggleIcon.getStyleClass().add("gx-search-icon");
+        searchToggleIcon.setScaleX(1.15);
+        searchToggleIcon.setScaleY(1.15);
+        searchToggleButton.setGraphic(searchToggleIcon);
         searchToggleButton.setFocusTraversable(false);
 
         searchField.setVisible(false);
@@ -255,6 +259,13 @@ public class MainController {
         if (searchBox == null || searchField == null) return;
         searchExpanded = expanded;
         if (searchAnimation != null) searchAnimation.stop();
+        if (searchToggleIcon != null) {
+            searchToggleIcon.setContent(expanded ? CLOSE_SEARCH_ICON_PATH : SEARCH_ICON_PATH);
+            searchToggleIcon.setScaleX(expanded ? 1.0 : 1.15);
+            searchToggleIcon.setScaleY(expanded ? 1.0 : 1.15);
+        }
+        searchToggleButton.getStyleClass().remove("gx-search-toggle-expanded");
+        if (expanded) searchToggleButton.getStyleClass().add("gx-search-toggle-expanded");
 
         if (expanded) {
             searchField.setVisible(true);

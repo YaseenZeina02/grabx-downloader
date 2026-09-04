@@ -147,6 +147,17 @@
     -fx-border-color: rgba(159,182,255,0.42);
 }
 
+.gx-search-toggle-expanded,
+.gx-search-toggle-expanded:hover {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-effect: none;
+}
+
+.gx-search-toggle-expanded:hover .gx-search-icon {
+    -fx-stroke: #9FB6FF;
+}
+
 .gx-search-toggle .gx-search-icon {
     -fx-fill: transparent;
     -fx-stroke: #D9E0EA;
