@@ -45,6 +45,34 @@ class DownloadQueueServiceTest {
         ), events);
     }
 
+    @Test
+    void ignoresASecondIdenticalRequestWhileTheFirstIsActive() {
+        ObservableList<DownloadRow> rows = FXCollections.observableArrayList();
+        List<String> events = new ArrayList<>();
+        DownloadQueueService service = service(rows, events);
+
+        service.enqueue("https://example.com/video", "/chosen", "Video", "720p");
+        service.enqueue("https://example.com/video", "/chosen", "Video", "720p");
+
+        assertEquals(1, rows.size());
+        assertEquals(1, events.stream().filter("start"::equals).count());
+        assertEquals(1, events.stream().filter("title"::equals).count());
+    }
+
+    @Test
+    void allowsTheSameRequestAgainAfterThePreviousOneFinishes() {
+        ObservableList<DownloadRow> rows = FXCollections.observableArrayList();
+        DownloadQueueService service = service(rows, new ArrayList<>());
+
+        DownloadRow first = service.enqueue(
+                "https://example.com/video", "/chosen", "Video", "720p"
+        );
+        first.setState(DownloadRow.State.COMPLETED);
+        service.enqueue("https://example.com/video", "/chosen", "Video", "720p");
+
+        assertEquals(2, rows.size());
+    }
+
     private static DownloadQueueService service(ObservableList<DownloadRow> rows, List<String> events) {
         return new DownloadQueueService(
                 rows,

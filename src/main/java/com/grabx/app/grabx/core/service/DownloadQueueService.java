@@ -90,18 +90,44 @@ public final class DownloadQueueService {
 
     public DownloadRow enqueue(String url, String folder, String mode, String quality) {
         DownloadRow row = create(url, folder, mode, quality, null);
-        if (attachHistory != null) attachHistory.accept(row);
-        if (applyThumbnail != null) applyThumbnail.accept(row, row.url);
 
         Runnable addAndStart = () -> {
+            DownloadRow duplicate = findActiveDuplicate(row);
+            if (duplicate != null) {
+                return;
+            }
+
+            if (attachHistory != null) attachHistory.accept(row);
+            if (applyThumbnail != null) applyThumbnail.accept(row, row.url);
             downloadItems.add(0, row);
             if (saveHistory != null) saveHistory.run();
             if (startDownload != null) startDownload.accept(row, false);
+            if (resolveTitle != null) resolveTitle.accept(row, row.url);
         };
         if (uiExecutor != null) uiExecutor.accept(addAndStart); else addAndStart.run();
-
-        if (resolveTitle != null) resolveTitle.accept(row, row.url);
         return row;
+    }
+
+    private DownloadRow findActiveDuplicate(DownloadRow candidate) {
+        if (downloadItems == null || candidate == null) return null;
+        for (DownloadRow existing : downloadItems) {
+            if (existing == null || !sameRequest(existing, candidate)) continue;
+            DownloadRow.State state = existing.getState();
+            if (state == DownloadRow.State.QUEUED
+                    || state == DownloadRow.State.PENDING
+                    || state == DownloadRow.State.DOWNLOADING
+                    || state == DownloadRow.State.PAUSED) {
+                return existing;
+            }
+        }
+        return null;
+    }
+
+    private static boolean sameRequest(DownloadRow first, DownloadRow second) {
+        return java.util.Objects.equals(first.url, second.url)
+                && java.util.Objects.equals(first.folder, second.folder)
+                && java.util.Objects.equals(first.mode, second.mode)
+                && java.util.Objects.equals(first.quality, second.quality);
     }
 
     private String defaultFolder() {
