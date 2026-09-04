@@ -41,6 +41,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import com.grabx.app.grabx.ui.components.ScrollbarAutoHide;
 import com.grabx.app.grabx.ui.sidebar.SidebarItem;
 import javafx.application.Platform;
+import javafx.animation.KeyFrame;
+import javafx.animation.KeyValue;
+import javafx.animation.Timeline;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.event.ActionEvent;
@@ -49,6 +52,8 @@ import javafx.fxml.FXML;
 import java.util.prefs.Preferences;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
+import javafx.scene.shape.SVGPath;
+import javafx.util.Duration;
 
 public class MainController {
     private final DownloadFolderPreferences downloadFolderPreferences = new DownloadFolderPreferences();
@@ -63,6 +68,10 @@ public class MainController {
             new FileManagerService(this::showMissingFileNotice);
     @FXML
     private TextField searchField;
+    @FXML
+    private StackPane searchBox;
+    @FXML
+    private Button searchToggleButton;
     @FXML
     private ComboBox<String> historyFilter;
 
@@ -108,6 +117,8 @@ public class MainController {
     private SidebarService sidebarService;
     private DownloadMonitoringService downloadMonitoringService;
     private GlobalSpeedService globalSpeedService;
+    private Timeline searchAnimation;
+    private boolean searchExpanded;
 
 
     private final Map<DownloadRow, Process> activeProcesses = new ConcurrentHashMap<>();
@@ -192,6 +203,7 @@ public class MainController {
         });
         AddLinkDialogFactory.installClickToDefocus(root);
         initializeHistoryFilter();
+        initializeExpandableSearch();
 
         try {
             if (hoverTooltipService == null && root != null) {
@@ -214,6 +226,62 @@ public class MainController {
         historyFilter.valueProperty().addListener((observable, oldValue, newValue) ->
                 downloadService.setHistoryView(newValue));
         downloadService.setHistoryView("Newest");
+    }
+
+    private void initializeExpandableSearch() {
+        if (searchBox == null || searchField == null || searchToggleButton == null) return;
+
+        SVGPath searchIcon = new SVGPath();
+        searchIcon.setContent("M4,9.5 A5.5,5.5 0 1,0 15,9.5 A5.5,5.5 0 1,0 4,9.5 M13.5,13.5 L20,20");
+        searchIcon.getStyleClass().add("gx-search-icon");
+        searchIcon.setScaleX(1.15);
+        searchIcon.setScaleY(1.15);
+        searchToggleButton.setGraphic(searchIcon);
+        searchToggleButton.setFocusTraversable(false);
+
+        searchField.setVisible(false);
+        searchField.setOpacity(0);
+        searchField.setMouseTransparent(true);
+        searchToggleButton.setOnAction(event -> setSearchExpanded(!searchExpanded));
+        searchField.addEventFilter(javafx.scene.input.KeyEvent.KEY_PRESSED, event -> {
+            if (event.getCode() == javafx.scene.input.KeyCode.ESCAPE) {
+                setSearchExpanded(false);
+                event.consume();
+            }
+        });
+    }
+
+    private void setSearchExpanded(boolean expanded) {
+        if (searchBox == null || searchField == null) return;
+        searchExpanded = expanded;
+        if (searchAnimation != null) searchAnimation.stop();
+
+        if (expanded) {
+            searchField.setVisible(true);
+            searchField.setMouseTransparent(false);
+        } else {
+            searchField.clear();
+            searchField.setMouseTransparent(true);
+        }
+
+        double currentWidth = searchBox.getWidth() > 0 ? searchBox.getWidth() : searchBox.getPrefWidth();
+        searchBox.setPrefWidth(currentWidth);
+        searchAnimation = new Timeline(new KeyFrame(
+                Duration.millis(220),
+                new KeyValue(searchBox.prefWidthProperty(), expanded ? 260.0 : 46.0,
+                        javafx.animation.Interpolator.EASE_BOTH),
+                new KeyValue(searchField.opacityProperty(), expanded ? 1.0 : 0.0,
+                        javafx.animation.Interpolator.EASE_BOTH)
+        ));
+        searchAnimation.setOnFinished(event -> {
+            if (expanded) {
+                searchField.requestFocus();
+                searchField.positionCaret(searchField.getText() == null ? 0 : searchField.getText().length());
+            } else {
+                searchField.setVisible(false);
+            }
+        });
+        searchAnimation.play();
     }
 
     private void initializeSidebar() {

@@ -114,7 +114,44 @@
     -fx-text-fill: #E8ECF3;
     -fx-prompt-text-fill: #6B7280;
     -fx-background-radius: 10;
-    -fx-padding: 8 10;
+    -fx-padding: 8 44 8 12;
+}
+
+.gx-search-box {
+    -fx-background-color: transparent;
+}
+
+.gx-search-expandable {
+    -fx-border-color: rgba(255,255,255,0.10);
+    -fx-border-radius: 10;
+    -fx-border-width: 1;
+}
+
+.gx-search-expandable:focused {
+    -fx-border-color: rgba(46,91,255,0.62);
+    -fx-effect: dropshadow(gaussian, rgba(46,91,255,0.20), 12, 0.20, 0, 0);
+}
+
+.gx-search-toggle {
+    -fx-background-color: #1C2230;
+    -fx-background-radius: 10;
+    -fx-border-color: rgba(255,255,255,0.10);
+    -fx-border-radius: 10;
+    -fx-border-width: 1;
+    -fx-padding: 0;
+    -fx-cursor: hand;
+}
+
+.gx-search-toggle:hover {
+    -fx-background-color: rgba(255,255,255,0.12);
+    -fx-border-color: rgba(159,182,255,0.42);
+}
+
+.gx-search-toggle .gx-search-icon {
+    -fx-fill: transparent;
+    -fx-stroke: #D9E0EA;
+    -fx-stroke-width: 2.1;
+    -fx-stroke-line-cap: round;
 }
 
 /* motrix-cards later: gx-list will be styled once we implement cellFactory */
