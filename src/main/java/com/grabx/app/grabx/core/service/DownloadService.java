@@ -38,6 +38,8 @@ public final class DownloadService {
 
     private final FilteredList<DownloadRow> filtered;
     private final SortedList<DownloadRow> sorted;
+    private final ObservableList<DownloadRow> activeItems = FXCollections.observableArrayList();
+    private final SortedList<DownloadRow> activeSorted;
     private final Map<DownloadRow, ChangeListener<DownloadRow.State>> stateListeners =
             new IdentityHashMap<>();
 
@@ -58,17 +60,28 @@ public final class DownloadService {
         this.items = Objects.requireNonNull(backing, "backing list");
         this.filtered = new FilteredList<>(this.items, r -> true);
         this.sorted = new SortedList<>(this.filtered);
+        this.activeItems.addAll(this.items.stream()
+                .filter(row -> row != null && isActive(row.getState()))
+                .toList());
+        this.activeSorted = new SortedList<>(this.activeItems,
+                Comparator.comparingLong(row -> row.orderIndex));
         this.sorted.setComparator(this.comparator);
         for (DownloadRow row : this.items) observeState(row);
         this.items.addListener((ListChangeListener<DownloadRow>) change -> {
             boolean changed = false;
             while (change.next()) {
                 if (change.wasRemoved()) {
-                    for (DownloadRow row : change.getRemoved()) stopObservingState(row);
+                    for (DownloadRow row : change.getRemoved()) {
+                        stopObservingState(row);
+                        activeItems.remove(row);
+                    }
                     changed = true;
                 }
                 if (change.wasAdded()) {
-                    for (DownloadRow row : change.getAddedSubList()) observeState(row);
+                    for (DownloadRow row : change.getAddedSubList()) {
+                        observeState(row);
+                        syncActiveRow(row);
+                    }
                     changed = true;
                 }
             }
@@ -89,6 +102,11 @@ public final class DownloadService {
     /** Bind ListView.setItems(view()) */
     public SortedList<DownloadRow> view() {
         return sorted;
+    }
+
+    /** Active rows for Compact View; backed by the same download objects. */
+    public SortedList<DownloadRow> activeView() {
+        return activeSorted;
     }
 
     /** If you still need direct access */
@@ -160,6 +178,7 @@ public final class DownloadService {
     private void observeState(DownloadRow row) {
         if (row == null || row.stateProperty() == null || stateListeners.containsKey(row)) return;
         ChangeListener<DownloadRow.State> listener = (observable, oldState, newState) -> {
+            syncActiveRow(row);
             applyCombinedFilters();
             resort();
         };
@@ -171,6 +190,15 @@ public final class DownloadService {
         if (row == null || row.stateProperty() == null) return;
         ChangeListener<DownloadRow.State> listener = stateListeners.remove(row);
         if (listener != null) row.stateProperty().removeListener(listener);
+    }
+
+    private void syncActiveRow(DownloadRow row) {
+        if (row == null) return;
+        if (isActive(row.getState())) {
+            if (!activeItems.contains(row)) activeItems.add(row);
+        } else {
+            activeItems.remove(row);
+        }
     }
 
     // ===================== Internals =====================

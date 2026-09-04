@@ -17,6 +17,14 @@ public final class IconButtonService {
     public static final String RETRY = "M12 5a7 7 0 1 1-6.32 4H3l3.5-3.5L10 9H7.76A5.5 5.5 0 1 0 12 6.5V5z";
     public static final String CLEAR = "M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z";
     public static final String LINK = "M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3z";
+    /** Picture-in-picture metaphor: move the main window into a smaller working view. */
+    public static final String COMPACT_VIEW =
+            "M19 7h-8v6h8V7zm2-4H3C1.9 3 1 3.9 1 5v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14z";
+    /** Diagonal expand arrows: restore Compact View to the larger application window. */
+    public static final String FULL_VIEW =
+            "M13 3h8v8h-2V6.41l-5.29 5.3-1.42-1.42L17.59 5H13V3zM11 21H3v-8h2v4.59l5.29-5.3 1.42 1.42L6.41 19H11v2z";
+    public static final String DOWNLOAD_TRAY =
+            "M19 3H5C3.9 3 3 3.9 3 5v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 12h-4c0 1.66-1.35 3-3 3s-3-1.34-3-3H5V5h14v10zm-3-5h-2V7h-4v3H8l4 4 4-4z";
     public static final String SETTINGS =
             "M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58" +
             "c.18-.14.23-.41.12-.61l-1.92-3.32c-.11-.2-.36-.28-.57-.2l-2.39.96" +
@@ -37,13 +45,15 @@ public final class IconButtonService {
     }
 
     public void initializeToolbar(Button addLink, Button pauseAll, Button resumeAll,
-                                  Button cancelAll, Button clearAll, Button settings) {
+                                  Button cancelAll, Button clearAll, Button settings,
+                                  Button compactView) {
         configure(addLink, PLUS, "Add link");
         configure(pauseAll, PAUSE, "Pause all");
         configure(resumeAll, PLAY, "Resume all");
         configure(cancelAll, CANCEL, "Cancel All");
         configure(clearAll, CLEAR, "Clear all");
         configure(settings, SETTINGS, "Settings");
+        configure(compactView, COMPACT_VIEW, "Compact View");
     }
 
     public void installTooltip(Button button, String text) {
@@ -59,6 +69,10 @@ public final class IconButtonService {
         button.setFocusTraversable(false);
         button.setText(null);
         button.setGraphic(svgIcon(svgPath, 34));
+    }
+
+    public static Node createSvgIcon(String svgPath, double boxSize) {
+        return svgIcon(svgPath, boxSize);
     }
 
     public static DownloadListViewService.Icons downloadIcons() {

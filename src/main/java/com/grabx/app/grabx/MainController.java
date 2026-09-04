@@ -1,5 +1,6 @@
 package com.grabx.app.grabx;
 import com.grabx.app.grabx.ui.components.DownloadRowActions;
+import com.grabx.app.grabx.ui.components.CompactDownloadRowCell;
 import com.grabx.app.grabx.ui.components.DownloadListViewService;
 import com.grabx.app.grabx.ui.components.IconButtonService;
 import com.grabx.app.grabx.core.model.DownloadRow;
@@ -52,6 +53,7 @@ import javafx.fxml.FXML;
 
 import java.util.prefs.Preferences;
 import javafx.scene.control.*;
+import javafx.scene.Node;
 import javafx.scene.layout.*;
 import javafx.scene.shape.SVGPath;
 import javafx.util.Duration;
@@ -97,6 +99,8 @@ public class MainController {
     private Button addLinkButton;
     @FXML
     private Button settingsButton;
+    @FXML
+    private Button compactViewButton;
 
     @FXML
     private Label contentTitle;
@@ -121,6 +125,23 @@ public class MainController {
     private Timeline searchAnimation;
     private boolean searchExpanded;
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
+    private boolean compactView;
+    private Node fullTop;
+    private Node fullCenter;
+    private Node fullBottom;
+    private VBox compactRoot;
+    private double fullWidth;
+    private double fullHeight;
+    private double fullMinWidth;
+    private double fullMinHeight;
+    private double fullX;
+    private double fullY;
+    private boolean fullAlwaysOnTop;
+    private double windowedWidth = Double.NaN;
+    private double windowedHeight = Double.NaN;
+    private double windowedX = Double.NaN;
+    private double windowedY = Double.NaN;
+    private boolean compactTransitioning;
     private SVGPath searchToggleIcon;
     private static final String SEARCH_ICON_PATH =
             "M4,9.5 A5.5,5.5 0 1,0 15,9.5 A5.5,5.5 0 1,0 4,9.5 M13.5,13.5 L20,20";
@@ -196,6 +217,7 @@ public class MainController {
         initializeGlobalSpeed();
         initializeDownloadServices();
         initializeDownloadsList(iconButtons);
+        initializeCompactView(iconButtons);
 
         historyService.loadOnce();
         initializePlaylistServices();
@@ -205,6 +227,7 @@ public class MainController {
 
     private IconButtonService initializeWindowUi() {
         Platform.runLater(() -> ScrollbarAutoHide.enableGlobalAutoHide(root));
+        Platform.runLater(this::initializeStageBoundsTracking);
         Platform.runLater(() -> {
             if (root != null) root.requestFocus();
         });
@@ -221,9 +244,33 @@ public class MainController {
         IconButtonService iconButtons = new IconButtonService(hoverTooltipService);
         iconButtons.initializeToolbar(
                 addLinkButton, pauseAllButton, resumeAllButton,
-                cancelAllBtn, clearAllButton, settingsButton
+                cancelAllBtn, clearAllButton, settingsButton, compactViewButton
         );
         return iconButtons;
+    }
+
+    private void initializeStageBoundsTracking() {
+        if (root == null || root.getScene() == null
+                || !(root.getScene().getWindow() instanceof javafx.stage.Stage stage)) return;
+        Runnable capture = () -> captureWindowedBounds(stage);
+        stage.xProperty().addListener(observable -> capture.run());
+        stage.yProperty().addListener(observable -> capture.run());
+        stage.widthProperty().addListener(observable -> capture.run());
+        stage.heightProperty().addListener(observable -> capture.run());
+        stage.maximizedProperty().addListener(observable -> capture.run());
+        stage.fullScreenProperty().addListener(observable -> capture.run());
+        capture.run();
+    }
+
+    private void captureWindowedBounds(javafx.stage.Stage stage) {
+        if (stage == null || compactView || compactTransitioning
+                || stage.isMaximized() || stage.isFullScreen()) return;
+        if (stage.getWidth() > 0 && stage.getHeight() > 0) {
+            windowedWidth = stage.getWidth();
+            windowedHeight = stage.getHeight();
+            windowedX = stage.getX();
+            windowedY = stage.getY();
+        }
     }
 
     private void initializeHistoryFilter() {
@@ -367,6 +414,206 @@ public class MainController {
                 IconButtonService.downloadIcons()
         );
         downloadListViewService.initialize();
+        initializeMainEmptyState();
+    }
+
+    private void initializeMainEmptyState() {
+        StackPane emptyIcon = new StackPane(IconButtonService.createSvgIcon(
+                IconButtonService.DOWNLOAD_TRAY, 42));
+        emptyIcon.getStyleClass().add("gx-main-empty-icon");
+        Label emptyTitle = new Label();
+        emptyTitle.getStyleClass().add("gx-main-empty-title");
+        Label emptyHint = new Label();
+        emptyHint.getStyleClass().add("gx-main-empty-hint");
+        VBox emptyState = new VBox(8, emptyIcon, emptyTitle, emptyHint);
+        emptyState.setAlignment(javafx.geometry.Pos.CENTER);
+        emptyState.getStyleClass().add("gx-main-empty");
+        downloadsList.setPlaceholder(emptyState);
+
+        Runnable updateCopy = () -> {
+            boolean libraryEmpty = downloadItems.isEmpty();
+            boolean searching = searchField != null && !searchField.getText().isBlank();
+            String section = contentTitle == null ? "" : contentTitle.getText();
+            if (libraryEmpty) {
+                emptyTitle.setText("No downloads yet");
+                emptyHint.setText("Add a link to start your first download");
+            } else if (searching) {
+                emptyTitle.setText("No matching downloads");
+                emptyHint.setText("Try a different search term");
+            } else {
+                switch (section == null ? "" : section) {
+                    case "Downloading" -> {
+                        emptyTitle.setText("No active downloads");
+                        emptyHint.setText("New downloads will appear here");
+                    }
+                    case "Paused" -> {
+                        emptyTitle.setText("No paused downloads");
+                        emptyHint.setText("Paused downloads will appear here");
+                    }
+                    case "Completed" -> {
+                        emptyTitle.setText("No completed downloads");
+                        emptyHint.setText("Finished downloads will appear here");
+                    }
+                    case "Cancelled" -> {
+                        emptyTitle.setText("No cancelled downloads");
+                        emptyHint.setText("Cancelled downloads will appear here");
+                    }
+                    default -> {
+                        emptyTitle.setText("No matching downloads");
+                        emptyHint.setText("Try another library filter");
+                    }
+                }
+            }
+        };
+        updateCopy.run();
+        downloadItems.addListener((javafx.beans.InvalidationListener) observable -> updateCopy.run());
+        if (searchField != null) searchField.textProperty().addListener(observable -> updateCopy.run());
+        if (contentTitle != null) contentTitle.textProperty().addListener(observable -> updateCopy.run());
+    }
+
+    private void initializeCompactView(IconButtonService iconButtons) {
+        ListView<DownloadRow> compactList = new ListView<>(downloadService.activeView());
+        compactList.getStyleClass().add("gx-compact-list");
+        compactList.setSelectionModel(new com.grabx.app.grabx.ui.components.NoSelectionModel<>());
+        StackPane emptyIcon = new StackPane(IconButtonService.createSvgIcon(
+                IconButtonService.DOWNLOAD_TRAY, 34));
+        emptyIcon.getStyleClass().add("gx-compact-empty-icon");
+        Label emptyText = new Label("No active downloads");
+        emptyText.getStyleClass().add("gx-compact-empty-text");
+        VBox emptyState = new VBox(9, emptyIcon, emptyText);
+        emptyState.setAlignment(javafx.geometry.Pos.CENTER);
+        emptyState.getStyleClass().add("gx-compact-empty");
+        compactList.setPlaceholder(emptyState);
+        compactList.setCellFactory(list -> new CompactDownloadRowCell(
+                downloadStateCoordinator::pause,
+                downloadStateCoordinator::resume,
+                downloadStateCoordinator::cancel,
+                iconButtons::installTooltip,
+                (node, text) -> hoverTooltipService.install(node, text)
+        ));
+
+        Label brandMark = new Label("GX");
+        brandMark.getStyleClass().add("gx-brand");
+        Label brand = new Label("GrabX");
+        brand.getStyleClass().add("gx-compact-brand");
+        Label subtitle = new Label("Compact View");
+        subtitle.getStyleClass().add("gx-compact-subtitle");
+        VBox heading = new VBox(1, brand, subtitle);
+
+        Button restoreButton = new Button();
+        IconButtonService.setupSvgButton(restoreButton, IconButtonService.FULL_VIEW);
+        restoreButton.getStyleClass().add("gx-compact-restore");
+        iconButtons.installTooltip(restoreButton, "Full View");
+        restoreButton.setOnAction(event -> exitCompactView());
+
+        Region headerSpacer = new Region();
+        HBox.setHgrow(headerSpacer, Priority.ALWAYS);
+        HBox compactHeader = new HBox(10, brandMark, heading, headerSpacer, restoreButton);
+        compactHeader.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+        compactHeader.getStyleClass().add("gx-compact-header");
+
+        Label activeCount = new Label();
+        activeCount.textProperty().bind(javafx.beans.binding.Bindings.size(downloadService.activeView())
+                .asString("%d active"));
+        activeCount.getStyleClass().add("gx-compact-footer-text");
+        Label compactSpeed = new Label();
+        if (globalSpeed != null) compactSpeed.textProperty().bind(globalSpeed.textProperty());
+        compactSpeed.getStyleClass().add("gx-compact-footer-text");
+        Region footerSpacer = new Region();
+        HBox.setHgrow(footerSpacer, Priority.ALWAYS);
+        HBox compactFooter = new HBox(8, activeCount, footerSpacer, compactSpeed);
+        compactFooter.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+        compactFooter.getStyleClass().add("gx-compact-footer");
+
+        compactRoot = new VBox(8, compactHeader, compactList, compactFooter);
+        compactRoot.getStyleClass().add("gx-compact-root");
+        VBox.setVgrow(compactList, Priority.ALWAYS);
+    }
+
+    private void enterCompactView() {
+        if (compactView || compactTransitioning || root == null
+                || compactRoot == null || root.getScene() == null) return;
+        javafx.stage.Window window = root.getScene().getWindow();
+        if (!(window instanceof javafx.stage.Stage stage)) return;
+
+        captureWindowedBounds(stage);
+        compactView = true;
+        fullTop = root.getTop();
+        fullCenter = root.getCenter();
+        fullBottom = root.getBottom();
+        boolean hasWindowedBounds = Double.isFinite(windowedWidth) && Double.isFinite(windowedHeight);
+        fullWidth = hasWindowedBounds ? windowedWidth : Math.min(stage.getWidth(), 1280);
+        fullHeight = hasWindowedBounds ? windowedHeight : Math.min(stage.getHeight(), 820);
+        fullMinWidth = stage.getMinWidth();
+        fullMinHeight = stage.getMinHeight();
+        fullX = hasWindowedBounds ? windowedX : stage.getX();
+        fullY = hasWindowedBounds ? windowedY : stage.getY();
+        fullAlwaysOnTop = stage.isAlwaysOnTop();
+
+        double compactWidth = 390;
+        double compactHeight = 290;
+        transitionStage(stage, () -> {
+            if (stage.isFullScreen()) stage.setFullScreen(false);
+            if (stage.isMaximized()) stage.setMaximized(false);
+            root.setTop(null);
+            root.setCenter(compactRoot);
+            root.setBottom(null);
+            stage.setMinWidth(350);
+            stage.setMinHeight(240);
+            stage.setWidth(compactWidth);
+            stage.setHeight(compactHeight);
+            stage.setX(fullX + Math.max(0, (fullWidth - compactWidth) / 2));
+            stage.setY(fullY + Math.max(0, (fullHeight - compactHeight) / 2));
+            stage.setAlwaysOnTop(true);
+            stage.setTitle("GrabX — Compact View");
+        });
+    }
+
+    private void exitCompactView() {
+        if (!compactView || compactTransitioning || root == null || root.getScene() == null) return;
+        javafx.stage.Window window = root.getScene().getWindow();
+        if (!(window instanceof javafx.stage.Stage stage)) return;
+
+        transitionStage(stage, () -> {
+            root.setTop(fullTop);
+            root.setCenter(fullCenter);
+            root.setBottom(fullBottom);
+            stage.setAlwaysOnTop(fullAlwaysOnTop);
+            stage.setMaximized(false);
+            stage.setFullScreen(false);
+            stage.setMinWidth(fullMinWidth);
+            stage.setMinHeight(fullMinHeight);
+            stage.setWidth(fullWidth);
+            stage.setHeight(fullHeight);
+            stage.setX(fullX);
+            stage.setY(fullY);
+            stage.setTitle("GrabX");
+            compactView = false;
+            windowedWidth = fullWidth;
+            windowedHeight = fullHeight;
+            windowedX = fullX;
+            windowedY = fullY;
+        });
+    }
+
+    private void transitionStage(javafx.stage.Stage stage, Runnable applyLayout) {
+        compactTransitioning = true;
+        Timeline fadeOut = new Timeline(
+                new KeyFrame(Duration.ZERO, new KeyValue(stage.opacityProperty(), stage.getOpacity())),
+                new KeyFrame(Duration.millis(80), new KeyValue(stage.opacityProperty(), 0.0))
+        );
+        fadeOut.setOnFinished(event -> {
+            applyLayout.run();
+            root.applyCss();
+            root.layout();
+            Timeline fadeIn = new Timeline(
+                    new KeyFrame(Duration.ZERO, new KeyValue(stage.opacityProperty(), 0.0)),
+                    new KeyFrame(Duration.millis(130), new KeyValue(stage.opacityProperty(), 1.0))
+            );
+            fadeIn.setOnFinished(done -> compactTransitioning = false);
+            fadeIn.play();
+        });
+        fadeOut.play();
     }
 
     private void initializeAddLink() {
@@ -451,8 +698,8 @@ public class MainController {
     }
 
     @FXML
-    public void onMiniMode(ActionEvent event) {
-        if (statusText != null) statusText.setText("Mini Mode clicked");
+    public void onCompactView(ActionEvent event) {
+        enterCompactView();
     }
 
     @FXML

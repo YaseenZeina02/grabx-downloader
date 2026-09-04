@@ -56,7 +56,7 @@
     -fx-translate-y: 1;
 }
 
-/* Ghost (Mini Mode) */
+/* Ghost */
 .gx-btn-ghost {
     -fx-background-color: transparent;
     -fx-text-fill: #E8ECF3;
@@ -407,6 +407,53 @@
 
 .gx-task-action:hover {
     -fx-background-color: rgba(255,255,255,0.16);
+}
+
+/* Compact View has its own tighter, media-control-like action sizing. */
+.gx-icon-btn.gx-compact-action {
+    -fx-min-width: 38;
+    -fx-pref-width: 38;
+    -fx-max-width: 38;
+    -fx-min-height: 38;
+    -fx-pref-height: 38;
+    -fx-max-height: 38;
+    -fx-background-radius: 13;
+    -fx-border-radius: 13;
+    -fx-background-color: rgba(255,255,255,0.09);
+    -fx-border-color: rgba(255,255,255,0.12);
+}
+
+.gx-icon-btn.gx-compact-pause,
+.gx-icon-btn.gx-compact-resume {
+    -fx-background-color: rgba(46,91,255,0.20);
+    -fx-border-color: rgba(105,167,255,0.32);
+}
+
+.gx-icon-btn.gx-compact-pause:hover,
+.gx-icon-btn.gx-compact-resume:hover {
+    -fx-background-color: rgba(46,91,255,0.34);
+}
+
+.gx-icon-btn.gx-compact-cancel:hover {
+    -fx-background-color: rgba(239,68,68,0.18);
+    -fx-border-color: rgba(239,68,68,0.34);
+}
+
+.gx-icon-btn.gx-compact-cancel:hover .gx-svg-icon {
+    -fx-fill: #FF8A8A;
+}
+
+.gx-icon-btn.gx-compact-restore {
+    -fx-min-width: 38;
+    -fx-pref-width: 38;
+    -fx-max-width: 38;
+    -fx-min-height: 38;
+    -fx-pref-height: 38;
+    -fx-max-height: 38;
+    -fx-background-radius: 13;
+    -fx-border-radius: 13;
+    -fx-background-color: rgba(159,182,255,0.10);
+    -fx-border-color: rgba(159,182,255,0.20);
 }
 
 /* ===============================

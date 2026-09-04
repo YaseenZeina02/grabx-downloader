@@ -71,6 +71,24 @@ class DownloadServiceTest {
         assertEquals(java.util.List.of(older, newer), java.util.List.copyOf(service.view()));
     }
 
+    @Test
+    void compactViewContainsOnlyActiveRowsAndTracksStateChanges() {
+        DownloadRow downloading = row(2, DownloadRow.State.DOWNLOADING);
+        DownloadRow paused = row(1, DownloadRow.State.PAUSED);
+        DownloadRow completed = row(0, DownloadRow.State.COMPLETED);
+        DownloadService service = new DownloadService(FXCollections.observableArrayList(
+                downloading, paused, completed
+        ));
+
+        assertEquals(java.util.List.of(paused, downloading), java.util.List.copyOf(service.activeView()));
+
+        downloading.setState(DownloadRow.State.COMPLETED);
+        assertEquals(java.util.List.of(paused), java.util.List.copyOf(service.activeView()));
+
+        completed.setState(DownloadRow.State.QUEUED);
+        assertEquals(java.util.List.of(completed, paused), java.util.List.copyOf(service.activeView()));
+    }
+
     private static DownloadRow row(long order, DownloadRow.State state) {
         DownloadRow row = new DownloadRow("https://example.com/" + order, "Item " + order,
                 order, "/downloads", "Video", "720p");

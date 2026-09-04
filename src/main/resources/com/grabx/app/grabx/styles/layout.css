@@ -3,7 +3,7 @@
    =============================== */
 
 .gx-root {
-    -fx-background-color: #0B0F1A;
+    -fx-background-color: linear-gradient(to bottom right, #0B0F1A 0%, #0C1627 55%, #0D223A 100%);
 }
 
 /* ===============================
@@ -43,7 +43,7 @@
 
 /* Main content area (CENTER) */
 .gx-content {
-    -fx-background-color: #0B0F1A;
+    -fx-background-color: linear-gradient(to bottom right, #0B0F1A 0%, #0C1627 55%, #0D223A 100%);
     -fx-padding: 18;
 }
 
@@ -61,11 +61,18 @@
     -fx-padding: 14;
 }
 
+.gx-footer-wrap {
+    -fx-background-color: transparent;
+    -fx-padding: 5 12 10 12;
+}
+
 .gx-footer {
-    -fx-background-color: #0F1115;
-    -fx-padding: 10 14;
-    -fx-border-color: #2A3142 transparent transparent transparent;
-    -fx-border-width: 1 0 0 0;
+    -fx-background-color: rgba(10, 20, 36, 0.80);
+    -fx-background-radius: 15;
+    -fx-padding: 9 12;
+    -fx-border-color: rgba(159,182,255,0.16);
+    -fx-border-radius: 15;
+    -fx-border-width: 1;
 }
 
 /* Brand chip (GX) */
@@ -80,6 +87,160 @@
 .gx-section {
     -fx-padding: 12;
     -fx-spacing: 10;
+}
+
+/* ===============================
+   Compact View
+   =============================== */
+
+.gx-compact-root {
+    -fx-background-color: linear-gradient(to bottom right, #0B0F1A 0%, #0C1627 55%, #0D223A 100%);
+    -fx-padding: 13;
+}
+
+.gx-compact-header,
+.gx-compact-footer {
+    -fx-background-color: rgba(10, 20, 36, 0.78);
+    -fx-background-radius: 16;
+    -fx-border-color: rgba(159,182,255,0.16);
+    -fx-border-radius: 16;
+    -fx-border-width: 1;
+    -fx-padding: 10 12;
+}
+
+.gx-compact-brand {
+    -fx-text-fill: #E8ECF3;
+    -fx-font-size: 16;
+    -fx-font-weight: 800;
+}
+
+.gx-compact-subtitle,
+.gx-compact-status,
+.gx-compact-footer-text {
+    -fx-text-fill: #9EABC0;
+    -fx-font-size: 11;
+}
+
+.gx-compact-metrics {
+    -fx-text-fill: #B8C7DF;
+    -fx-font-family: monospace;
+    -fx-font-size: 11;
+}
+
+.gx-compact-list,
+.gx-compact-list .viewport,
+.gx-compact-list .virtual-flow,
+.gx-compact-list .clipped-container,
+.gx-compact-list .sheet,
+.gx-compact-list .list-cell {
+    -fx-background-color: transparent;
+}
+
+.gx-compact-list {
+    -fx-padding: 0;
+    -fx-background-insets: 0;
+    -fx-border-width: 0;
+}
+
+.gx-compact-list .placeholder .label {
+    -fx-text-fill: #778195;
+}
+
+.gx-compact-empty {
+    -fx-opacity: 0.86;
+}
+
+.gx-compact-empty-icon {
+    -fx-background-color: rgba(159,182,255,0.09);
+    -fx-background-radius: 999;
+    -fx-border-color: rgba(159,182,255,0.16);
+    -fx-border-radius: 999;
+    -fx-border-width: 1;
+    -fx-min-width: 58;
+    -fx-pref-width: 58;
+    -fx-max-width: 58;
+    -fx-min-height: 58;
+    -fx-pref-height: 58;
+    -fx-max-height: 58;
+}
+
+.gx-compact-empty-icon .gx-svg-icon {
+    -fx-fill: #9FB6FF;
+    -fx-opacity: 0.78;
+}
+
+.gx-compact-empty-text {
+    -fx-text-fill: #8290A8;
+    -fx-font-size: 11;
+}
+
+.gx-main-empty {
+    -fx-opacity: 0.92;
+    -fx-padding: 24;
+    -fx-translate-y: -48;
+}
+
+.gx-main-empty-icon {
+    -fx-background-color: rgba(159,182,255,0.08);
+    -fx-background-radius: 999;
+    -fx-border-color: rgba(159,182,255,0.16);
+    -fx-border-radius: 999;
+    -fx-border-width: 1;
+    -fx-min-width: 78;
+    -fx-pref-width: 78;
+    -fx-max-width: 78;
+    -fx-min-height: 78;
+    -fx-pref-height: 78;
+    -fx-max-height: 78;
+}
+
+.gx-main-empty-icon .gx-svg-icon {
+    -fx-fill: #9FB6FF;
+    -fx-opacity: 0.80;
+}
+
+.gx-main-empty-title {
+    -fx-text-fill: #C8D3E5;
+    -fx-font-size: 15;
+    -fx-font-weight: 700;
+}
+
+.gx-main-empty-hint {
+    -fx-text-fill: #7F8CA3;
+    -fx-font-size: 11;
+}
+
+.gx-compact-card {
+    -fx-background-color: rgba(19, 30, 48, 0.94);
+    -fx-background-radius: 16;
+    -fx-border-color: rgba(159,182,255,0.17);
+    -fx-border-radius: 16;
+    -fx-border-width: 1;
+    -fx-padding: 12;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.22), 12, 0.16, 0, 3);
+}
+
+.gx-compact-title {
+    -fx-text-fill: #E8ECF3;
+    -fx-font-size: 13;
+    -fx-font-weight: 700;
+}
+
+.gx-compact-progress {
+    -fx-pref-height: 5;
+    -fx-min-height: 5;
+    -fx-max-height: 5;
+}
+
+.gx-compact-progress > .track {
+    -fx-background-color: rgba(159,182,255,0.16);
+    -fx-background-radius: 999;
+}
+
+.gx-compact-progress > .bar {
+    -fx-background-color: linear-gradient(to right, #2E5BFF, #69A7FF);
+    -fx-background-insets: 0;
+    -fx-background-radius: 999;
 }
 
 /* Navigation buttons (if you use ToggleButtons) */

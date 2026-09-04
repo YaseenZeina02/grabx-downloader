@@ -67,6 +67,10 @@
                     </styleClass>
                 </Button>
 
+                <!-- Compact View -->
+                <Button fx:id="compactViewButton" onAction="#onCompactView" prefHeight="40" prefWidth="40"
+                        styleClass="gx-icon-btn" />
+
                 <!-- Settings -->
                 <Button fx:id="settingsButton" onAction="#onSettings" prefHeight="40" prefWidth="40" styleClass="gx-icon-btn">
 
@@ -88,12 +92,6 @@
                           styleClass="gx-sidebar-list"
                           VBox.vgrow="ALWAYS" />
 
-                <Button onAction="#onMiniMode" text="Mini Mode">
-                    <styleClass>
-                        <String fx:value="gx-btn" />
-                        <String fx:value="gx-btn-ghost" />
-                    </styleClass>
-                </Button>
             </VBox>
 
             <!-- CENTER CONTENT -->
@@ -127,13 +125,15 @@
 
     <!-- FOOTER -->
     <bottom>
-        <HBox alignment="CENTER_LEFT" spacing="10" styleClass="gx-footer">
-            <Label fx:id="statusText" styleClass="gx-text-muted"
-                   text="0 downloading  ·  0 preparing  ·  0 queued  ·  0 completed" />
-            <Region HBox.hgrow="ALWAYS" />
-            <Label fx:id="globalSpeed" alignment="CENTER_RIGHT" minWidth="112" prefWidth="112" maxWidth="112"
-                   styleClass="gx-text-muted" text="↓  0 KB/s" textOverrun="CLIP" />
-        </HBox>
+        <VBox styleClass="gx-footer-wrap">
+            <HBox alignment="CENTER_LEFT" spacing="10" styleClass="gx-footer">
+                <Label fx:id="statusText" styleClass="gx-text-muted"
+                       text="0 downloading  ·  0 preparing  ·  0 queued  ·  0 completed" />
+                <Region HBox.hgrow="ALWAYS" />
+                <Label fx:id="globalSpeed" alignment="CENTER_RIGHT" minWidth="112" prefWidth="112" maxWidth="112"
+                       styleClass="gx-text-muted" text="↓  0 KB/s" textOverrun="CLIP" />
+            </HBox>
+        </VBox>
     </bottom>
 
     <stylesheets>
