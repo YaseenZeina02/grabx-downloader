@@ -313,6 +313,12 @@
     -fx-padding: 2 6;
 }
 
+.gx-history-filter .combo-box-popup > .list-view {
+    -fx-min-width: 135px;
+    -fx-pref-width: 135px;
+    -fx-max-width: 135px;
+}
+
 /* Combo popup (rounded + consistent hover/selected) */
 .combo-box-popup > .list-view {
     -fx-background-color: #121826;
