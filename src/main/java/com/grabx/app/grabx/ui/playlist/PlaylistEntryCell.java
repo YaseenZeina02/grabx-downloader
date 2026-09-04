@@ -34,8 +34,14 @@ public final class PlaylistEntryCell extends ListCell<PlaylistEntry> {
         void titleHoverChanged(boolean hovering);
     }
 
+    private static final int MAX_THUMB_CACHE_ENTRIES = 128;
     private static final java.util.Map<String, Image> THUMB_CACHE =
-            new java.util.concurrent.ConcurrentHashMap<>();
+            java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<>(32, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(java.util.Map.Entry<String, Image> eldest) {
+                    return size() > MAX_THUMB_CACHE_ENTRIES;
+                }
+            });
     private static final java.util.Set<String> THUMB_INFLIGHT =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
 
@@ -338,7 +344,7 @@ public final class PlaylistEntryCell extends ListCell<PlaylistEntry> {
             showThumbnailLoading();
 
             if (tid != null && THUMB_INFLIGHT.add(tid)) {
-                Image img = new Image(item.getThumbUrl(), true);
+                Image img = new Image(item.getThumbUrl(), 192, 108, true, true, true);
                 THUMB_CACHE.put(tid, img);
 
                 img.progressProperty().addListener((o, oldP, newP) -> {

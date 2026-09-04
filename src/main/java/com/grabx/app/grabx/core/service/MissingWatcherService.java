@@ -45,7 +45,9 @@ public final class MissingWatcherService {
         fx(() -> {
             if (tl != null) return;
 
-            tl = new Timeline(new KeyFrame(Duration.seconds(2), ev -> {
+            // Disk checks are intentionally infrequent: missing files are not
+            // time-critical, and large histories should stay cheap while idle.
+            tl = new Timeline(new KeyFrame(Duration.seconds(8), ev -> {
                 try { refreshMissingFromDisk(); } catch (Exception ignored) {}
             }));
             tl.setCycleCount(Animation.INDEFINITE);

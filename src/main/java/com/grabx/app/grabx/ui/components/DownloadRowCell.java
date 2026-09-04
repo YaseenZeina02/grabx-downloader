@@ -24,8 +24,9 @@ import javafx.scene.shape.Rectangle;
 import javafx.util.Duration;
 
 import java.nio.file.Path;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.function.BiConsumer;
 
@@ -126,7 +127,15 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
     private javafx.beans.value.ChangeListener<Path> outputFileListener;
     private String lastThumbUrl;
 
-    private static final Map<String, Image> THUMB_IMAGE_CACHE = new ConcurrentHashMap<>();
+    private static final int MAX_THUMBNAILS_IN_MEMORY = 96;
+    private static final Map<String, Image> THUMB_IMAGE_CACHE = Collections.synchronizedMap(
+            new LinkedHashMap<>(32, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Image> eldest) {
+                    return size() > MAX_THUMBNAILS_IN_MEMORY;
+                }
+            }
+    );
 
     private final HBox actions = new HBox(8);
     private final VBox textBox = new VBox(6);
@@ -378,6 +387,7 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         if (stateListener == null) {
             stateListener = (obs, oldV, newV) -> Platform.runLater(() -> {
                 applyButtonsForState(newV);
+                updateProgressAnimation(newV);
                 updateSectionDivider(getItem());
                 try {
                     if (getListView() != null) getListView().refresh();
@@ -580,6 +590,12 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
             progressListener = (obs, oldV, newV) -> {
                 if (newV == null) return;
                 targetProgress = newV.doubleValue();
+                if (!shouldAnimateProgress(currentState())) {
+                    bar.progressProperty().unbind();
+                    bar.setProgress(targetProgress < 0
+                            ? ProgressIndicator.INDETERMINATE_PROGRESS
+                            : clamp01(targetProgress));
+                }
             };
         }
 
@@ -603,10 +619,25 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
             bar.setProgress(visualProgress);
         }
 
+        updateProgressAnimation(row.getState());
+    }
+
+    private void updateProgressAnimation(DownloadRow.State state) {
         try {
-            progressSmoother.start();
-        } catch (Exception ignored) {
-        }
+            if (shouldAnimateProgress(state)) {
+                progressSmoother.start();
+            } else {
+                progressSmoother.stop();
+                bar.progressProperty().unbind();
+                bar.setProgress(targetProgress < 0 ? 0 : clamp01(targetProgress));
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private static boolean shouldAnimateProgress(DownloadRow.State state) {
+        return state == DownloadRow.State.DOWNLOADING
+                || state == DownloadRow.State.QUEUED
+                || state == DownloadRow.State.PENDING;
     }
 
     private void unbindSmoothProgress() {
@@ -665,7 +696,9 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
                 return;
             }
 
-            Image image = new Image(url, true);
+            // Decode near the rendered Retina size instead of retaining the full
+            // source image for every history card.
+            Image image = new Image(url, 216, 132, true, true, true);
             THUMB_IMAGE_CACHE.put(url, image);
             thumb.setViewport(null);
             thumb.setImage(image);

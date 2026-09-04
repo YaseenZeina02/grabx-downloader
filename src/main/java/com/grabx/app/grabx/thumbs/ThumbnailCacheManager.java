@@ -6,12 +6,21 @@ import java.io.InputStream;
 import java.net.URL;
 import java.nio.file.*;
 import java.security.MessageDigest;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 public final class ThumbnailCacheManager {
 
-    private static final ConcurrentHashMap<String, Image> MEMORY_CACHE =
-            new ConcurrentHashMap<>();
+    private static final int MAX_MEMORY_CACHE_ENTRIES = 96;
+    private static final Map<String, Image> MEMORY_CACHE = Collections.synchronizedMap(
+            new LinkedHashMap<>(32, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Image> eldest) {
+                    return size() > MAX_MEMORY_CACHE_ENTRIES;
+                }
+            }
+    );
 
     private static final Path THUMBS_DIR = resolveThumbsDir();
 
@@ -37,7 +46,7 @@ public final class ThumbnailCacheManager {
         // disk
         Path p = getThumbPath(url);
         if (Files.exists(p)) {
-            Image img = new Image(p.toUri().toString(), true);
+            Image img = new Image(p.toUri().toString(), 216, 132, true, true, true);
             MEMORY_CACHE.put(url, img);
             return img;
         }

@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 
 /** Session cache and bounded executor for on-demand yt-dlp size probes. */
 public final class VideoSizeService {
+    private static final int MAX_CACHE_ENTRIES = 128;
     @FunctionalInterface
     interface CommandRunner {
         String run(List<String> arguments) throws Exception;
@@ -96,7 +97,13 @@ public final class VideoSizeService {
                     url.trim()
             ));
             Long bytes = parseFirstPositiveBytes(output);
-            if (bytes != null && bytes > 0) cache.put(key, bytes);
+            if (bytes != null && bytes > 0) {
+                if (cache.size() >= MAX_CACHE_ENTRIES && !cache.containsKey(key)) {
+                    String oldestAvailable = cache.keys().hasMoreElements() ? cache.keys().nextElement() : null;
+                    if (oldestAvailable != null) cache.remove(oldestAvailable);
+                }
+                cache.put(key, bytes);
+            }
             return bytes;
         } catch (Exception ignored) {
             return null;

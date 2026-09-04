@@ -29,6 +29,7 @@ import javafx.scene.control.ContentDisplay;
 import javafx.scene.control.ProgressIndicator;
 
 public final class AddLinkDialogService {
+    private static final int MAX_SIZE_CACHE_ENTRIES = 128;
 
     // ===================== API =====================
     private final AtomicLong sessionId = new AtomicLong();
@@ -463,7 +464,13 @@ private static javafx.scene.Node buildSuccessGraphic() {
                 startSizeLoading.run();
                 new Thread(() -> {
                     Long bytes = probeContentLength(u);
-                    if (bytes != null && bytes > 0) SIZE_CACHE.put(key, bytes);
+                    if (bytes != null && bytes > 0) {
+                        if (SIZE_CACHE.size() >= MAX_SIZE_CACHE_ENTRIES && !SIZE_CACHE.containsKey(key)) {
+                            var iterator = SIZE_CACHE.keySet().iterator();
+                            if (iterator.hasNext()) SIZE_CACHE.remove(iterator.next());
+                        }
+                        SIZE_CACHE.put(key, bytes);
+                    }
                     Platform.runLater(() -> {
                         if (!dialogAlive[0]) return;
                         if (mySession != sessionId.get()) return;
