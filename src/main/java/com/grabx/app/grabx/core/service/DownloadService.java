@@ -19,7 +19,7 @@ import java.util.function.Predicate;
  * ✅ Performance:
  * - قائمة واحدة backing (ObservableList)
  * - FilteredList واحد
- * - SortedList واحد بتComparator ثابت orderIndex (عشان الكروت ما تتحرك لما الحالة تتغير)
+ * - قائمة واحدة للعناصر النشطة أولاً، ثم المنتهية، مع ثبات الترتيب داخل كل مجموعة
  *
  * ✅ API بسيطة:
  * - items(): تضيف/تشيل DownloadRow
@@ -36,9 +36,10 @@ public final class DownloadService {
     private volatile String sidebarKey = "ALL";
     private volatile String searchQuery = "";
 
-    // ✅ ترتيب ثابت: لا يعتمد على state ولا progress
+    // Active rows stay together at the top. orderIndex keeps their positions stable
+    // while they move between queued/downloading/paused states.
     private volatile Comparator<DownloadRow> comparator =
-            Comparator.comparingLong(r -> r.orderIndex);
+            DownloadService::compareActiveFirst;
 
     public DownloadService() {
         this(FXCollections.observableArrayList());
@@ -112,9 +113,31 @@ public final class DownloadService {
     public void refilter() {
         Predicate<? super DownloadRow> p = filtered.getPredicate();
         filtered.setPredicate(p);
+        // A SortedList does not observe properties inside its rows. Re-applying the
+        // comparator makes a terminal state change move the row below active work.
+        sorted.setComparator(null);
+        sorted.setComparator(comparator);
     }
 
     // ===================== Internals =====================
+
+    private static int compareActiveFirst(DownloadRow first, DownloadRow second) {
+        int byGroup = Integer.compare(groupRank(first), groupRank(second));
+        if (byGroup != 0) return byGroup;
+        return Long.compare(first.orderIndex, second.orderIndex);
+    }
+
+    private static int groupRank(DownloadRow row) {
+        DownloadRow.State state = row == null ? null : row.getState();
+        return isActive(state) ? 0 : 1;
+    }
+
+    public static boolean isActive(DownloadRow.State state) {
+        return state == DownloadRow.State.QUEUED
+                || state == DownloadRow.State.PENDING
+                || state == DownloadRow.State.DOWNLOADING
+                || state == DownloadRow.State.PAUSED;
+    }
 
     private void applyCombinedFilters() {
         filtered.setPredicate(buildPredicate(sidebarKey, searchQuery));

@@ -1,6 +1,7 @@
 package com.grabx.app.grabx.ui.components;
 
 import com.grabx.app.grabx.core.model.DownloadRow;
+import com.grabx.app.grabx.core.service.DownloadService;
 import javafx.animation.Animation;
 import javafx.animation.AnimationTimer;
 import javafx.animation.FadeTransition;
@@ -132,6 +133,8 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
     private final HBox headerRow = new HBox(12);
     private final HBox footerRow = new HBox(10);
     private final VBox card = new VBox(10);
+    private final Region sectionDivider = new Region();
+    private final VBox cellContent = new VBox();
 
     private javafx.beans.value.ChangeListener<DownloadRow.State> stateListener;
 
@@ -270,6 +273,12 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         card.maxWidthProperty().bind(Bindings.max(0, widthProperty().subtract(2)));
         card.getChildren().addAll(headerRow, bar, footerRow);
 
+        sectionDivider.getStyleClass().add("gx-download-section-divider");
+        sectionDivider.setMaxWidth(Double.MAX_VALUE);
+        sectionDivider.setVisible(false);
+        sectionDivider.setManaged(false);
+        cellContent.getChildren().addAll(sectionDivider, card);
+
         pauseBtn.setOnAction(e -> fire(onPause));
         resumeBtn.setOnAction(e -> fire(onResume));
         cancelBtn.setOnAction(e -> fire(onCancel));
@@ -404,13 +413,29 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         }
 
         applyVisibilityRules(item);
+        updateSectionDivider(item);
         clearBtn.setVisible(true);
         clearBtn.setManaged(true);
 
         setPadding(new Insets(10, 0, 10, 0));
 
         setText(null);
-        setGraphic(card);
+        setGraphic(cellContent);
+    }
+
+    private void updateSectionDivider(DownloadRow item) {
+        boolean show = false;
+        try {
+            int index = getIndex();
+            if (!DownloadService.isActive(item.getState()) && index > 0 && getListView() != null) {
+                DownloadRow previous = getListView().getItems().get(index - 1);
+                show = previous != null && DownloadService.isActive(previous.getState());
+            }
+        } catch (Exception ignored) {
+            show = false;
+        }
+        sectionDivider.setVisible(show);
+        sectionDivider.setManaged(show);
     }
 
     private void fire(Consumer<DownloadRow> action) {
