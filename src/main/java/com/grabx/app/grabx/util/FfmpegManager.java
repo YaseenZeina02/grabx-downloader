@@ -70,9 +70,11 @@ public final class FfmpegManager {
     }
 
     public static void prewarmAsync() {
-        new Thread(() -> {
+        Thread worker = new Thread(() -> {
             try { ensureAvailable(); } catch (Exception ignored) {}
-        }, "grabx-ffmpeg-prewarm").start();
+        }, "grabx-ffmpeg-prewarm");
+        worker.setDaemon(true);
+        worker.start();
     }
 
     public static String getPersistedPath() {

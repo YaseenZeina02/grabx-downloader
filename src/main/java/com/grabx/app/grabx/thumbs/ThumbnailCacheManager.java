@@ -54,7 +54,7 @@ public final class ThumbnailCacheManager {
         Path out = getThumbPath(url);
         if (Files.exists(out)) return;
 
-        new Thread(() -> {
+        Thread worker = new Thread(() -> {
             try {
                 Files.createDirectories(out.getParent());
 
@@ -65,7 +65,9 @@ public final class ThumbnailCacheManager {
                 if (onDone != null) onDone.run();
 
             } catch (Exception ignored) {}
-        }, "thumb-cache").start();
+        }, "thumb-cache");
+        worker.setDaemon(true);
+        worker.start();
     }
 
     /* ===============================

@@ -105,6 +105,42 @@ public class HistoryService {
         } catch (Exception ignored) {}
     }
 
+    /** Writes the current FX-thread snapshot immediately during application shutdown. */
+    public void saveNow() {
+        try {
+            ensureHistoryDir();
+            List<DownloadRow> snapshot = downloadItems == null
+                    ? List.of()
+                    : new ArrayList<>(downloadItems);
+            if (snapshot.isEmpty()) return;
+
+            List<String> lines = new ArrayList<>();
+            for (DownloadRow row : snapshot) {
+                if (row == null || row.url == null || row.url.isBlank()) continue;
+                String state = "QUEUED";
+                try { state = String.valueOf(row.state.get()); } catch (Exception ignored) {}
+                String outputPath = "";
+                try {
+                    Path output = row.outputFile == null ? null : row.outputFile.get();
+                    if (output != null) outputPath = output.toAbsolutePath().normalize().toString();
+                } catch (Exception ignored) {}
+                long updated = row.completedAt > 0 ? row.completedAt : System.currentTimeMillis();
+                lines.add(
+                        esc(row.url) + "\t" + esc(safeGet(row.title)) + "\t"
+                                + esc(row.folder) + "\t" + esc(row.mode) + "\t"
+                                + esc(row.quality) + "\t" + esc(state) + "\t"
+                                + esc(outputPath) + "\t" + updated
+                );
+            }
+            if (!lines.isEmpty()) {
+                Files.write(DOWNLOAD_HISTORY_FILE, lines, StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
+                        StandardOpenOption.WRITE);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
 
     public HistoryService(
             ObservableList<DownloadRow> downloadItems,
@@ -203,7 +239,7 @@ public class HistoryService {
     }
 
     private void saveDownloadHistoryAsync() {
-        new Thread(() -> {
+        Thread saveThread = new Thread(() -> {
             try {
                 ensureHistoryDir();
 
@@ -274,7 +310,9 @@ public class HistoryService {
                 );
 
             } catch (Exception ignored) {}
-        }, "grabx-save-history").start();
+        }, "grabx-save-history");
+        saveThread.setDaemon(true);
+        saveThread.start();
     }
 
     private void loadDownloadHistoryOnce() {
@@ -397,7 +435,7 @@ public class HistoryService {
                                     String tu = thumbFromUrl.apply(rr.url);
                                     if (tu == null || tu.isBlank()) continue;
 
-                                    new Thread(() -> {
+                                    Thread warmThread = new Thread(() -> {
                                         try {
                                             ThumbnailCacheManager.fetchAndCacheBlocking(rr.url, tu);
                                             Path after = ThumbnailCacheManager.getCachedPath(rr.url);
@@ -408,7 +446,9 @@ public class HistoryService {
                                                 });
                                             }
                                         } catch (Exception ignored) {}
-                                    }, "grabx-warm-thumb").start();
+                                    }, "grabx-warm-thumb");
+                                    warmThread.setDaemon(true);
+                                    warmThread.start();
 
                                 } catch (Exception ignored) {}
                             }

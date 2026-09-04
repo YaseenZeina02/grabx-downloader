@@ -37,6 +37,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.grabx.app.grabx.ui.components.ScrollbarAutoHide;
 import com.grabx.app.grabx.ui.sidebar.SidebarItem;
@@ -119,6 +120,7 @@ public class MainController {
     private GlobalSpeedService globalSpeedService;
     private Timeline searchAnimation;
     private boolean searchExpanded;
+    private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
     private SVGPath searchToggleIcon;
     private static final String SEARCH_ICON_PATH =
             "M4,9.5 A5.5,5.5 0 1,0 15,9.5 A5.5,5.5 0 1,0 4,9.5 M13.5,13.5 L20,20";
@@ -471,6 +473,21 @@ public class MainController {
     @FXML
     public void onClearAll(ActionEvent actionEvent) {
         if (bulkDownloadActionsService != null) bulkDownloadActionsService.clearAll();
+    }
+
+    public void shutdown() {
+        if (!shuttingDown.compareAndSet(false, true)) return;
+        try {
+            if (downloadStateCoordinator != null) downloadStateCoordinator.pauseAll();
+        } catch (Exception ignored) {}
+        try { historyService.saveNow(); } catch (Exception ignored) {}
+        try {
+            if (downloadMonitoringService != null) downloadMonitoringService.stop();
+        } catch (Exception ignored) {}
+        try { playlistProbeScheduler.shutdown(); } catch (Exception ignored) {}
+        try { videoSizeService.shutdown(); } catch (Exception ignored) {}
+        try { if (searchAnimation != null) searchAnimation.stop(); } catch (Exception ignored) {}
+        try { UI_DELAY_EXEC.shutdownNow(); } catch (Exception ignored) {}
     }
     private static final ScheduledExecutorService UI_DELAY_EXEC = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "ui-delay");

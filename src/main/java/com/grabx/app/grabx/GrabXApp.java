@@ -11,6 +11,7 @@ import java.io.IOException;
 
 public class GrabXApp extends Application {
     private final SingleInstanceGuard singleInstance = SingleInstanceGuard.forCurrentUser();
+    private MainController controller;
 
     @Override
     public void start(Stage stage) throws IOException {
@@ -21,6 +22,7 @@ public class GrabXApp extends Application {
 
         FXMLLoader fxmlLoader = new FXMLLoader(GrabXApp.class.getResource("main.fxml"));
         Scene scene = new Scene(fxmlLoader.load(), 1280, 820);
+        controller = fxmlLoader.getController();
 
         stage.setTitle("GrabX");
         stage.setMinWidth(900);
@@ -28,13 +30,15 @@ public class GrabXApp extends Application {
         stage.setScene(scene);
 
         stage.setOnCloseRequest(e -> {
-            javafx.application.Platform.exit();
+            if (controller != null) controller.shutdown();
+            Platform.exit();
         });
         stage.show();
     }
 
     @Override
     public void stop() {
+        if (controller != null) controller.shutdown();
         singleInstance.close();
     }
 }

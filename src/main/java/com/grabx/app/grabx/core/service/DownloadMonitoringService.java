@@ -66,6 +66,13 @@ public final class DownloadMonitoringService {
         }
     }
 
+    public void stop() {
+        safeRun(missingWatcher == null ? null : missingWatcher::stop);
+        safeRun(clipboardWatcher == null ? null : clipboardWatcher::stop);
+        missingWatcher = null;
+        clipboardWatcher = null;
+    }
+
     void observeDownloads() {
         if (items == null || historyObserved) return;
         historyObserved = true;

@@ -46,6 +46,17 @@ public final class ClipboardService {
         Platform.runLater(this::tick);
     }
 
+    public void stop() {
+        try {
+            if (clipboardPollTimeline != null) clipboardPollTimeline.stop();
+        } catch (Exception ignored) {
+        } finally {
+            clipboardPollTimeline = null;
+            addLinkOpenScheduled.set(false);
+            if (root != null) root.getProperties().remove("gx-clip-listener");
+        }
+    }
+
     private void tick() {
         String clip = readClipboardTextSafe();
         if (clip.equals(lastClipboardText)) return;

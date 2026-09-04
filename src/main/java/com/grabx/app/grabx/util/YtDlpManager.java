@@ -156,9 +156,11 @@ public final class YtDlpManager {
 
     /** Optional: call this at app startup to pre-warm yt-dlp without blocking UI. */
     public static void prewarmAsync() {
-        new Thread(() -> {
+        Thread worker = new Thread(() -> {
             try { ensureAvailable(); } catch (Exception ignored) {}
-        }, "grabx-prewarm-ytdlp").start();
+        }, "grabx-prewarm-ytdlp");
+        worker.setDaemon(true);
+        worker.start();
     }
 
     /** Convenience: read the persisted path for Settings UI. */

@@ -81,6 +81,13 @@ public final class PlaylistProbeScheduler {
         pending.entrySet().removeIf(entry -> entry.getValue().session == session);
     }
 
+    public void shutdown() {
+        activeSession = 0L;
+        pending.clear();
+        executor.getQueue().clear();
+        executor.shutdownNow();
+    }
+
     public boolean request(
             long session,
             String videoId,

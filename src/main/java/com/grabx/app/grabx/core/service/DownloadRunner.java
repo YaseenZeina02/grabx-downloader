@@ -127,7 +127,7 @@ public final class DownloadRunner {
         final String mode = row.mode;
         final String quality = row.quality;
 
-        new Thread(() -> {
+        Thread downloadThread = new Thread(() -> {
             Process p = null;
             final String[] lastError = new String[]{null};
 
@@ -717,7 +717,9 @@ public final class DownloadRunner {
                     saveHistory();
                 });
             }
-        }, "yt-dlp-download").start();
+        }, "yt-dlp-download");
+        downloadThread.setDaemon(true);
+        downloadThread.start();
 
     }
 

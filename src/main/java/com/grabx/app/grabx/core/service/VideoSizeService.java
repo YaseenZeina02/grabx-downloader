@@ -65,6 +65,12 @@ public final class VideoSizeService {
         return future;
     }
 
+    public void shutdown() {
+        inFlight.values().forEach(future -> future.cancel(true));
+        inFlight.clear();
+        executor.shutdownNow();
+    }
+
     static Long parseFirstPositiveBytes(String output) {
         if (output == null) return null;
         for (String line : output.split("\\R")) {
