@@ -278,6 +278,10 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         sectionDivider.setVisible(false);
         sectionDivider.setManaged(false);
         cellContent.getChildren().addAll(sectionDivider, card);
+        indexProperty().addListener((observable, oldIndex, newIndex) -> {
+            DownloadRow current = getItem();
+            if (current != null && !isEmpty()) updateSectionDivider(current);
+        });
 
         pauseBtn.setOnAction(e -> fire(onPause));
         resumeBtn.setOnAction(e -> fire(onResume));
