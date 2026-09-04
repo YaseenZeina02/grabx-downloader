@@ -71,6 +71,7 @@ public final class GlobalSpeedService {
 
     static String formatSummary(Iterable<DownloadRow> rows) {
         int active = 0;
+        int pending = 0;
         int queued = 0;
         int completed = 0;
         if (rows != null) {
@@ -78,11 +79,13 @@ public final class GlobalSpeedService {
                 if (row == null) continue;
                 DownloadRow.State state = row.getState();
                 if (state == DownloadRow.State.DOWNLOADING) active++;
-                else if (state == DownloadRow.State.QUEUED || state == DownloadRow.State.PENDING) queued++;
+                else if (state == DownloadRow.State.PENDING) pending++;
+                else if (state == DownloadRow.State.QUEUED) queued++;
                 else if (state == DownloadRow.State.COMPLETED) completed++;
             }
         }
-        return active + " active  ·  " + queued + " queued  ·  " + completed + " completed";
+        return active + " active  ·  " + pending + " pending  ·  "
+                + queued + " queued  ·  " + completed + " completed";
     }
 
     static double parseBytesPerSecond(String value) {

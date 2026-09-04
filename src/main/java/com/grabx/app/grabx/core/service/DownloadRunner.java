@@ -113,7 +113,7 @@ public final class DownloadRunner {
 
         // UI immediately: preparing (indeterminate)
         Platform.runLater(() -> {
-            row.setState(DownloadRow.State.DOWNLOADING);
+            row.setState(DownloadRow.State.PENDING);
             row.status.set("Preparing");
             row.size.set("");
             row.speed.set("");
