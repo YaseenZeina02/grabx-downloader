@@ -41,6 +41,29 @@ class AddLinkFlowServiceTest {
         assertEquals("https://example.com/playlist", shown.getLast());
     }
 
+    @Test
+    void forwardsTheBrowserPreferredAction() {
+        AtomicReference<String> action = new AtomicReference<>();
+        AddLinkFlowService service = new AddLinkFlowService(
+                new AddLinkFlowService.DialogGateway() {
+                    @Override public boolean isOpen() { return false; }
+                    @Override public void show(String prefillUrl) { }
+                    @Override public void show(String prefillUrl, String preferredAction) {
+                        action.set(preferredAction);
+                    }
+                },
+                value -> value != null && value.startsWith("http"),
+                () -> "",
+                (task, delay) -> task.run(),
+                Runnable::run,
+                text -> { }
+        );
+
+        service.openOrUpdate("https://example.com/video", "audio");
+
+        assertEquals("audio", action.get());
+    }
+
     private static AddLinkFlowService service(
             List<String> shown,
             java.util.function.Supplier<String> clipboard,

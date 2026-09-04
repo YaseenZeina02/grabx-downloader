@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GrabX</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="header">
+      <span class="brand-mark">GX</span>
+      <span class="heading">
+        <strong>GrabX</strong>
+        <small>Download Assistant</small>
+      </span>
+      <span id="count" class="count">0</span>
+    </header>
+
+    <section id="loading" class="state">
+      <span class="scanner"></span>
+      <strong>Scanning this page</strong>
+      <small>Looking for media and downloadable files…</small>
+    </section>
+
+    <section id="empty" class="state hidden">
+      <span class="empty-icon" aria-hidden="true">↓</span>
+      <strong>No direct media found</strong>
+      <small>GrabX can still analyze the page itself.</small>
+      <button id="sendPage" class="primary wide">Analyze page in GrabX</button>
+    </section>
+
+    <section id="results" class="results hidden" aria-live="polite"></section>
+    <p id="notice" class="notice hidden" role="status"></p>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+# GrabX browser extension
+
+This folder contains the first Chromium vertical slice of the GrabX browser bridge.
+
+## Current capabilities
+
+- Scans the active tab only after the user clicks the extension.
+- Detects HTML5 video/audio sources, Open Graph media, downloadable anchors, and common direct file links.
+- Falls back to sending the page URL so GrabX/yt-dlp can analyze sites that hide media behind `blob:` URLs.
+- Sends versioned, validated JSON through Chrome Native Messaging.
+- Stores only the latest 20 non-sensitive capture summaries. It does not collect cookies or browsing history.
+
+## Development installation
+
+1. Open `chrome://extensions`, enable **Developer mode**, and choose **Load unpacked**.
+2. Select `browser-extension/chromium` and copy the extension ID Chrome assigns.
+3. Build/install the GrabX distribution so its `grabx-native-host` launcher has an absolute executable path.
+4. Run `native-host/install-macos.sh EXTENSION_ID /absolute/path/to/grabx-native-host`.
+5. Restart Chrome after changing a native-host manifest.
+
+The native host manifest intentionally requires an exact extension ID; wildcards are not permitted by Chrome.
+
+## Security boundary
+
+Every message is validated again in the extension service worker and in the Java native host. Only HTTP(S)
+URLs are accepted. Browser cookies and authorization headers are deliberately excluded from this first slice.

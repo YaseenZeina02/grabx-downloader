@@ -138,7 +138,11 @@ private static javafx.scene.Node buildSuccessGraphic() {
 
     /** call this from MainController */
     public void show(String prefillUrl) {
-        showAddLinkDialog(prefillUrl);
+        showAddLinkDialog(prefillUrl, "ask");
+    }
+
+    public void show(String prefillUrl, String preferredAction) {
+        showAddLinkDialog(prefillUrl, preferredAction);
     }
 
     public boolean isOpen() {
@@ -152,6 +156,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
         } catch (Exception ignored) {}
         addLinkDialogOpen = false;
         activeAddLinkUrlField = null;
+        activeAddLinkModeCombo = null;
         activeAddLinkDialog = null;
     }
 
@@ -167,6 +172,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
 
     private volatile boolean addLinkDialogOpen = false;
     private volatile TextField activeAddLinkUrlField;
+    private volatile ComboBox<String> activeAddLinkModeCombo;
     private volatile Dialog<ButtonType> activeAddLinkDialog;
 
     // cache for sizes
@@ -194,20 +200,21 @@ private static javafx.scene.Node buildSuccessGraphic() {
             if (mySession != sessionId.get()) {
                 return;
             }
-            Platform.runLater(() -> showAddLinkDialog(prefillUrl));
+            Platform.runLater(() -> showAddLinkDialog(prefillUrl, "ask"));
             return;
         }
-        UI_DELAY_EXEC.schedule(() -> Platform.runLater(() -> showAddLinkDialog(prefillUrl)),
+        UI_DELAY_EXEC.schedule(() -> Platform.runLater(() -> showAddLinkDialog(prefillUrl, "ask")),
                 80, TimeUnit.MILLISECONDS);
     }
 
-    private void showAddLinkDialog(String prefillUrl) {
+    private void showAddLinkDialog(String prefillUrl, String preferredAction) {
         if (addLinkDialogOpen) {
             if (prefillUrl != null && urlAnalysisService.isHttpUrl(prefillUrl) && activeAddLinkUrlField != null) {
                 activeAddLinkUrlField.setText(prefillUrl.trim());
                 activeAddLinkUrlField.positionCaret(activeAddLinkUrlField.getText().length());
                 Platform.runLater(activeAddLinkUrlField::requestFocus);
             }
+            applyPreferredAction(activeAddLinkModeCombo, preferredAction);
             return;
         }
 
@@ -284,6 +291,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
         ComboBox<String> modeCombo = new ComboBox<>();
         modeCombo.getItems().setAll(cfg.MODE_VIDEO, cfg.MODE_AUDIO);
         modeCombo.getSelectionModel().select(cfg.MODE_VIDEO);
+        activeAddLinkModeCombo = modeCombo;
         modeCombo.getStyleClass().addAll("gx-combo", "gx-playlist-quality");
         modeCombo.setMinWidth(420);
         modeCombo.setPrefWidth(420);
@@ -639,6 +647,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
         pane.setMaxWidth(760);
         dialog.setResizable(false);
 
+        applyPreferredAction(modeCombo, preferredAction);
         if (prefillUrl != null && !prefillUrl.isBlank()) urlField.setText(prefillUrl.trim());
 
         dialog.setOnShown(ev -> Platform.runLater(() -> {
@@ -653,6 +662,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
             sizeReqId[0]++;
             addLinkDialogOpen = false;
             activeAddLinkUrlField = null;
+            activeAddLinkModeCombo = null;
             activeAddLinkDialog = null;
         });
 
@@ -681,6 +691,15 @@ private static javafx.scene.Node buildSuccessGraphic() {
         });
 
         dialog.show();
+    }
+
+    private void applyPreferredAction(ComboBox<String> modeCombo, String preferredAction) {
+        if (modeCombo == null || preferredAction == null) return;
+        if ("audio".equalsIgnoreCase(preferredAction)) {
+            modeCombo.getSelectionModel().select(cfg.MODE_AUDIO);
+        } else if ("video".equalsIgnoreCase(preferredAction)) {
+            modeCombo.getSelectionModel().select(cfg.MODE_VIDEO);
+        }
     }
 
     // ===================== logic helpers =====================

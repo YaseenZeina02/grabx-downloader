@@ -1,3 +1,5 @@
+import org.gradle.jvm.application.tasks.CreateStartScripts
+
 plugins {
     java
     application
@@ -41,4 +43,21 @@ tasks.test {
 
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
+}
+
+val nativeHostStartScripts by tasks.registering(CreateStartScripts::class) {
+    mainClass.set("com.grabx.app.grabx.browser.BrowserNativeHostMain")
+    applicationName = "grabx-native-host"
+    outputDir = layout.buildDirectory.dir("native-host-start-scripts").get().asFile
+    classpath = files(tasks.named("jar"), configurations.runtimeClasspath)
+}
+
+distributions {
+    named("main") {
+        contents {
+            from(nativeHostStartScripts) {
+                into("bin")
+            }
+        }
+    }
 }

@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "GrabX Download Assistant",
+  "version": "0.1.0",
+  "description": "Detect media and files on the current page and send them securely to GrabX.",
+  "permissions": [
+    "activeTab",
+    "nativeMessaging",
+    "scripting",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_title": "Download with GrabX",
+    "default_popup": "popup.html"
+  }
+}

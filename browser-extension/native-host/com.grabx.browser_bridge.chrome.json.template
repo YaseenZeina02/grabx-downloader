@@ -1,0 +1,9 @@
+{
+  "name": "com.grabx.browser_bridge",
+  "description": "Securely sends browser downloads to GrabX",
+  "path": "__NATIVE_HOST_PATH__",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://__EXTENSION_ID__/"
+  ]
+}

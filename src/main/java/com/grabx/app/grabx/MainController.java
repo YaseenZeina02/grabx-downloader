@@ -31,6 +31,8 @@ import com.grabx.app.grabx.core.service.VideoSizeService;
 import com.grabx.app.grabx.core.service.PlaylistProbeScheduler;
 import com.grabx.app.grabx.core.model.probe.VideoProbeService;
 import com.grabx.app.grabx.core.service.HoverTooltipService;
+import com.grabx.app.grabx.browser.BrowserBridgeService;
+import com.grabx.app.grabx.browser.BrowserCapture;
 
 import java.util.List;
 import java.util.Map;
@@ -122,6 +124,7 @@ public class MainController {
     private SidebarService sidebarService;
     private DownloadMonitoringService downloadMonitoringService;
     private GlobalSpeedService globalSpeedService;
+    private BrowserBridgeService browserBridgeService;
     private Timeline searchAnimation;
     private boolean searchExpanded;
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
@@ -222,6 +225,7 @@ public class MainController {
         historyService.loadOnce();
         initializePlaylistServices();
         initializeAddLink();
+        initializeBrowserBridge();
         initializeMonitoring();
     }
 
@@ -663,6 +667,30 @@ public class MainController {
         downloadMonitoringService.start();
     }
 
+    private void initializeBrowserBridge() {
+        browserBridgeService = new BrowserBridgeService(capture ->
+                Platform.runLater(() -> handleBrowserCapture(capture)));
+        browserBridgeService.start();
+    }
+
+    private void handleBrowserCapture(BrowserCapture capture) {
+        if (capture == null) return;
+        try {
+            if (root != null && root.getScene() != null
+                    && root.getScene().getWindow() instanceof javafx.stage.Stage stage) {
+                if (compactView) exitCompactView();
+                stage.show();
+                stage.toFront();
+                stage.requestFocus();
+            }
+            if (statusText != null) statusText.setText("Received from browser: " + capture.title());
+            if (addLinkFlowService != null) {
+                addLinkFlowService.openOrUpdate(capture.effectiveUrl(), capture.action());
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
     private void initializePlaylistServices() {
         PlaylistServicesFactory.Runtime playlistRuntime = PlaylistServicesFactory.create(
                 playlistDialogService::show,
@@ -731,6 +759,7 @@ public class MainController {
         try {
             if (downloadMonitoringService != null) downloadMonitoringService.stop();
         } catch (Exception ignored) {}
+        try { if (browserBridgeService != null) browserBridgeService.close(); } catch (Exception ignored) {}
         try { playlistProbeScheduler.shutdown(); } catch (Exception ignored) {}
         try { videoSizeService.shutdown(); } catch (Exception ignored) {}
         try { if (searchAnimation != null) searchAnimation.stop(); } catch (Exception ignored) {}

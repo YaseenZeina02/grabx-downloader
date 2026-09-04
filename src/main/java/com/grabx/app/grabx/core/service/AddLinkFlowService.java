@@ -11,6 +11,10 @@ public final class AddLinkFlowService {
     public interface DialogGateway {
         boolean isOpen();
         void show(String prefillUrl);
+
+        default void show(String prefillUrl, String preferredAction) {
+            show(prefillUrl);
+        }
     }
 
     private static final long OPEN_DELAY_MILLIS = 80;
@@ -59,15 +63,19 @@ public final class AddLinkFlowService {
     }
 
     public void openOrUpdate(String prefillUrl) {
+        openOrUpdate(prefillUrl, "ask");
+    }
+
+    public void openOrUpdate(String prefillUrl, String preferredAction) {
         String normalizedUrl = normalizeUrl(prefillUrl);
         if (dialog != null && dialog.isOpen()) {
-            dialog.show(normalizedUrl);
+            dialog.show(normalizedUrl, preferredAction);
             return;
         }
         if (!openScheduled.compareAndSet(false, true)) return;
         schedule(() -> uiExecutor.accept(() -> {
             try {
-                show(normalizedUrl);
+                if (dialog != null) dialog.show(normalizedUrl, preferredAction);
             } finally {
                 openScheduled.set(false);
             }
