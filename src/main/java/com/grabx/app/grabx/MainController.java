@@ -63,6 +63,8 @@ public class MainController {
             new FileManagerService(this::showMissingFileNotice);
     @FXML
     private TextField searchField;
+    @FXML
+    private ComboBox<String> historyFilter;
 
     @FXML
     private Label statusText;
@@ -189,6 +191,7 @@ public class MainController {
             if (root != null) root.requestFocus();
         });
         AddLinkDialogFactory.installClickToDefocus(root);
+        initializeHistoryFilter();
 
         try {
             if (hoverTooltipService == null && root != null) {
@@ -202,6 +205,15 @@ public class MainController {
                 cancelAllBtn, clearAllButton, settingsButton
         );
         return iconButtons;
+    }
+
+    private void initializeHistoryFilter() {
+        if (historyFilter == null) return;
+        historyFilter.getItems().setAll("Newest", "Oldest", "Last 5", "Last 10");
+        historyFilter.getSelectionModel().select("Newest");
+        historyFilter.valueProperty().addListener((observable, oldValue, newValue) ->
+                downloadService.setHistoryView(newValue));
+        downloadService.setHistoryView("Newest");
     }
 
     private void initializeSidebar() {

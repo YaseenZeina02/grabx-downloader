@@ -307,6 +307,12 @@
     -fx-background-color: transparent;
 }
 
+.gx-history-filter {
+    -fx-background-radius: 10;
+    -fx-border-radius: 10;
+    -fx-padding: 2 6;
+}
+
 /* Combo popup (rounded + consistent hover/selected) */
 .combo-box-popup > .list-view {
     -fx-background-color: #121826;

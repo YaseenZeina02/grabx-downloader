@@ -13,6 +13,8 @@ import java.util.IdentityHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.function.Predicate;
 
 /**
@@ -41,6 +43,7 @@ public final class DownloadService {
 
     private volatile String sidebarKey = "ALL";
     private volatile String searchQuery = "";
+    private volatile HistoryView historyView = HistoryView.NEWEST;
 
     // Active rows stay together at the top. orderIndex keeps their positions stable
     // while they move between queued/downloading/paused states.
@@ -58,13 +61,20 @@ public final class DownloadService {
         this.sorted.setComparator(this.comparator);
         for (DownloadRow row : this.items) observeState(row);
         this.items.addListener((ListChangeListener<DownloadRow>) change -> {
+            boolean changed = false;
             while (change.next()) {
                 if (change.wasRemoved()) {
                     for (DownloadRow row : change.getRemoved()) stopObservingState(row);
+                    changed = true;
                 }
                 if (change.wasAdded()) {
                     for (DownloadRow row : change.getAddedSubList()) observeState(row);
+                    changed = true;
                 }
+            }
+            if (changed) {
+                applyCombinedFilters();
+                resort();
             }
         });
         // predicate initially
@@ -117,6 +127,13 @@ public final class DownloadService {
         applyCombinedFilters();
     }
 
+    public void setHistoryView(String value) {
+        this.historyView = HistoryView.fromLabel(value);
+        this.comparator = this::compareForHistoryView;
+        applyCombinedFilters();
+        resort();
+    }
+
     /**
      * Optional: set a custom predicate that will be AND'ed with built-in predicate.
      * Useful لو بدك تضيف فلترة إضافية لاحقاً (مثلاً by host/domain).
@@ -142,7 +159,10 @@ public final class DownloadService {
 
     private void observeState(DownloadRow row) {
         if (row == null || row.stateProperty() == null || stateListeners.containsKey(row)) return;
-        ChangeListener<DownloadRow.State> listener = (observable, oldState, newState) -> resort();
+        ChangeListener<DownloadRow.State> listener = (observable, oldState, newState) -> {
+            applyCombinedFilters();
+            resort();
+        };
         stateListeners.put(row, listener);
         row.stateProperty().addListener(listener);
     }
@@ -161,6 +181,22 @@ public final class DownloadService {
         return Long.compare(first.orderIndex, second.orderIndex);
     }
 
+    private int compareForHistoryView(DownloadRow first, DownloadRow second) {
+        int byGroup = Integer.compare(groupRank(first), groupRank(second));
+        if (byGroup != 0) return byGroup;
+        if (isActive(first == null ? null : first.getState())) {
+            return Long.compare(first.orderIndex, second.orderIndex);
+        }
+        int byDate = Long.compare(historyTime(first), historyTime(second));
+        if (historyView != HistoryView.OLDEST) byDate = -byDate;
+        return byDate != 0 ? byDate : Long.compare(first.orderIndex, second.orderIndex);
+    }
+
+    private static long historyTime(DownloadRow row) {
+        if (row == null) return Long.MIN_VALUE;
+        return row.completedAt > 0 ? row.completedAt : row.orderIndex;
+    }
+
     private static int groupRank(DownloadRow row) {
         DownloadRow.State state = row == null ? null : row.getState();
         return isActive(state) ? 0 : 1;
@@ -174,7 +210,46 @@ public final class DownloadService {
     }
 
     private void applyCombinedFilters() {
-        filtered.setPredicate(buildPredicate(sidebarKey, searchQuery));
+        Predicate<DownloadRow> base = buildPredicate(sidebarKey, searchQuery);
+        int limit = historyView.limit();
+        if (limit <= 0) {
+            filtered.setPredicate(base);
+            return;
+        }
+
+        Set<DownloadRow> newestTerminalRows = items.stream()
+                .filter(Objects::nonNull)
+                .filter(row -> !isActive(row.getState()))
+                .filter(base)
+                .sorted(Comparator.comparingLong(DownloadService::historyTime).reversed())
+                .limit(limit)
+                .collect(Collectors.toSet());
+        filtered.setPredicate(row -> base.test(row)
+                && (isActive(row.getState()) || newestTerminalRows.contains(row)));
+    }
+
+    private enum HistoryView {
+        NEWEST(0), OLDEST(0), LAST_5(5), LAST_10(10);
+
+        private final int limit;
+
+        HistoryView(int limit) {
+            this.limit = limit;
+        }
+
+        int limit() {
+            return limit;
+        }
+
+        static HistoryView fromLabel(String label) {
+            if (label == null) return NEWEST;
+            return switch (label.trim().toLowerCase(Locale.ROOT)) {
+                case "oldest" -> OLDEST;
+                case "last 5" -> LAST_5;
+                case "last 10" -> LAST_10;
+                default -> NEWEST;
+            };
+        }
     }
 
     private static String normalizeKey(String key) {

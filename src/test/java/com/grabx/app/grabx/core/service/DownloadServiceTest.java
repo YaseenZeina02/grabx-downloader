@@ -36,6 +36,41 @@ class DownloadServiceTest {
         assertEquals(java.util.List.of(second, first), java.util.List.copyOf(service.view()));
     }
 
+    @Test
+    void filtersToTheFiveNewestTerminalRowsButAlwaysKeepsActiveWork() {
+        javafx.collections.ObservableList<DownloadRow> rows = FXCollections.observableArrayList();
+        DownloadRow active = row(99, DownloadRow.State.DOWNLOADING);
+        rows.add(active);
+        for (int index = 0; index < 8; index++) {
+            DownloadRow completed = row(index, DownloadRow.State.COMPLETED);
+            completed.completedAt = 1_000 + index;
+            rows.add(completed);
+        }
+        DownloadService service = new DownloadService(rows);
+
+        service.setHistoryView("Last 5");
+
+        assertEquals(6, service.view().size());
+        assertEquals(active, service.view().getFirst());
+        assertEquals(7, service.view().get(1).orderIndex);
+        assertEquals(3, service.view().getLast().orderIndex);
+    }
+
+    @Test
+    void sortsTerminalRowsByNewestOrOldestCompletionTime() {
+        DownloadRow older = row(0, DownloadRow.State.COMPLETED);
+        older.completedAt = 100;
+        DownloadRow newer = row(1, DownloadRow.State.COMPLETED);
+        newer.completedAt = 200;
+        DownloadService service = new DownloadService(FXCollections.observableArrayList(older, newer));
+
+        service.setHistoryView("Newest");
+        assertEquals(java.util.List.of(newer, older), java.util.List.copyOf(service.view()));
+
+        service.setHistoryView("Oldest");
+        assertEquals(java.util.List.of(older, newer), java.util.List.copyOf(service.view()));
+    }
+
     private static DownloadRow row(long order, DownloadRow.State state) {
         DownloadRow row = new DownloadRow("https://example.com/" + order, "Item " + order,
                 order, "/downloads", "Video", "720p");
