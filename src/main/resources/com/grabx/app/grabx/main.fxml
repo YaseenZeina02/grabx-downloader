@@ -129,7 +129,7 @@
     <bottom>
         <HBox alignment="CENTER_LEFT" spacing="10" styleClass="gx-footer">
             <Label fx:id="statusText" styleClass="gx-text-muted"
-                   text="0 active  ·  0 pending  ·  0 queued  ·  0 completed" />
+                   text="0 downloading  ·  0 preparing  ·  0 queued  ·  0 completed" />
             <Region HBox.hgrow="ALWAYS" />
             <Label fx:id="globalSpeed" alignment="CENTER_RIGHT" minWidth="112" prefWidth="112" maxWidth="112"
                    styleClass="gx-text-muted" text="↓  0 KB/s" textOverrun="CLIP" />

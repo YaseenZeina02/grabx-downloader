@@ -23,14 +23,14 @@ class GlobalSpeedServiceTest {
         rows.addAll(first, second, completed);
 
         assertEquals("↓  2 MB/s", footer.get());
-        assertEquals("2 active  ·  0 pending  ·  0 queued  ·  1 completed", summary.get());
+        assertEquals("2 downloading  ·  0 preparing  ·  0 queued  ·  1 completed", summary.get());
 
         first.speed.set("1.0 MB/s");
         assertEquals("↓  2.5 MB/s", footer.get());
 
         second.setState(DownloadRow.State.PAUSED);
         assertEquals("↓  1 MB/s", footer.get());
-        assertEquals("1 active  ·  0 pending  ·  0 queued  ·  1 completed", summary.get());
+        assertEquals("1 downloading  ·  0 preparing  ·  0 queued  ·  1 completed", summary.get());
     }
 
     @Test
@@ -40,7 +40,7 @@ class GlobalSpeedServiceTest {
         rows.add(row(DownloadRow.State.QUEUED, ""));
 
         assertEquals(
-                "0 active  ·  1 pending  ·  1 queued  ·  0 completed",
+                "0 downloading  ·  1 preparing  ·  1 queued  ·  0 completed",
                 GlobalSpeedService.formatSummary(rows)
         );
     }

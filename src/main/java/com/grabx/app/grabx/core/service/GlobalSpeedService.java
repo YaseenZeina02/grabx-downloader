@@ -84,7 +84,7 @@ public final class GlobalSpeedService {
                 else if (state == DownloadRow.State.COMPLETED) completed++;
             }
         }
-        return active + " active  ·  " + pending + " pending  ·  "
+        return active + " downloading  ·  " + pending + " preparing  ·  "
                 + queued + " queued  ·  " + completed + " completed";
     }
 
