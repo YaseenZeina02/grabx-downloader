@@ -5,6 +5,10 @@ This folder contains the first Chromium vertical slice of the GrabX browser brid
 ## Current capabilities
 
 - Scans the active tab only after the user clicks the extension.
+- Adds **Download with GrabX** to the context menu of HTTP(S) links.
+- Can automatically intercept new browser downloads. The switch in the popup controls this behavior;
+  it is enabled after installation. GrabX accepts the handoff before the browser download is cancelled,
+  and a failed handoff resumes in the browser.
 - Detects HTML5 video/audio sources, Open Graph media, downloadable anchors, and common direct file links.
 - Falls back to sending the page URL so GrabX/yt-dlp can analyze sites that hide media behind `blob:` URLs.
 - Sends versioned, validated JSON through Chrome Native Messaging.

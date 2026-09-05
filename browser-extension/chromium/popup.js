@@ -1,10 +1,23 @@
 let pageInfo = null;
 let candidates = [];
+const INTERCEPTION_SETTING = 'interceptBrowserDownloads';
 
-document.addEventListener('DOMContentLoaded', scanActivePage);
+document.addEventListener('DOMContentLoaded', async () => {
+  await initializeInterceptionToggle();
+  await scanActivePage();
+});
 document.getElementById('sendPage').addEventListener('click', () => {
   if (pageInfo) sendCapture({ kind: 'page', url: null, title: pageInfo.title }, 'ask');
 });
+
+async function initializeInterceptionToggle() {
+  const toggle = document.getElementById('interceptDownloads');
+  const settings = await chrome.storage.local.get(INTERCEPTION_SETTING);
+  toggle.checked = settings[INTERCEPTION_SETTING] !== false;
+  toggle.addEventListener('change', () => {
+    chrome.storage.local.set({ [INTERCEPTION_SETTING]: toggle.checked });
+  });
+}
 
 async function scanActivePage() {
   try {

@@ -11,6 +11,8 @@ public record BrowserCapture(
         String mimeType,
         String mediaKind,
         String action,
+        String suggestedFilename,
+        String suggestedFolder,
         long createdAt
 ) {
     public static final int CURRENT_PROTOCOL_VERSION = 1;

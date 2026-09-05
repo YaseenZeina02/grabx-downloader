@@ -147,7 +147,11 @@ private static javafx.scene.Node buildSuccessGraphic() {
     }
 
     public void show(String prefillUrl, String preferredAction, boolean autoAnalyze) {
-        showAddLinkDialog(prefillUrl, preferredAction, autoAnalyze);
+        showAddLinkDialog(prefillUrl, preferredAction, autoAnalyze, null);
+    }
+
+    public void show(String prefillUrl, String preferredAction, boolean autoAnalyze, String preferredFolder) {
+        showAddLinkDialog(prefillUrl, preferredAction, autoAnalyze, preferredFolder);
     }
 
     public boolean isOpen() {
@@ -180,6 +184,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
     private volatile TextField activeAddLinkUrlField;
     private volatile ComboBox<String> activeAddLinkModeCombo;
     private volatile Button activeAddLinkGetButton;
+    private volatile TextField activeAddLinkFolderField;
     private volatile Dialog<ButtonType> activeAddLinkDialog;
 
     // cache for sizes
@@ -219,6 +224,11 @@ private static javafx.scene.Node buildSuccessGraphic() {
     }
 
     private void showAddLinkDialog(String prefillUrl, String preferredAction, boolean autoAnalyze) {
+        showAddLinkDialog(prefillUrl, preferredAction, autoAnalyze, null);
+    }
+
+    private void showAddLinkDialog(String prefillUrl, String preferredAction,
+                                   boolean autoAnalyze, String preferredFolder) {
         if (addLinkDialogOpen) {
             if (prefillUrl != null && urlAnalysisService.isHttpUrl(prefillUrl) && activeAddLinkUrlField != null) {
                 activeAddLinkUrlField.setText(prefillUrl.trim());
@@ -226,6 +236,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
                 Platform.runLater(activeAddLinkUrlField::requestFocus);
             }
             applyPreferredAction(activeAddLinkModeCombo, preferredAction);
+            applyPreferredFolder(activeAddLinkFolderField, preferredFolder);
             if (autoAnalyze && activeAddLinkGetButton != null) {
                 Platform.runLater(activeAddLinkGetButton::fire);
             }
@@ -339,6 +350,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
 
         // Folder
         TextField folderField = new TextField(cb.getLastDownloadFolderOrDefault());
+        activeAddLinkFolderField = folderField;
         folderField.setEditable(false);
         folderField.getStyleClass().add("gx-input");
 
@@ -666,6 +678,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
         dialog.setResizable(false);
 
         if (prefillUrl != null && !prefillUrl.isBlank()) urlField.setText(prefillUrl.trim());
+        applyPreferredFolder(folderField, preferredFolder);
         // Setting the URL resets the dependent controls to their safe defaults.
         // Apply the browser-requested mode afterwards so an audio request keeps
         // its audio format list instead of being reset to video qualities.
@@ -686,6 +699,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
             activeAddLinkUrlField = null;
             activeAddLinkModeCombo = null;
             activeAddLinkGetButton = null;
+            activeAddLinkFolderField = null;
             activeAddLinkDialog = null;
         });
 
@@ -722,6 +736,15 @@ private static javafx.scene.Node buildSuccessGraphic() {
             modeCombo.getSelectionModel().select(cfg.MODE_AUDIO);
         } else if ("video".equalsIgnoreCase(preferredAction)) {
             modeCombo.getSelectionModel().select(cfg.MODE_VIDEO);
+        }
+    }
+
+    private static void applyPreferredFolder(TextField folderField, String preferredFolder) {
+        if (folderField == null || preferredFolder == null || preferredFolder.isBlank()) return;
+        try {
+            Path path = Path.of(preferredFolder).toAbsolutePath().normalize();
+            if (java.nio.file.Files.isDirectory(path)) folderField.setText(path.toString());
+        } catch (Exception ignored) {
         }
     }
 

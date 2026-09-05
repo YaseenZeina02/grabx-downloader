@@ -794,7 +794,8 @@ public class MainController {
             }
             if (statusText != null) statusText.setText("Received from browser: " + capture.title());
             if (addLinkFlowService != null) {
-                addLinkFlowService.openOrUpdate(capture.effectiveUrl(), capture.action(), true);
+                addLinkFlowService.openOrUpdate(
+                        capture.effectiveUrl(), capture.action(), true, capture.suggestedFolder());
             }
         } catch (Exception ignored) {
         }

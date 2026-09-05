@@ -61,6 +61,11 @@ public final class AddLinkServicesFactory {
                     @Override public void show(String prefillUrl, String preferredAction, boolean autoAnalyze) {
                         connectedDialog.show(prefillUrl, preferredAction, autoAnalyze);
                     }
+
+                    @Override public void show(String prefillUrl, String preferredAction,
+                                               boolean autoAnalyze, String preferredFolder) {
+                        connectedDialog.show(prefillUrl, preferredAction, autoAnalyze, preferredFolder);
+                    }
                 },
                 dependencies.isHttpUrl(),
                 dependencies.clipboardText(),
