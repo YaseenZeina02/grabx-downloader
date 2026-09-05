@@ -27,9 +27,36 @@ class DirectSizeProbeTest {
                     java.time.Duration.ofSeconds(1), () -> DirectSizeProbe.probeAsync(url, null));
             org.junit.jupiter.api.Assertions.assertTrue(entered.await(1, java.util.concurrent.TimeUnit.SECONDS));
             assertEquals(-1L, future.getNow(-1L));
+            // A slow response must remain usable beyond the former 7-second cutoff.
+            org.junit.jupiter.api.Assertions.assertThrows(java.util.concurrent.TimeoutException.class,
+                    () -> future.get(7200, java.util.concurrent.TimeUnit.MILLISECONDS));
             release.countDown();
             assertEquals(1234L, future.get(1, java.util.concurrent.TimeUnit.SECONDS));
         } finally { release.countDown(); }
+    }
+
+    @Test void sendsRefererOnHeadAndGetFallback() throws Exception {
+        var methods = new java.util.ArrayList<String>();
+        var url = new java.net.URL(null, "http://localhost/file", new java.net.URLStreamHandler() {
+            @Override protected java.net.URLConnection openConnection(java.net.URL target) {
+                return new java.net.HttpURLConnection(target) {
+                    public void connect() {}
+                    public void disconnect() {}
+                    public boolean usingProxy() { return false; }
+                    public int getResponseCode() {
+                        assertEquals("https://example.com/page", getRequestProperty("Referer"));
+                        methods.add(getRequestMethod());
+                        return getRequestMethod().equals("HEAD") ? 405 : 206;
+                    }
+                    public String getHeaderField(String key) {
+                        return key.equals("Content-Range") ? "bytes 0-0/1234" : null;
+                    }
+                    public long getContentLengthLong() { return 1; }
+                };
+            }
+        });
+        assertEquals(1234, DirectSizeProbe.probe(url, null, "https://example.com/page#player"));
+        assertEquals(java.util.List.of("HEAD", "GET"), methods);
     }
 
     @Test void readsFullResponseLength() {

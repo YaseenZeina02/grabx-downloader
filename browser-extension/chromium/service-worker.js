@@ -1,6 +1,12 @@
 const NATIVE_HOST = "com.grabx.browser_bridge";
 const DOWNLOAD_MENU_ID = "grabx-download-link";
 const INTERCEPTION_SETTING = "interceptBrowserDownloads";
+const PAGE_CACHE_BYTES = 256 * 1024;
+function trimPageContexts(entries, now = Date.now()) {
+  const fresh = entries.filter(item => now - item.at < 1800000).slice(-20);
+  while (fresh.length && new TextEncoder().encode(JSON.stringify(fresh)).length > PAGE_CACHE_BYTES) fresh.shift();
+  return fresh;
+}
 
 chrome.runtime.onInstalled.addListener(async details => {
   await ensureContextMenu();
@@ -28,6 +34,19 @@ chrome.downloads.onCreated.addListener(download => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === 'GRABX_PAGE_CONTEXT') {
+    const url = safeHttpUrl(message.url);
+    if (url && url.length <= 4096) chrome.storage.session.get('pageContexts').then(async stored => {
+      const contexts = trimPageContexts(stored.pageContexts || []).filter(item => item.url !== url);
+      const media = (Array.isArray(message.media) ? message.media : []).slice(0, 20).map(item => ({
+        url: String(item.url || '').length <= 4096 ? safeHttpUrl(item.url) : null, title: String(item.title || '').slice(0, 255),
+        sizeHint: String(item.sizeHint || '').slice(0, 80), mimeType: String(item.mimeType || '').slice(0, 160)
+      })).filter(item => item.url);
+      contexts.push({ url, title: String(message.title || '').slice(0, 255), media, at: Date.now() });
+      await chrome.storage.session.set({ pageContexts: trimPageContexts(contexts) });
+    }).catch(() => { /* Cache failure must not disrupt downloads. */ });
+    return false;
+  }
   if (!message || message.type !== "GRABX_CAPTURE") return false;
   const capture = sanitizeCapture(message.capture);
   if (!capture) {
@@ -62,12 +81,16 @@ async function interceptDownload(download) {
     const [current] = await chrome.downloads.search({ id: download.id });
     if (!current || current.state !== 'in_progress' || !current.paused) return;
 
+    const stored = await chrome.storage.session.get('pageContexts');
+    const context = (stored.pageContexts || []).find(item => item.url === safeHttpUrl(download.referrer) && Date.now() - item.at < 1800000);
+    const exactMedia = context?.media?.find(item => item.url === url);
+    const suggested = chooseDownloadName(fileName(current.filename), url, exactMedia?.title || context?.title, download.mime);
     const response = await handOffCapture(fileCapture({
       url,
       pageUrl: safeHttpUrl(download.referrer) || url,
-      title: fileName(download.filename) || fileNameFromUrl(url),
+      title: suggested,
       mimeType: download.mime || '',
-      suggestedFilename: fileName(download.filename),
+      suggestedFilename: suggested,
       suggestedFolder: parentFolder(download.filename)
     }));
 
@@ -197,4 +220,17 @@ async function rememberCapture(capture) {
   await chrome.storage.local.set({
     recentCaptures: [safeSummary, ...recentCaptures].slice(0, 20)
   });
+}
+
+function chooseDownloadName(browserName, url, pageTitle, mime) {
+  const generic = /^(download|file|video)( \(\d+\))?(\.[a-z0-9]+)?$/i;
+  for (const name of [browserName, fileNameFromUrl(url)]) {
+    if (name && /\.[a-z0-9]{2,5}$/i.test(name) && !generic.test(name)) return name;
+  }
+  if (pageTitle && !/^(download|your download link|StreamHG)$/i.test(pageTitle.trim())) {
+    const extension = browserName?.match(/\.[a-z0-9]{2,5}$/i)?.[0] || (mime === 'video/mp4' ? '.mp4' : '');
+    const clean = pageTitle.trim().replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').slice(0, 230);
+    return clean.toLowerCase().endsWith(extension.toLowerCase()) ? clean : clean + extension;
+  }
+  return browserName || fileNameFromUrl(url);
 }

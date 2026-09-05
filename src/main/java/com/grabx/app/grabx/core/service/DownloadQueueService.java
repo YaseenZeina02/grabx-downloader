@@ -95,9 +95,14 @@ public final class DownloadQueueService {
     }
 
     public DownloadRow enqueueDirect(String url, String folder, String suggestedFilename) {
+        return enqueueDirect(url, folder, suggestedFilename, null);
+    }
+
+    public DownloadRow enqueueDirect(String url, String folder, String suggestedFilename, String referer) {
         String filename = trimToEmpty(suggestedFilename);
         DownloadRow row = create(url, folder, "Direct", "Auto",
                 filename.isBlank() ? null : filename);
+        row.setReferer(referer);
         if (!filename.isBlank()) row.titleLocked.set(true);
         return enqueueRow(row, false);
     }
@@ -108,6 +113,7 @@ public final class DownloadQueueService {
             DownloadRow duplicate = findActiveDuplicate(row);
             if (duplicate != null) {
                 if (duplicate.getState() == DownloadRow.State.PAUSED) {
+                    if (row.getReferer() != null) duplicate.setReferer(row.getReferer());
                     duplicate.setState(DownloadRow.State.PENDING);
                     duplicate.status.set("Preparing");
                     if (startDownload != null) startDownload.accept(duplicate, true);

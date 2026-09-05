@@ -800,7 +800,7 @@ public class MainController {
                 }
                 String filename = capture.suggestedFilename();
                 if (filename == null || filename.isBlank()) filename = capture.title();
-                downloadQueueService.enqueueDirect(capture.effectiveUrl(), folder, filename);
+                downloadQueueService.enqueueDirect(capture.effectiveUrl(), folder, filename, capture.pageUrl());
                 if (statusText != null) statusText.setText("Browser download started in GrabX");
             } else if (addLinkFlowService != null) {
                 addLinkFlowService.openOrUpdate(

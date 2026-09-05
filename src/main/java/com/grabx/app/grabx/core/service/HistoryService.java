@@ -129,7 +129,7 @@ public class HistoryService {
                         esc(row.url) + "\t" + esc(safeGet(row.title)) + "\t"
                                 + esc(row.folder) + "\t" + esc(row.mode) + "\t"
                                 + esc(row.quality) + "\t" + esc(state) + "\t"
-                                + esc(outputPath) + "\t" + updated
+                                + esc(outputPath) + "\t" + updated + "\t" + esc(row.getReferer())
                 );
             }
             if (!lines.isEmpty()) {
@@ -293,7 +293,7 @@ public class HistoryService {
                                     esc(r.quality) + "\t" +
                                     esc(state) + "\t" +
                                     esc(outPath) + "\t" +
-                                    lastUpdated
+                                    lastUpdated + "\t" + esc(r.getReferer())
                     );
                 }
 
@@ -352,6 +352,8 @@ public class HistoryService {
                         (mode == null || mode.isBlank()) ? "Video" : mode,
                         (quality == null || quality.isBlank()) ? "Best quality (Recommended)" : quality
                 );
+
+                if (c.length > 8) r.setReferer(unesc(c[8]));
 
                 // Thumb: restore from disk cache only
                 try {

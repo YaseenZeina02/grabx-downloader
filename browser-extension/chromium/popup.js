@@ -36,6 +36,7 @@ async function scanActivePage() {
       title: tab.title || new URL(tab.url).hostname,
       thumbnailUrl: youtubeThumbnail(tab.url)
     };
+    chrome.runtime.sendMessage({ type: 'GRABX_PAGE_CONTEXT', url: pageInfo.url, title: pageInfo.title, media: result?.candidates || [] });
     if (!pageInfo.thumbnailUrl) pageInfo.thumbnailUrl = youtubeThumbnail(pageInfo.url);
     candidates = Array.isArray(result?.candidates) ? result.candidates : [];
     if (!candidates.length && isYouTubePage(pageInfo.url)) {
@@ -79,7 +80,7 @@ function detectPageMedia() {
   };
   const add = (url, kind, title, mimeType = '') => {
     const resolved = absolute(url);
-    if (!resolved) return;
+    if (!resolved || resolved.length > 4096 || items.length >= 100) return;
     items.push({ url: resolved, kind, title: title || document.title, mimeType,
       thumbnailUrl: pageThumbnail });
   };
@@ -111,7 +112,50 @@ function detectPageMedia() {
     }
   });
 
+  // Only attach structured metadata when its content URL matches the candidate.
+  // Never guess a file size from unrelated page text or an advert.
+  const metadata = new Map();
+  const clean = value => typeof value === 'string' ? value.trim().slice(0, 255) : '';
+  const size = value => {
+    const text = String(value ?? '').trim();
+    return /^(?:\d+(?:\.\d+)?)\s*(?:B|KB|MB|GB|TB|KiB|MiB|GiB|TiB|bytes?)$/i.test(text) ? text : '';
+  };
+  let visited = 0;
+  let parsedCharacters = 0;
+  const collect = (node, depth = 0) => {
+    if (!node || typeof node !== 'object' || depth > 8 || ++visited > 1000) return;
+    if (Array.isArray(node)) { node.slice(0, 100).forEach(value => collect(value, depth + 1)); return; }
+    const url = absolute(node.contentUrl);
+    if (url) metadata.set(url, {
+      name: clean(node.name), sizeHint: size(node.contentSize),
+      durationHint: /^P[0-9DT HMs.]+$/i.test(clean(node.duration)) ? clean(node.duration) : '',
+      mimeType: /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/i.test(clean(node.encodingFormat)) ? clean(node.encodingFormat) : '',
+      source: 'Structured page data'
+    });
+    Object.values(node).forEach(value => collect(value, depth + 1));
+  };
+  document.querySelectorAll('script[type="application/ld+json"]').forEach(script => {
+    if (visited > 1000 || parsedCharacters + script.textContent.length > 200000) return;
+    parsedCharacters += script.textContent.length;
+    try { collect(JSON.parse(script.textContent)); } catch { /* malformed site metadata */ }
+  });
   const unique = [...new Map(items.map(item => [item.url, item])).values()].slice(0, 50);
+  const sizeLinks = [...document.querySelectorAll('a[download], a[data-size], a[data-filesize]')].slice(0, 200);
+  for (const item of unique) {
+    const data = metadata.get(item.url);
+    if (data) {
+      item.sizeHint = data.sizeHint;
+      item.durationHint = data.durationHint;
+      item.metadataSource = data.source;
+      if (data.name) item.title = data.name;
+      if (!item.mimeType) item.mimeType = data.mimeType;
+    }
+    for (const anchor of sizeLinks) {
+      if (absolute(anchor.href) !== item.url) continue;
+      const hint = size(anchor.getAttribute('data-size') || anchor.getAttribute('data-filesize'));
+      if (!item.sizeHint && hint) { item.sizeHint = hint; item.metadataSource = 'Download link'; }
+    }
+  }
   return {
     page: { url: location.href, title: document.title || location.hostname,
       thumbnailUrl: pageThumbnail },
@@ -157,7 +201,9 @@ function createCard(candidate, index) {
   title.title = title.textContent;
   const meta = document.createElement('small');
   meta.className = 'media-meta';
-  meta.textContent = candidate.mimeType || safeHostname(candidate.url);
+  meta.textContent = [candidate.mimeType || safeHostname(candidate.url),
+    candidate.sizeHint ? `≈ ${candidate.sizeHint} (page estimate)` : '', candidate.durationHint || ''].filter(Boolean).join(' · ');
+  if (candidate.metadataSource) meta.title = candidate.metadataSource;
   copy.append(title, meta);
   top.append(visual, copy);
 

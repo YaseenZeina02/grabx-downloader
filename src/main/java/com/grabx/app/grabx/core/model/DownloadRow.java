@@ -31,6 +31,14 @@ public class DownloadRow {
         MISSING
     }
 
+    private String referer;
+
+    public String getReferer() { return referer; }
+
+    public void setReferer(String value) {
+        referer = com.grabx.app.grabx.util.RequestReferer.normalize(value);
+    }
+
     public final String url;
     public final String folder;
     public final String mode;

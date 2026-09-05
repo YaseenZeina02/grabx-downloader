@@ -5,30 +5,48 @@ import java.net.URL;
 
 /** Bounded, header-only fallback for servers that omit the transfer length. */
 final class DirectSizeProbe {
+    private static final java.util.logging.Logger LOG =
+            com.grabx.app.grabx.util.AppLog.get(DirectSizeProbe.class);
     private DirectSizeProbe() {}
 
     static java.util.concurrent.CompletableFuture<Long> probeAsync(URL url, String etag) {
+        return probeAsync(url, etag, null);
+    }
+
+    static java.util.concurrent.CompletableFuture<Long> probeAsync(URL url, String etag, String referer) {
         var result = new java.util.concurrent.CompletableFuture<Long>();
         Thread worker = new Thread(() -> {
-            try { result.complete(probe(url, etag)); }
+            try {
+                long size = probe(url, etag, referer);
+                if (size < 0) size = probe(url, etag, referer);
+                result.complete(size);
+                LOG.fine("File size discovery finished: " + size);
+            }
             catch (Exception ignored) { result.complete(-1L); }
         }, "http-size-probe");
         worker.setDaemon(true);
         worker.start();
-        return result.completeOnTimeout(-1L, 7, java.util.concurrent.TimeUnit.SECONDS);
+        // Per-request timeouts bound the work. Do not complete the future early:
+        // doing so permanently discards a valid size that arrives later.
+        return result;
     }
 
     static long probe(URL url, String etag) {
+        return probe(url, etag, null);
+    }
+
+    static long probe(URL url, String etag, String referer) {
         for (String method : new String[]{"HEAD", "GET"}) {
             HttpURLConnection connection = null;
             try {
                 connection = (HttpURLConnection) url.openConnection();
-                connection.setConnectTimeout(3_000);
-                connection.setReadTimeout(3_000);
+                connection.setConnectTimeout(10_000);
+                connection.setReadTimeout(15_000);
                 connection.setRequestMethod(method);
                 connection.setRequestProperty("Accept-Encoding", "identity");
                 connection.setRequestProperty("Accept", "*/*");
                 connection.setRequestProperty("User-Agent", "Mozilla/5.0");
+                com.grabx.app.grabx.util.RequestReferer.apply(connection, referer);
                 if (method.equals("GET")) connection.setRequestProperty("Range", "bytes=0-0");
                 int status = connection.getResponseCode();
                 if (status != 200 && status != 206) continue;
@@ -37,7 +55,8 @@ final class DirectSizeProbe {
                 long size = sizeFromHeaders(status, connection.getContentLengthLong(),
                         connection.getHeaderField("Content-Range"));
                 if (size >= 0) return size;
-            } catch (Exception ignored) {
+            } catch (Exception error) {
+                LOG.fine("File size " + method + " probe failed: " + error.getClass().getSimpleName());
                 // Size discovery must never prevent a valid stream from downloading.
             } finally {
                 if (connection != null) connection.disconnect();
