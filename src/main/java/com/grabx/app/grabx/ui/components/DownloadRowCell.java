@@ -209,6 +209,9 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         thumb.setClip(thumbClip);
 
         thumbBox.getStyleClass().add("gx-task-thumb");
+        title.textProperty().addListener((obs, oldTitle, newTitle) -> {
+            if (thumbPlaceholder.getGraphic() != null && thumbPlaceholder.isVisible()) showFilePreview();
+        });
         thumbPlaceholder.getStyleClass().add("gx-task-thumb-placeholder");
         thumbBox.getChildren().addAll(thumb, thumbPlaceholder);
 
@@ -363,7 +366,7 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
             lastThumbUrl = null;
             thumb.setImage(null);
             thumb.setViewport(null);
-            showThumbMessage("NO PREVIEW");
+            showFilePreview();
             setText(null);
             setGraphic(null);
             setPadding(Insets.EMPTY);
@@ -676,7 +679,7 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
             if (url == null || url.isBlank()) {
                 thumb.setImage(null);
                 thumb.setViewport(null);
-                showThumbMessage("NO PREVIEW");
+                showFilePreview();
                 return;
             }
 
@@ -684,7 +687,7 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
             if (cached != null) {
                 thumb.setImage(cached);
                 if (cached.getException() != null) {
-                    showThumbMessage("NO PREVIEW");
+                    showFilePreview();
                 } else if (cached.getProgress() >= 1.0 && cached.getWidth() > 0 && cached.getHeight() > 0) {
                     applyCoverViewport(thumb, cached, 108, 66);
                     showThumbImage();
@@ -713,7 +716,7 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         } catch (Exception ignored) {
             thumb.setImage(null);
             thumb.setViewport(null);
-            showThumbMessage("NO PREVIEW");
+            showFilePreview();
         }
     }
 
@@ -730,7 +733,7 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
     private void finishThumbLoad(String url, Image image) {
         if (url == null || !url.equals(lastThumbUrl) || thumb.getImage() != image) return;
         if (image.getException() != null || image.getWidth() <= 0 || image.getHeight() <= 0) {
-            showThumbMessage("NO PREVIEW");
+            showFilePreview();
             return;
         }
         applyCoverViewport(thumb, image, 108, 66);
@@ -739,6 +742,7 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
 
     private void showThumbLoading() {
         thumbBox.getStyleClass().remove("gx-thumb-loaded");
+        thumbPlaceholder.setGraphic(null);
         thumbPlaceholder.setText("•••");
         thumbPlaceholder.setVisible(true);
         if (thumbPulse.getStatus() != Animation.Status.RUNNING) {
@@ -755,11 +759,14 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         thumbPlaceholder.setVisible(false);
     }
 
-    private void showThumbMessage(String message) {
+    private void showFilePreview() {
         thumbBox.getStyleClass().remove("gx-thumb-loaded");
         thumbPulse.stop();
         thumbPlaceholder.setOpacity(1.0);
-        thumbPlaceholder.setText(message);
+        thumbPlaceholder.setText(null);
+        DownloadRow row = getItem();
+        thumbPlaceholder.setGraphic(FileTypePreview.create(
+                row == null ? null : row.title.get(), row == null ? null : row.mode, false));
         thumbPlaceholder.setVisible(true);
     }
 
@@ -808,8 +815,7 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
                     .and(item.eta.isNotEmpty());
 
             BooleanBinding showSize = item.size.isNotNull()
-                    .and(item.size.isNotEmpty())
-                    .and(item.progress.greaterThanOrEqualTo(0));
+                    .and(item.size.isNotEmpty());
 
             sizeLabel.visibleProperty().bind(showSize);
             sizeLabel.managedProperty().bind(showSize);

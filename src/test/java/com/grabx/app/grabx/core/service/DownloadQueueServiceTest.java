@@ -73,6 +73,23 @@ class DownloadQueueServiceTest {
         assertEquals(2, rows.size());
     }
 
+    @Test
+    void downloadResumesPausedDuplicateWithoutAddingAnotherRow() {
+        ObservableList<DownloadRow> rows = FXCollections.observableArrayList();
+        List<Boolean> starts = new ArrayList<>();
+        DownloadQueueService service = new DownloadQueueService(rows, new AtomicLong(),
+                () -> "/downloads", null, null, null, null,
+                (row, resume) -> starts.add(resume), Runnable::run, null,
+                "Video", "Audio only", "Best quality", "mp3");
+        DownloadRow first = service.enqueueDirect("https://example.com/file.zip", "/downloads", "file.zip");
+        first.setState(DownloadRow.State.PAUSED);
+        service.enqueueDirect(first.url, first.folder, "file.zip");
+        service.enqueueDirect(first.url, first.folder, "file.zip");
+        assertEquals(1, rows.size());
+        assertEquals(List.of(false, true), starts);
+        assertEquals(DownloadRow.State.PENDING, first.getState());
+    }
+
     private static DownloadQueueService service(ObservableList<DownloadRow> rows, List<String> events) {
         return new DownloadQueueService(
                 rows,

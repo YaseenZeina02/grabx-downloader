@@ -91,18 +91,38 @@ public final class DownloadQueueService {
     public DownloadRow enqueue(String url, String folder, String mode, String quality) {
         DownloadRow row = create(url, folder, mode, quality, null);
 
+        return enqueueRow(row, true);
+    }
+
+    public DownloadRow enqueueDirect(String url, String folder, String suggestedFilename) {
+        String filename = trimToEmpty(suggestedFilename);
+        DownloadRow row = create(url, folder, "Direct", "Auto",
+                filename.isBlank() ? null : filename);
+        if (!filename.isBlank()) row.titleLocked.set(true);
+        return enqueueRow(row, false);
+    }
+
+    private DownloadRow enqueueRow(DownloadRow row, boolean enrichMetadata) {
+
         Runnable addAndStart = () -> {
             DownloadRow duplicate = findActiveDuplicate(row);
             if (duplicate != null) {
+                if (duplicate.getState() == DownloadRow.State.PAUSED) {
+                    duplicate.setState(DownloadRow.State.PENDING);
+                    duplicate.status.set("Preparing");
+                    if (startDownload != null) startDownload.accept(duplicate, true);
+                } else if (statusUpdater != null) {
+                    statusUpdater.accept("This download is already in progress");
+                }
                 return;
             }
 
             if (attachHistory != null) attachHistory.accept(row);
-            if (applyThumbnail != null) applyThumbnail.accept(row, row.url);
+            if (enrichMetadata && applyThumbnail != null) applyThumbnail.accept(row, row.url);
             downloadItems.add(0, row);
             if (saveHistory != null) saveHistory.run();
             if (startDownload != null) startDownload.accept(row, false);
-            if (resolveTitle != null) resolveTitle.accept(row, row.url);
+            if (enrichMetadata && resolveTitle != null) resolveTitle.accept(row, row.url);
         };
         if (uiExecutor != null) uiExecutor.accept(addAndStart); else addAndStart.run();
         return row;

@@ -193,6 +193,10 @@ public final class CompactDownloadRowCell extends ListCell<DownloadRow> {
         thumbnail.setVisible(hasThumbnail);
         thumbnail.setManaged(hasThumbnail);
         thumbnail.setImage(hasThumbnail ? new javafx.scene.image.Image(thumbnailUrl, true) : null);
+        Node media = hasThumbnail ? thumbnail : FileTypePreview.create(value,
+                boundRow == null ? null : boundRow.mode, true);
+        mediaHeader.setLeft(media);
+        BorderPane.setMargin(media, new Insets(0, 9, 0, 0));
 
         if (titleMarquee != null) titleMarquee.stop();
         titleMarquee = null;

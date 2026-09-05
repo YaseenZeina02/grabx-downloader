@@ -123,7 +123,12 @@ public final class DownloadStateCoordinator {
                 && st != DownloadRow.State.QUEUED
                 && st != DownloadRow.State.PENDING) return false;
 
-        stopProcess(row, "PAUSE");
+        Process current = activeProcesses.get(row);
+        if (current instanceof PausableTransfer transfer && current.isAlive()) {
+            transfer.pauseTransfer();
+        } else {
+            stopProcess(row, "PAUSE");
+        }
         row.setState(DownloadRow.State.PAUSED);
         try { row.status.set("Paused"); } catch (Exception ignored) {}
         try { row.speed.set(""); } catch (Exception ignored) {}
@@ -138,9 +143,13 @@ public final class DownloadStateCoordinator {
 
         try {
             Process existing = activeProcesses.get(row);
-            if (existing != null && existing.isAlive()) {
-                return false;
+            if (existing instanceof PausableTransfer transfer && existing.isAlive()) {
+                row.setState(DownloadRow.State.DOWNLOADING);
+                row.status.set("Downloading");
+                transfer.resumeTransfer();
+                return true;
             }
+            if (existing != null && existing.isAlive()) return false;
         } catch (Exception ignored) {}
 
         try { stopReasons.remove(row); } catch (Exception ignored) {}
