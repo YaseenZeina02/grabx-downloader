@@ -13,7 +13,9 @@ public final class UrlAnalysisService {
 
     private static final List<String> DIRECT_EXTENSIONS = List.of(
             ".mp4", ".mkv", ".webm", ".mov", ".mp3", ".m4a", ".wav",
-            ".aac", ".flac", ".zip", ".rar", ".7z", ".pdf"
+            ".aac", ".flac", ".zip", ".rar", ".7z", ".pdf",
+            ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+            ".csv", ".txt", ".dmg", ".pkg", ".exe", ".msi", ".apk"
     );
 
     public ContentType analyze(String url) {
@@ -37,7 +39,10 @@ public final class UrlAnalysisService {
         if (looksYouTube && (hasVideoId || hasPlaylistId)) {
             return ContentType.VIDEO;
         }
-        return ContentType.DIRECT_FILE;
+        // A generic web page is not a downloadable file. Browser-triggered file
+        // downloads bypass this URL-only analyzer and arrive through the native
+        // bridge with verified file metadata.
+        return ContentType.UNSUPPORTED;
     }
 
     public boolean isHttpUrl(String value) {

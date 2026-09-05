@@ -793,7 +793,16 @@ public class MainController {
                 stage.requestFocus();
             }
             if (statusText != null) statusText.setText("Received from browser: " + capture.title());
-            if (addLinkFlowService != null) {
+            if ("file".equalsIgnoreCase(capture.action()) && downloadQueueService != null) {
+                String folder = capture.suggestedFolder();
+                if (folder == null || folder.isBlank()) {
+                    folder = downloadFolderPreferences.getLastFolderOrDefault();
+                }
+                String filename = capture.suggestedFilename();
+                if (filename == null || filename.isBlank()) filename = capture.title();
+                downloadQueueService.enqueueDirect(capture.effectiveUrl(), folder, filename);
+                if (statusText != null) statusText.setText("Browser download started in GrabX");
+            } else if (addLinkFlowService != null) {
                 addLinkFlowService.openOrUpdate(
                         capture.effectiveUrl(), capture.action(), true, capture.suggestedFolder());
             }

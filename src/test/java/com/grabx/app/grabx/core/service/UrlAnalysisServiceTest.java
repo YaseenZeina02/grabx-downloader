@@ -33,10 +33,12 @@ class UrlAnalysisServiceTest {
     }
 
     @Test
-    void detectsDirectFilesAndGenericWebUrls() {
+    void detectsDirectFilesButRejectsGenericWebPages() {
         assertEquals(DIRECT_FILE, service.analyze("https://example.com/archive.zip?download=1"));
         assertEquals(DIRECT_FILE, service.analyze("https://example.com/video.mp4"));
-        assertEquals(DIRECT_FILE, service.analyze("https://example.com/download/123"));
+        assertEquals(DIRECT_FILE, service.analyze("https://example.com/report.xlsx"));
+        assertEquals(UNSUPPORTED, service.analyze("https://example.com/download/123"));
+        assertEquals(UNSUPPORTED, service.analyze("https://workspace.google.com/products/drive/"));
     }
 
     @Test

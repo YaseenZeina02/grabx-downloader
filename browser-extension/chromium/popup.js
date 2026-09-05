@@ -6,9 +6,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   await initializeInterceptionToggle();
   await scanActivePage();
 });
-document.getElementById('sendPage').addEventListener('click', () => {
-  if (pageInfo) sendCapture({ kind: 'page', url: null, title: pageInfo.title }, 'ask');
-});
 
 async function initializeInterceptionToggle() {
   const toggle = document.getElementById('interceptDownloads');
@@ -41,7 +38,7 @@ async function scanActivePage() {
     };
     if (!pageInfo.thumbnailUrl) pageInfo.thumbnailUrl = youtubeThumbnail(pageInfo.url);
     candidates = Array.isArray(result?.candidates) ? result.candidates : [];
-    if (!candidates.length) {
+    if (!candidates.length && isYouTubePage(pageInfo.url)) {
       candidates = [{
         url: null,
         kind: 'page',
@@ -71,6 +68,15 @@ function detectPageMedia() {
     || document.querySelector('meta[property="twitter:image"]')?.content
   );
   const items = [];
+  const visibleInViewport = element => {
+    if (!element || element.closest('[hidden], [aria-hidden="true"], [inert]')) return false;
+    const style = getComputedStyle(element);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false;
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0
+      && rect.bottom > 0 && rect.right > 0
+      && rect.top < innerHeight && rect.left < innerWidth;
+  };
   const add = (url, kind, title, mimeType = '') => {
     const resolved = absolute(url);
     if (!resolved) return;
@@ -79,6 +85,7 @@ function detectPageMedia() {
   };
 
   document.querySelectorAll('video, audio').forEach(media => {
+    if (!visibleInViewport(media)) return;
     const kind = media.tagName.toLowerCase();
     add(media.currentSrc || media.src, kind, media.getAttribute('title') || document.title,
       media.getAttribute('type') || '');
@@ -88,11 +95,13 @@ function detectPageMedia() {
   document.querySelectorAll('meta[property="og:video"], meta[property="og:video:url"], meta[property="og:audio"]')
     .forEach(meta => add(meta.content, meta.property.includes('audio') ? 'audio' : 'video', document.title));
   document.querySelectorAll('a[download], link[rel="enclosure"]').forEach(element => {
+    if (!visibleInViewport(element)) return;
     const url = element.href;
     const label = element.getAttribute('download') || element.textContent?.trim() || document.title;
     add(url, 'file', label, element.type || '');
   });
   document.querySelectorAll('a[href]').forEach(anchor => {
+    if (!visibleInViewport(anchor)) return;
     const href = anchor.getAttribute('href') || '';
     if (/\.(mp4|webm|mov|mkv|mp3|m4a|wav|flac|zip|rar|7z|pdf)(?:[?#]|$)/i.test(href)) {
       const extension = href.match(/\.([a-z0-9]+)(?:[?#]|$)/i)?.[1]?.toLowerCase();
@@ -213,6 +222,18 @@ function youtubeThumbnail(value) {
       : null;
   } catch {
     return null;
+  }
+}
+
+function isYouTubePage(value) {
+  try {
+    const url = new URL(value);
+    if (url.hostname === 'youtu.be') return Boolean(url.pathname.split('/').filter(Boolean)[0]);
+    if (!url.hostname.endsWith('youtube.com')) return false;
+    return url.pathname === '/watch' || url.pathname.startsWith('/shorts/')
+      || url.pathname.startsWith('/live/');
+  } catch {
+    return false;
   }
 }
 

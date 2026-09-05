@@ -73,6 +73,7 @@ public final class GlobalSpeedService {
         int active = 0;
         int pending = 0;
         int queued = 0;
+        int paused = 0;
         int completed = 0;
         if (rows != null) {
             for (DownloadRow row : rows) {
@@ -81,11 +82,12 @@ public final class GlobalSpeedService {
                 if (state == DownloadRow.State.DOWNLOADING) active++;
                 else if (state == DownloadRow.State.PENDING) pending++;
                 else if (state == DownloadRow.State.QUEUED) queued++;
+                else if (state == DownloadRow.State.PAUSED) paused++;
                 else if (state == DownloadRow.State.COMPLETED) completed++;
             }
         }
         return active + " downloading  ·  " + pending + " preparing  ·  "
-                + queued + " queued  ·  " + completed + " completed";
+                + queued + " queued  ·  " + paused + " paused  ·  " + completed + " completed";
     }
 
     static double parseBytesPerSecond(String value) {
