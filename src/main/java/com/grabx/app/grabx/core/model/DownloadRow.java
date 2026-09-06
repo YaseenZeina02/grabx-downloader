@@ -39,7 +39,8 @@ public class DownloadRow {
         referer = com.grabx.app.grabx.util.RequestReferer.normalize(value);
     }
 
-    public final String url;
+    public volatile String url;
+    public volatile String resumeEtag;
     public final String folder;
     public final String mode;
     public final String quality;

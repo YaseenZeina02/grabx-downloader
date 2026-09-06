@@ -190,3 +190,22 @@ button { font: inherit; }
 }
 .notice.error { background: rgba(239, 68, 68, .12); color: #ffaaaa; }
 .hidden { display: none !important; }
+
+/* Waiting list stays within the toolbar popup, including macOS fullscreen. */
+body { max-height: 580px; overflow-y: auto; }
+.queue-toggle { width:100%; display:flex; align-items:center; justify-content:space-between; padding:12px; margin:10px 0; border:1px solid #2c3c59; border-radius:12px; background:#121e32; color:#e8ecf3; cursor:pointer; font-weight:600; }
+.queue-count { background:#243756; border-radius:10px; padding:2px 7px; margin-left:6px; font-size:12px; }
+.queue-panel { border:1px solid #2c3c59; border-radius:12px; padding:12px; margin-bottom:12px; }
+.queue-help,.queue-preference { font-size:12px; color:#aab8cf; line-height:1.5; }
+.queue-help { margin:0 0 10px; }
+.queue-preference { display:flex; gap:7px; align-items:flex-start; }
+.queue-message { font-size:12px; color:#a8c8ff; overflow-wrap:anywhere; }
+.queue-message:empty { display:none; }
+.queue-items { max-height:235px; overflow-y:auto; }
+.queue-items > div { padding:10px 0; border-bottom:1px solid #25344d; }
+.queue-items p { font-size:13px; font-weight:600; overflow-wrap:anywhere; margin:0 0 5px; }
+.queue-items small { display:block; color:#9daec8; margin-bottom:8px; }
+.queue-items button,.queue-refresh { padding:6px 11px; border:1px solid #4667a5; border-radius:8px; color:#e8ecf3; background:#21488e; cursor:pointer; margin-right:6px; font-size:12px; }
+.queue-items button:last-child,.queue-refresh { background:#18263b; }
+.queue-refresh { margin-top:10px; }
+.queue-items button:disabled { opacity:.5; }

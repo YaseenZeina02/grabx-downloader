@@ -181,6 +181,13 @@ private static javafx.scene.Node buildSuccessGraphic() {
     private final UrlAnalysisService urlAnalysisService = new UrlAnalysisService();
 
     private volatile boolean addLinkDialogOpen = false;
+    public void closeIfUrlMatches(String url) {
+        if (activeAddLinkDialog != null && activeAddLinkUrlField != null
+                && url.equals(activeAddLinkUrlField.getText().trim())) {
+            activeAddLinkDialog.close();
+        }
+    }
+
     private volatile TextField activeAddLinkUrlField;
     private volatile ComboBox<String> activeAddLinkModeCombo;
     private volatile Button activeAddLinkGetButton;

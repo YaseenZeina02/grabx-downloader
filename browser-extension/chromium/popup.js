@@ -5,6 +5,10 @@ const INTERCEPTION_SETTING = 'interceptBrowserDownloads';
 document.addEventListener('DOMContentLoaded', async () => {
   await initializeInterceptionToggle();
   await scanActivePage();
+  const { lastContextMenuResult } = await chrome.storage.local.get('lastContextMenuResult');
+  if (lastContextMenuResult && Date.now() - lastContextMenuResult.at < 600000) {
+    showNotice(lastContextMenuResult.message, !lastContextMenuResult.ok);
+  }
 });
 
 async function initializeInterceptionToggle() {

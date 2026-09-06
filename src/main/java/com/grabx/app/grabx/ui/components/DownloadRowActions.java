@@ -152,19 +152,30 @@ public final class DownloadRowActions {
             deleteFiles = (choice == NativeDialogs.RemoveChoice.REMOVE_AND_DELETE);
         }
 
+        Process stoppingProcess = activeProcesses == null ? null : activeProcesses.get(row);
         try {
             if (downloadStateCoordinator != null) {
                 downloadStateCoordinator.cancel(row);
             }
         } catch (Exception ignored) {}
 
-        try { if (activeProcesses != null) activeProcesses.remove(row); } catch (Exception ignored) {}
-        try { if (stopReasons != null) stopReasons.remove(row); } catch (Exception ignored) {}
-
-        if (deleteFiles) {
-            deleteKnownOutputFiles(absOut);
-            deleteCommonPartialFiles(row);
-        }
+        // Keep the cancellation marker until every writer has stopped.
+        final boolean removeOutput = deleteFiles;
+        final Path selectedOutput = absOut;
+        Thread cleanup = new Thread(() -> {
+            try {
+                if (stoppingProcess != null) stoppingProcess.waitFor();
+                Path output = row.outputFile.get() == null ? selectedOutput : row.outputFile.get();
+                com.grabx.app.grabx.core.service.DirectPartialFiles.cleanup(output);
+                if (removeOutput) deleteKnownOutputFiles(output);
+            } catch (Exception error) {
+                Platform.runLater(() -> {
+                    if (statusText != null) statusText.setText("Could not remove download files: " + error.getMessage());
+                });
+            }
+        }, "download-remove-files");
+        cleanup.setDaemon(true);
+        cleanup.start();
 
         Platform.runLater(() -> {
             try {
@@ -205,34 +216,4 @@ public final class DownloadRowActions {
         try { Files.deleteIfExists(Paths.get(absOut + ".tmp")); } catch (Exception ignored) {}
     }
 
-    private void deleteCommonPartialFiles(DownloadRow row) {
-        try {
-            String folderStr = (row.folder == null) ? null : row.folder.trim();
-            if (folderStr == null || folderStr.isBlank()) return;
-
-            Path dir = Paths.get(folderStr).toAbsolutePath().normalize();
-            if (!Files.exists(dir) || !Files.isDirectory(dir)) return;
-
-            try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
-                for (Path pth : ds) {
-                    if (pth == null) continue;
-
-                    String n = null;
-                    try { n = pth.getFileName().toString().toLowerCase(Locale.ROOT); } catch (Exception ignored) {}
-                    if (n == null) continue;
-
-                    boolean isPartial = n.endsWith(".part")
-                            || n.endsWith(".ytdl")
-                            || n.endsWith(".tmp")
-                            || n.endsWith(".temp")
-                            || n.endsWith(".part-frag")
-                            || n.endsWith(".f");
-
-                    if (isPartial) {
-                        try { Files.deleteIfExists(pth); } catch (Exception ignored) {}
-                    }
-                }
-            }
-        } catch (Exception ignored) {}
-    }
 }

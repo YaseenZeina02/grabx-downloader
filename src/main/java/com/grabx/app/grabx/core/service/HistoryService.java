@@ -129,7 +129,7 @@ public class HistoryService {
                         esc(row.url) + "\t" + esc(safeGet(row.title)) + "\t"
                                 + esc(row.folder) + "\t" + esc(row.mode) + "\t"
                                 + esc(row.quality) + "\t" + esc(state) + "\t"
-                                + esc(outputPath) + "\t" + updated + "\t" + esc(row.getReferer())
+                                + esc(outputPath) + "\t" + updated + "\t" + esc(row.getReferer()) + "\t" + esc(row.resumeEtag) + "\t" + row.totalBytes.get()
                 );
             }
             if (!lines.isEmpty()) {
@@ -293,7 +293,7 @@ public class HistoryService {
                                     esc(r.quality) + "\t" +
                                     esc(state) + "\t" +
                                     esc(outPath) + "\t" +
-                                    lastUpdated + "\t" + esc(r.getReferer())
+                                    lastUpdated + "\t" + esc(r.getReferer()) + "\t" + esc(r.resumeEtag) + "\t" + r.totalBytes.get()
                     );
                 }
 
@@ -354,6 +354,8 @@ public class HistoryService {
                 );
 
                 if (c.length > 8) r.setReferer(unesc(c[8]));
+                if (c.length > 9) { String tag = unesc(c[9]); r.resumeEtag = tag == null || tag.isBlank() ? null : tag; }
+                if (c.length > 10) { try { r.totalBytes.set(Long.parseLong(c[10])); } catch (NumberFormatException ignored) {} }
 
                 // Thumb: restore from disk cache only
                 try {

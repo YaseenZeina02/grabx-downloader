@@ -17,16 +17,24 @@ chrome.runtime.onInstalled.addListener(async details => {
 
 chrome.runtime.onStartup.addListener(ensureContextMenu);
 
-chrome.contextMenus.onClicked.addListener((info, tab) => {
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== DOWNLOAD_MENU_ID) return;
   const linkUrl = safeHttpUrl(info.linkUrl);
   if (!linkUrl) return;
 
-  void handOffCapture(fileCapture({
-    url: linkUrl,
-    pageUrl: safeHttpUrl(tab?.url) || linkUrl,
-    title: linkTitle(info, linkUrl)
-  }));
+  const response = await handOffCapture(contextMenuCapture(info, tab));
+  await chrome.storage.local.set({ lastContextMenuResult: {
+    ok: Boolean(response?.ok),
+    message: response?.message || (response?.ok ? 'Sent to GrabX' : 'Could not send this link to GrabX'),
+    at: Date.now()
+  } });
+  await chrome.action.setBadgeText({ text: response?.status === 'queued' ? 'Q' : response?.status === 'awaiting_confirmation' ? '?' : response?.ok ? '' : '!' });
+  if (!response?.ok) {
+    await chrome.action.setBadgeBackgroundColor({ color: '#b3261e' });
+    await chrome.action.setTitle({ title: 'GrabX could not receive the link. Open the extension for details.' });
+  } else {
+    await chrome.action.setTitle({ title: 'Download with GrabX' });
+  }
 });
 
 chrome.downloads.onCreated.addListener(download => {
@@ -105,9 +113,72 @@ async function interceptDownload(download) {
   }
 }
 
-function handOffCapture(capture) {
+function nativeControl(message) {
+  return new Promise(resolve => chrome.runtime.sendNativeMessage(NATIVE_HOST, message, response => {
+    const error = chrome.runtime.lastError;
+    resolve(error ? {ok:false, message:error.message} : response || {ok:false, message:'No response from GrabX'});
+  }));
+}
+
+async function showQueueInExtension() {
+  await chrome.action.setBadgeText({text:'?'});
+  await chrome.action.setTitle({title:'GrabX is closed — open the extension to confirm or cancel'});
+  // Browser support and user-gesture rules vary. Never open a separate window.
+  try { await chrome.action.openPopup(); } catch { /* The badge directs the user to the toolbar popup. */ }
+}
+
+async function handOffCapture(capture) {
+  const state = await nativeControl({type:'status'});
+  if (!state.ok) return {ok:false, message:state.message || 'Update the GrabX browser bridge to use download confirmation.'};
+  const settings = await chrome.storage.local.get('skipQueueConfirmation');
+  if (!state.running && !settings.skipQueueConfirmation) {
+    await chrome.storage.local.set({['pending-' + capture.requestId]: capture});
+    await showQueueInExtension();
+    return {ok:true, status:'awaiting_confirmation', message:'GrabX is closed. Open the GrabX extension to confirm or cancel.'};
+  }
+  const result = await sendCaptureNative(capture, Boolean(settings.skipQueueConfirmation));
+  if (result?.status === 'confirmation_required') {
+    await chrome.storage.local.set({['pending-' + capture.requestId]:capture});
+    await showQueueInExtension();
+    return {ok:true,status:'awaiting_confirmation',message:'GrabX closed before receiving the link. Open the GrabX extension to confirm it.'};
+  }
+  if (result?.status === 'queued') {
+    await chrome.action.setBadgeText({text:'Q'});
+    await chrome.action.setTitle({title:'Downloads queued — open GrabX or manage the waiting list'});
+  }
+  return result;
+}
+
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (sender.id !== chrome.runtime.id || !['GRABX_QUEUE_LIST','GRABX_QUEUE_ACCEPT','GRABX_QUEUE_CANCEL'].includes(message?.type)) return false;
+  (async () => {
+    const key = 'pending-' + String(message.requestId || '');
+    if (message.type === 'GRABX_QUEUE_LIST') {
+      const stored = await chrome.storage.local.get(null);
+      const pending = Object.entries(stored).filter(([key]) => key.startsWith('pending-'))
+        .map(([,item]) => ({requestId:item.requestId, title:item.title, confirmation:true}));
+      const queued = await nativeControl({type:'listQueued'});
+      return {ok:queued.ok, message:queued.message, items:[...pending,...(queued.items || [])]};
+    }
+    const stored = await chrome.storage.local.get(key);
+    if (message.type === 'GRABX_QUEUE_ACCEPT') {
+      if (!stored[key]) return {ok:false,message:'This request is no longer waiting for confirmation'};
+      const result = await sendCaptureNative(stored[key], true);
+      if (result.ok) {
+        await chrome.storage.local.remove(key);
+        if (message.dontAskAgain) await chrome.storage.local.set({skipQueueConfirmation:true});
+      }
+      return result;
+    }
+    if (stored[key]) { await chrome.storage.local.remove(key); return {ok:true,message:'Download cancelled'}; }
+    return nativeControl({type:'cancelQueued', requestId:message.requestId});
+  })().then(respond).catch(error => respond({ok:false,message:error.message}));
+  return true;
+});
+
+function sendCaptureNative(capture, queueApproved = false) {
   return new Promise(resolve => {
-    chrome.runtime.sendNativeMessage(NATIVE_HOST, capture, async response => {
+    chrome.runtime.sendNativeMessage(NATIVE_HOST, {...capture, queueApproved}, async response => {
       if (chrome.runtime.lastError) {
         const nativeError = chrome.runtime.lastError.message || "Unknown native messaging error";
         resolve({
@@ -117,10 +188,39 @@ function handOffCapture(capture) {
         });
         return;
       }
-      if (response?.ok) await rememberCapture(capture);
+      if (response?.ok) {
+        try { await rememberCapture(capture); } catch { /* History is optional; always return the bridge result. */ }
+      }
       resolve(response || { ok: false, message: "No response from GrabX" });
     });
   });
+}
+
+function contextMenuCapture(info, tab) {
+  const link = safeHttpUrl(info.linkUrl);
+  if (!link) return null;
+  const parsed = new URL(link);
+  const page = safeHttpUrl(info.frameUrl) || safeHttpUrl(info.pageUrl) || safeHttpUrl(tab?.url) || link;
+  if (parsed.hostname === 'github.com') {
+    const parts = parsed.pathname.split('/').filter(Boolean);
+    if (parts.length === 2) {
+      const repo = parts[1].replace(/\.git$/i, '');
+      return fileCapture({ url: `https://github.com/${parts[0]}/${repo}/archive/HEAD.zip`,
+        pageUrl: link, title: `${repo}.zip`, suggestedFilename: `${repo}.zip` });
+    }
+    if (parts.length >= 5 && parts[2] === 'blob') {
+      parsed.pathname = parsed.pathname.replace('/blob/', '/raw/');
+      parsed.search = '';
+      return fileCapture({ url: parsed.href, pageUrl: link, title: fileNameFromUrl(link) });
+    }
+  }
+  const direct = /\.(zip|7z|rar|tar|gz|bz2|xz|exe|msi|dmg|pkg|deb|rpm|iso|pdf|epub|mp4|mkv|webm|mov|mp3|m4a|flac|wav|jpg|jpeg|png|gif|csv|docx?|xlsx?|pptx?)$/i.test(parsed.pathname)
+    || parsed.hostname === 'raw.githubusercontent.com'
+    || /\/(releases\/download|archive)\//.test(parsed.pathname);
+  if (direct) return fileCapture({ url: link, pageUrl: page, title: linkTitle(info, link) });
+  return sanitizeCapture({ protocolVersion: 1, type: 'capture', requestId: crypto.randomUUID(),
+    pageUrl: link, mediaUrl: null, title: linkTitle(info, link), mediaKind: 'page',
+    action: 'ask', createdAt: Date.now() });
 }
 
 function fileCapture({ url, pageUrl, title, mimeType = '', suggestedFilename = '', suggestedFolder = '' }) {

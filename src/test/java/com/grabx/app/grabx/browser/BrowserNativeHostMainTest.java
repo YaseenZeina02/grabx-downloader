@@ -20,6 +20,41 @@ class BrowserNativeHostMainTest {
     Path temporaryDirectory;
 
     @Test
+    void statusDoesNotQueueAndCancellationRemovesOnlySelectedRequest() throws Exception {
+        Path dir = temporaryDirectory.resolve("browser-inbox");
+        var inbox = new BrowserBridgeInbox(dir);
+        inbox.enqueue("request-1111", "{}".getBytes(StandardCharsets.UTF_8));
+        inbox.enqueue("request-2222", "{}".getBytes(StandardCharsets.UTF_8));
+        var input = new ByteArrayOutputStream();
+        BrowserNativeHostMain.writeMessage(input, "{\"type\":\"status\"}".getBytes(StandardCharsets.UTF_8));
+        BrowserNativeHostMain.writeMessage(input, "{\"type\":\"cancelQueued\",\"requestId\":\"request-1111\"}".getBytes(StandardCharsets.UTF_8));
+        var output = new ByteArrayOutputStream();
+        BrowserNativeHostMain.run(new ByteArrayInputStream(input.toByteArray()), output, new BrowserBridgeProtocol(), inbox);
+        var responses = new ByteArrayInputStream(output.toByteArray());
+        assertTrue(new String(BrowserNativeHostMain.readMessage(responses), StandardCharsets.UTF_8).contains("\"running\":false"));
+        assertTrue(new String(BrowserNativeHostMain.readMessage(responses), StandardCharsets.UTF_8).contains("\"ok\":true"));
+        assertTrue(!Files.exists(dir.resolve("request-1111.json")));
+        assertTrue(Files.exists(dir.resolve("request-2222.json")));
+    }
+
+    @Test
+    void closedAppRequiresApprovalBeforePersistingCapture() throws Exception {
+        String capture = "{\"protocolVersion\":1,\"type\":\"capture\",\"requestId\":\"request-9999\","
+                + "\"pageUrl\":\"https://example.com/file.zip\",\"mediaKind\":\"file\",\"action\":\"file\"}";
+        var inbox = new BrowserBridgeInbox(temporaryDirectory.resolve("browser-inbox"));
+        for (boolean approved : new boolean[]{false, true}) {
+            var input = new ByteArrayOutputStream();
+            String request = approved ? capture.replace("}", ",\"queueApproved\":true}") : capture;
+            BrowserNativeHostMain.writeMessage(input, request.getBytes(StandardCharsets.UTF_8));
+            var output = new ByteArrayOutputStream();
+            BrowserNativeHostMain.run(new ByteArrayInputStream(input.toByteArray()), output, new BrowserBridgeProtocol(), inbox);
+            String result = new String(BrowserNativeHostMain.readMessage(new ByteArrayInputStream(output.toByteArray())), StandardCharsets.UTF_8);
+            assertTrue(result.contains(approved ? "queued" : "confirmation_required"));
+            assertEquals(approved, Files.exists(inbox.directory().resolve("request-9999.json")));
+        }
+    }
+
+    @Test
     void readsAndWritesNativeEndianFramedMessages() throws Exception {
         byte[] body = "{\"hello\":\"GrabX\"}".getBytes(StandardCharsets.UTF_8);
         ByteArrayOutputStream framed = new ByteArrayOutputStream();

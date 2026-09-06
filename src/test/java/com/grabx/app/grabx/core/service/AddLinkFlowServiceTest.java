@@ -12,6 +12,42 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 class AddLinkFlowServiceTest {
     @Test
+    void browserDownloadCancelsPendingClipboardDialogAndSuppressesLatePoll() {
+        List<String> shown = new ArrayList<>();
+        AtomicReference<Runnable> scheduled = new AtomicReference<>();
+        String url = "https://example.com/repository.git";
+        AddLinkFlowService service = service(shown, () -> url, (task, delay) -> scheduled.set(task));
+        service.openFromClipboardMonitor(url);
+        Runnable pending = scheduled.get();
+        service.browserDownloadStarted();
+        pending.run();
+        service.openFromClipboardMonitor(url);
+        scheduled.get().run();
+        assertEquals(List.of(), shown);
+        service.showFromClipboard();
+        assertEquals(List.of(url), shown);
+    }
+
+    @Test
+    void browserDownloadClosesAutomaticDialogButPreservesManualDialog() {
+        List<String> closed = new ArrayList<>();
+        String url = "https://example.com/repository.git";
+        AddLinkFlowService service = new AddLinkFlowService(
+                new AddLinkFlowService.DialogGateway() {
+                    public boolean isOpen() { return false; }
+                    public void show(String value) { }
+                    public void closeIfUrlMatches(String value) { closed.add(value); }
+                }, value -> value != null && value.startsWith("https://"), () -> url,
+                (task, delay) -> task.run(), Runnable::run, text -> { });
+        service.openFromClipboardMonitor(url);
+        service.browserDownloadStarted();
+        assertEquals(List.of(url), closed);
+        service.showFromClipboard();
+        service.browserDownloadStarted();
+        assertEquals(List.of(url), closed);
+    }
+
+    @Test
     void opensWithTrimmedClipboardUrlAndIgnoresInvalidText() {
         List<String> shown = new ArrayList<>();
         AddLinkFlowService service = service(shown, () -> "  https://example.com/video  ", (action, delay) -> action.run());

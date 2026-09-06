@@ -35,11 +35,46 @@ public final class BrowserNativeHostMain {
 
             BrowserBridgeResponse response;
             try {
+                var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                var control = mapper.readTree(payload);
+                String type = control.path("type").asText();
+                if ("status".equals(type)) {
+                    boolean running = isGrabXRunning(inbox.directory().getParent().resolve("app.pid"));
+                    writeMessage(output, mapper.writeValueAsBytes(java.util.Map.of("ok", true, "running", running)));
+                    continue;
+                }
+                if ("listQueued".equals(type)) {
+                    var pending = new java.util.ArrayList<java.util.Map<String, Object>>();
+                    inbox.ensureDirectory();
+                    try (var files = Files.newDirectoryStream(inbox.directory(), "*.json")) {
+                        for (Path file : files) {
+                            try {
+                                var item = protocol.parse(Files.readAllBytes(file));
+                                pending.add(java.util.Map.of("requestId", item.requestId(), "title", item.title()));
+                            } catch (Exception ignored) { }
+                        }
+                    }
+                    writeMessage(output, mapper.writeValueAsBytes(java.util.Map.of("ok", true, "items", pending)));
+                    continue;
+                }
+                if ("cancelQueued".equals(type)) {
+                    String id = control.path("requestId").asText();
+                    if (!id.matches("[A-Za-z0-9._:-]{8,100}")) throw new IllegalArgumentException("Invalid request ID");
+                    boolean removed = Files.deleteIfExists(inbox.directory().resolve(id.replaceAll("[^A-Za-z0-9._-]", "_") + ".json"));
+                    writeMessage(output, mapper.writeValueAsBytes(java.util.Map.of("ok", removed,
+                            "message", removed ? "Queued download cancelled" : "Already received by GrabX; cancel it in the app")));
+                    continue;
+                }
                 BrowserCapture capture = protocol.parse(payload);
+                boolean appRunning = isGrabXRunning(inbox.directory().getParent().resolve("app.pid"));
+                if (!appRunning && !control.path("queueApproved").asBoolean(false)) {
+                    writeMessage(output, mapper.writeValueAsBytes(java.util.Map.of("ok", false,
+                            "status", "confirmation_required", "message", "GrabX is closed; confirm adding to the waiting list")));
+                    continue;
+                }
                 byte[] normalized = protocol.serialize(capture);
                 inbox.enqueue(capture.requestId(), normalized);
-                boolean appRunning = isGrabXRunning(inbox.directory().getParent().resolve("app.pid"));
-                if (!appRunning) requestApplicationLaunch();
+                // Closed-app requests stay queued until the user opens GrabX.
                 response = BrowserBridgeResponse.accepted(capture.requestId(), appRunning);
             } catch (BrowserBridgeProtocol.ProtocolException exception) {
                 response = BrowserBridgeResponse.rejected(null, exception.getMessage());

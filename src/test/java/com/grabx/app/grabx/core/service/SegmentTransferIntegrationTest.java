@@ -16,6 +16,14 @@ class SegmentTransferIntegrationTest {
     @TempDir Path directory;
 
     @Test void finishesDownloadAfterTruncatedResponseAndServerCappedChunks() throws Exception {
+        verifyResumedTransfer(0);
+    }
+
+    @Test void resumesDayOldSavedBytesAfterAnotherConnectionInterruption() throws Exception {
+        verifyResumedTransfer(4096);
+    }
+
+    private void verifyResumedTransfer(int savedBytes) throws Exception {
         byte[] source = new byte[256 * 1024];
         new Random(71).nextBytes(source);
         List<Integer> offsets = new CopyOnWriteArrayList<>();
@@ -56,6 +64,11 @@ class SegmentTransferIntegrationTest {
             worker.setDaemon(true);
             worker.start();
             Path part = directory.resolve("download.part");
+            if (savedBytes > 0) {
+                Files.write(part, Arrays.copyOf(source, savedBytes));
+                Files.setLastModifiedTime(part, java.nio.file.attribute.FileTime.fromMillis(
+                        System.currentTimeMillis() - TimeUnit.HOURS.toMillis(25)));
+            }
             AtomicLong received = new AtomicLong();
             SegmentTransfer.download(part, 0, source.length - 1, source.length, (start, end) -> {
                 return DownloadRunner.openRangeConnection(
@@ -63,9 +76,9 @@ class SegmentTransferIntegrationTest {
                         "https://example.com/page");
             }, () -> {}, received::addAndGet, c -> {});
             served.get(5, TimeUnit.SECONDS);
-            assertEquals(0, offsets.get(0));
-            assertEquals(8192, offsets.get(1));
-            assertEquals(source.length, received.get());
+            assertEquals(savedBytes, offsets.get(0));
+            assertEquals(savedBytes + 8192, offsets.get(1));
+            assertEquals(source.length - savedBytes, received.get());
             assertArrayEquals(MessageDigest.getInstance("SHA-256").digest(source),
                     MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(part)));
         }

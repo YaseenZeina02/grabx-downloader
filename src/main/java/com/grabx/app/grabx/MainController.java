@@ -116,6 +116,8 @@ public class MainController {
     private PlaylistFlowService playlistFlowService;
 
     private AddLinkFlowService addLinkFlowService;
+    private com.grabx.app.grabx.core.service.PartialRetentionService partialRetention;
+    private int partialRetentionDays() { return Math.max(1, Math.min(365, PREFS.getInt("partialRetentionDays", 2))); }
 
     private HoverTooltipService hoverTooltipService;
 
@@ -412,6 +414,21 @@ public class MainController {
     }
 
     private void initializeDownloadsList(IconButtonService iconButtons) {
+        javafx.scene.control.MenuItem refreshLink = new javafx.scene.control.MenuItem("Update download link and resume…");
+        refreshLink.setOnAction(event -> {
+            DownloadRow row = downloadsList.getSelectionModel().getSelectedItem();
+            if (!canRefreshLink(row)) return;
+            javafx.scene.control.TextInputDialog dialog = new javafx.scene.control.TextInputDialog();
+            dialog.initOwner(ownerWindow());
+            dialog.setTitle("Update download link");
+            dialog.setHeaderText("Paste a fresh direct link for " + row.title.get());
+            dialog.setContentText("Saved data will be checked before resuming:");
+            dialog.showAndWait().filter(value -> !value.isBlank())
+                    .ifPresent(value -> refreshDownloadLink(row, value.trim(), row.getReferer()));
+        });
+        javafx.scene.control.ContextMenu menu = new javafx.scene.control.ContextMenu(refreshLink);
+        menu.setOnShowing(event -> refreshLink.setDisable(!canRefreshLink(downloadsList.getSelectionModel().getSelectedItem())));
+        downloadsList.setContextMenu(menu);
         DownloadRowActions rowActions = new DownloadRowActions(
                 downloadStateCoordinator,
                 activeProcesses,
@@ -770,10 +787,14 @@ public class MainController {
                 historyService::scheduleSave,
                 this::updateMissingSidebarItem,
                 sidebarService::refilter,
-                addLinkFlowService == null ? url -> {} : addLinkFlowService::openOrUpdate,
+                addLinkFlowService == null ? url -> {} : addLinkFlowService::openFromClipboardMonitor,
                 urlAnalysisService::isHttpUrl
         );
         downloadMonitoringService.start();
+        partialRetention = new com.grabx.app.grabx.core.service.PartialRetentionService(
+                downloadItems, activeProcesses, downloadStateCoordinator::cancel,
+                this::partialRetentionDays, historyService::scheduleSave);
+        partialRetention.start();
     }
 
     private void initializeBrowserBridge() {
@@ -800,7 +821,21 @@ public class MainController {
                 }
                 String filename = capture.suggestedFilename();
                 if (filename == null || filename.isBlank()) filename = capture.title();
+                if (offerBrowserLinkRefresh(capture, filename)) return;
+                if (addLinkFlowService != null) addLinkFlowService.browserDownloadStarted();
+                javafx.stage.DirectoryChooser chooser = new javafx.stage.DirectoryChooser();
+                chooser.setTitle("Choose download folder — " + filename);
+                java.io.File initial = new java.io.File(folder);
+                if (initial.isDirectory()) chooser.setInitialDirectory(initial);
+                java.io.File selected = chooser.showDialog(ownerWindow());
+                if (selected == null) {
+                    if (statusText != null) statusText.setText("Browser download cancelled");
+                    return;
+                }
+                folder = selected.getAbsolutePath();
+                downloadFolderPreferences.saveLastFolder(folder);
                 downloadQueueService.enqueueDirect(capture.effectiveUrl(), folder, filename, capture.pageUrl());
+                if (addLinkFlowService != null) addLinkFlowService.browserDownloadStarted();
                 if (statusText != null) statusText.setText("Browser download started in GrabX");
             } else if (addLinkFlowService != null) {
                 addLinkFlowService.openOrUpdate(
@@ -808,6 +843,79 @@ public class MainController {
             }
         } catch (Exception ignored) {
         }
+    }
+
+    private final java.util.Map<DownloadRow, Object> linkChecks = new java.util.HashMap<>();
+
+    private boolean canRefreshLink(DownloadRow row) {
+        if (row == null || !"Direct".equalsIgnoreCase(row.mode)) return false;
+        var state = row.getState();
+        if (state != DownloadRow.State.PAUSED && state != DownloadRow.State.FAILED) return false;
+        try { return com.grabx.app.grabx.core.service.DirectPartialFiles.hasParts(row.outputFile.get()); }
+        catch (Exception error) { return false; }
+    }
+
+    private boolean offerBrowserLinkRefresh(BrowserCapture capture, String filename) {
+        var candidates = downloadItems.stream().filter(this::canRefreshLink).toList();
+        if (candidates.isEmpty()) return false;
+        if (addLinkFlowService != null) addLinkFlowService.browserDownloadStarted();
+        var choice = com.grabx.app.grabx.ui.dialogs.BrowserDownloadDialog.show(ownerWindow(), filename, candidates);
+        if (choice.isEmpty()) return true;
+        DownloadRow previous = choice.get().resume();
+        if (previous == null) return false;
+        refreshDownloadLink(previous, capture.effectiveUrl(), capture.pageUrl());
+        return true;
+    }
+
+    private void refreshDownloadLink(DownloadRow row, String url, String referer) {
+        if (!canRefreshLink(row)) return;
+        Process process = activeProcesses.get(row);
+        if (process != null && process.isAlive()) {
+            stopReasons.put(row, "PAUSE");
+            process.destroyForcibly();
+            Thread waiting = new Thread(() -> {
+                try {
+                    process.waitFor();
+                    Platform.runLater(() -> {
+                        if (downloadItems.contains(row) && row.getState() == DownloadRow.State.PAUSED)
+                            refreshDownloadLink(row, url, referer);
+                    });
+                } catch (InterruptedException error) { Thread.currentThread().interrupt(); }
+            }, "download-link-wait");
+            waiting.setDaemon(true); waiting.start();
+            return;
+        }
+        Object check = new Object();
+        linkChecks.put(row, check);
+        java.nio.file.Path output = row.outputFile.get();
+        long total = row.totalBytes.get();
+        row.setState(DownloadRow.State.PENDING);
+        row.status.set("Checking saved data against the new link…");
+        Thread verification = new Thread(() -> {
+            try {
+                var verified = com.grabx.app.grabx.core.service.DownloadLinkVerifier.verify(url, referer, output, total);
+                Platform.runLater(() -> {
+                    if (linkChecks.get(row) != check || !downloadItems.contains(row) || row.getState() != DownloadRow.State.PENDING) return;
+                    linkChecks.remove(row);
+                    row.url = url;
+                    row.resumeEtag = verified.etag();
+                    row.totalBytes.set(verified.total());
+                    row.setReferer(referer);
+                    historyService.scheduleSave();
+                    startDownloadRow(row, true);
+                });
+            } catch (Exception error) {
+                Platform.runLater(() -> {
+                    if (linkChecks.get(row) != check || !downloadItems.contains(row) || row.getState() != DownloadRow.State.PENDING) return;
+                    linkChecks.remove(row);
+                    row.setState(DownloadRow.State.PAUSED);
+                    row.status.set("Link not updated: " + error.getMessage());
+                    historyService.scheduleSave();
+                });
+            }
+        }, "download-link-verification");
+        verification.setDaemon(true);
+        verification.start();
     }
 
     private void initializePlaylistServices() {
@@ -841,7 +949,29 @@ public class MainController {
 
     @FXML
     public void onSettings(ActionEvent event) {
-        if (statusText != null) statusText.setText("Settings clicked");
+        javafx.scene.control.TextInputDialog dialog = new javafx.scene.control.TextInputDialog(
+                Integer.toString(partialRetentionDays()));
+        dialog.initOwner(ownerWindow());
+        dialog.setTitle("Incomplete download cleanup");
+        dialog.setHeaderText("Delete inactive download parts after this many days");
+        dialog.setContentText("Days (1–365):");
+        javafx.scene.control.Label explanation = new javafx.scene.control.Label(
+                "Default: 2 days since the last downloaded data.\n"
+                + "Paused and failed downloads lose their saved progress after this period.\n"
+                + "Active downloads and completed files are kept. Cleanup runs while GrabX is open.");
+        explanation.setWrapText(true);
+        dialog.getDialogPane().setExpandableContent(explanation);
+        dialog.getDialogPane().setExpanded(true);
+        dialog.showAndWait().ifPresent(value -> {
+            try {
+                int days = Integer.parseInt(value.trim());
+                if (days < 1 || days > 365) throw new NumberFormatException();
+                PREFS.putInt("partialRetentionDays", days);
+                if (statusText != null) statusText.setText("Incomplete files are kept for " + days + " days");
+            } catch (NumberFormatException error) {
+                if (statusText != null) statusText.setText("Enter a whole number from 1 to 365; setting unchanged");
+            }
+        });
     }
 
     @FXML
@@ -876,6 +1006,7 @@ public class MainController {
         } catch (Exception ignored) {}
         try { historyService.saveNow(); } catch (Exception ignored) {}
         try {
+            if (partialRetention != null) partialRetention.stop();
             if (downloadMonitoringService != null) downloadMonitoringService.stop();
         } catch (Exception ignored) {}
         try { if (browserBridgeService != null) browserBridgeService.close(); } catch (Exception ignored) {}

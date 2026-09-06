@@ -46,6 +46,9 @@ public final class AddLinkServicesFactory {
         AddLinkDialogService connectedDialog = dialog;
         AddLinkFlowService flow = new AddLinkFlowService(
                 new AddLinkFlowService.DialogGateway() {
+                    @Override public void closeIfUrlMatches(String url) {
+                        connectedDialog.closeIfUrlMatches(url);
+                    }
                     @Override public boolean isOpen() {
                         return connectedDialog.isOpen();
                     }

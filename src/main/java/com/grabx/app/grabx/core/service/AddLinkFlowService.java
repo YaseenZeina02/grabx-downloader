@@ -11,6 +11,7 @@ public final class AddLinkFlowService {
     public interface DialogGateway {
         boolean isOpen();
         void show(String prefillUrl);
+        default void closeIfUrlMatches(String url) { }
 
         default void show(String prefillUrl, String preferredAction) {
             show(prefillUrl);
@@ -37,6 +38,30 @@ public final class AddLinkFlowService {
 
     private volatile boolean returnAfterPlaylist;
     private volatile String playlistUrl;
+    private String suppressedClipboard;
+    private String automaticClipboardUrl;
+    private long clipboardGeneration;
+
+    public void openFromClipboardMonitor(String url) {
+        String normalized = normalizeUrl(url);
+        if (normalized == null || normalized.equals(suppressedClipboard)) return;
+        suppressedClipboard = null;
+        long generation = ++clipboardGeneration;
+        schedule(() -> uiExecutor.accept(() -> {
+            if (generation != clipboardGeneration || dialog == null || dialog.isOpen()) return;
+            automaticClipboardUrl = normalized;
+            dialog.show(normalized);
+        }));
+    }
+
+    public void browserDownloadStarted() {
+        clipboardGeneration++;
+        suppressedClipboard = normalizeUrl(safeClipboardText());
+        if (dialog != null && automaticClipboardUrl != null) {
+            dialog.closeIfUrlMatches(automaticClipboardUrl);
+        }
+        automaticClipboardUrl = null;
+    }
 
     public AddLinkFlowService(
             DialogGateway dialog,
@@ -63,6 +88,8 @@ public final class AddLinkFlowService {
     }
 
     public void show(String prefillUrl) {
+        clipboardGeneration++;
+        automaticClipboardUrl = null;
         if (dialog == null) {
             if (statusUpdater != null) statusUpdater.accept("Add link service is not ready");
             return;
@@ -83,6 +110,8 @@ public final class AddLinkFlowService {
     }
 
     public void openOrUpdate(String prefillUrl, String preferredAction, boolean autoAnalyze, String preferredFolder) {
+        clipboardGeneration++;
+        automaticClipboardUrl = null;
         String normalizedUrl = normalizeUrl(prefillUrl);
         if (dialog != null && dialog.isOpen()) {
             dialog.show(normalizedUrl, preferredAction, autoAnalyze, preferredFolder);
