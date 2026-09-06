@@ -130,13 +130,12 @@ async function showQueueInExtension() {
 async function handOffCapture(capture) {
   const state = await nativeControl({type:'status'});
   if (!state.ok) return {ok:false, message:state.message || 'Update the GrabX browser bridge to use download confirmation.'};
-  const settings = await chrome.storage.local.get('skipQueueConfirmation');
-  if (!state.running && !settings.skipQueueConfirmation) {
+  if (!state.running) {
     await chrome.storage.local.set({['pending-' + capture.requestId]: capture});
     await showQueueInExtension();
     return {ok:true, status:'awaiting_confirmation', message:'GrabX is closed. Open the GrabX extension to confirm or cancel.'};
   }
-  const result = await sendCaptureNative(capture, Boolean(settings.skipQueueConfirmation));
+  const result = await sendCaptureNative(capture, false);
   if (result?.status === 'confirmation_required') {
     await chrome.storage.local.set({['pending-' + capture.requestId]:capture});
     await showQueueInExtension();
@@ -157,8 +156,8 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       const stored = await chrome.storage.local.get(null);
       const pending = Object.entries(stored).filter(([key]) => key.startsWith('pending-'))
         .map(([,item]) => ({requestId:item.requestId, title:item.title, confirmation:true}));
-      const queued = await nativeControl({type:'listQueued'});
-      return {ok:queued.ok, message:queued.message, items:[...pending,...(queued.items || [])]};
+      const [queued, state] = await Promise.all([nativeControl({type:'listQueued'}), nativeControl({type:'status'})]);
+      return {ok:queued.ok, message:queued.message, running:state.ok ? state.running : null, items:[...pending,...(queued.items || [])]};
     }
     const stored = await chrome.storage.local.get(key);
     if (message.type === 'GRABX_QUEUE_ACCEPT') {
@@ -166,7 +165,6 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       const result = await sendCaptureNative(stored[key], true);
       if (result.ok) {
         await chrome.storage.local.remove(key);
-        if (message.dontAskAgain) await chrome.storage.local.set({skipQueueConfirmation:true});
       }
       return result;
     }

@@ -209,3 +209,16 @@ body { max-height: 580px; overflow-y: auto; }
 .queue-items button:last-child,.queue-refresh { background:#18263b; }
 .queue-refresh { margin-top:10px; }
 .queue-items button:disabled { opacity:.5; }
+
+/* Media first, with a quiet queue footer. */
+.header { margin-bottom:10px; }
+.state { padding:22px 14px; min-height:0; }
+.empty-icon { width:42px; height:42px; font-size:24px; margin-bottom:12px; }
+.queue-toggle { margin:16px 0 0; background:transparent; border-color:#293952; padding:11px 13px; }
+.queue-toggle[aria-expanded="true"] { border-radius:12px 12px 0 0; background:#142137; border-bottom-color:transparent; }
+.queue-panel { margin:0; border-top:0; border-radius:0 0 12px 12px; background:#142137; }
+.queue-help { padding:10px 12px; border-radius:8px; background:#1c304d; color:#c0d0e9; }
+.queue-count { color:#b6c7df; background:#23334c; }
+.queue-items { font-size:12px; color:#aabbd2; }
+.queue-items > div:last-child { border-bottom:0; }
+.queue-refresh { background:transparent; color:#a6bddd; border-color:#354967; }

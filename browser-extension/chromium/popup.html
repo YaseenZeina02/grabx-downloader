@@ -19,23 +19,13 @@
 
     <label class="interception">
       <span class="interception-copy">
-        <strong>Catch browser downloads</strong>
-        <small>Send new file downloads to GrabX automatically</small>
+        <strong>Send downloads to GrabX</strong>
+        <small>Automatically catch downloads from this browser</small>
       </span>
       <input id="interceptDownloads" type="checkbox" role="switch">
       <span class="switch" aria-hidden="true"></span>
     </label>
 
-    <button id="manageQueue" class="queue-toggle" type="button" aria-expanded="false" aria-controls="queuePanel">
-      <span>Waiting list <span id="queueCount" class="queue-count">0</span></span><span id="queueChevron" aria-hidden="true">▾</span>
-    </button>
-    <section id="queuePanel" class="queue-panel hidden" aria-label="Waiting downloads">
-      <p class="queue-help">Confirm requests while GrabX is closed. Choose the download folder when the app opens.</p>
-      <label class="queue-preference"><input id="dontAsk" type="checkbox"> Don’t ask again when GrabX is closed</label>
-      <p id="message" class="queue-message" role="status"></p>
-      <div id="items" class="queue-items"></div>
-      <button id="refresh" class="queue-refresh" type="button">Refresh</button>
-    </section>
     <section id="loading" class="state">
       <span class="scanner"></span>
       <strong>Scanning this page</strong>
@@ -44,14 +34,24 @@
 
     <section id="empty" class="state hidden">
       <span class="empty-icon" aria-hidden="true">↓</span>
-      <strong>Nothing to download here</strong>
-      <small>No visible media or downloadable files were found on this page.</small>
+      <strong>No media found</strong>
+      <small>Open a video page or right-click a download link.</small>
     </section>
 
     <section id="results" class="results hidden" aria-live="polite"></section>
+    <button id="manageQueue" class="queue-toggle" type="button" aria-expanded="false" aria-controls="queuePanel">
+      <span>Waiting list <span id="queueCount" class="queue-count">0</span></span><span id="queueChevron" aria-hidden="true">▾</span>
+    </button>
+    <section id="queuePanel" class="queue-panel hidden" aria-label="Waiting downloads">
+      <p id="queueStatus" class="queue-help hidden" role="status"></p>
+      <p id="message" class="queue-message" role="status"></p>
+      <div id="items" class="queue-items"></div>
+      <button id="refresh" class="queue-refresh" type="button">Refresh</button>
+    </section>
     <p id="notice" class="notice hidden" role="status"></p>
   </main>
   <script src="popup.js"></script>
+  <script src="queue-state.js"></script>
   <script src="queue.js"></script>
 </body>
 </html>

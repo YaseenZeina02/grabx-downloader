@@ -5,10 +5,7 @@ const INTERCEPTION_SETTING = 'interceptBrowserDownloads';
 document.addEventListener('DOMContentLoaded', async () => {
   await initializeInterceptionToggle();
   await scanActivePage();
-  const { lastContextMenuResult } = await chrome.storage.local.get('lastContextMenuResult');
-  if (lastContextMenuResult && Date.now() - lastContextMenuResult.at < 600000) {
-    showNotice(lastContextMenuResult.message, !lastContextMenuResult.ok);
-  }
+
 });
 
 async function initializeInterceptionToggle() {
@@ -248,8 +245,12 @@ async function sendCapture(candidate, action) {
   };
   try {
     const response = await chrome.runtime.sendMessage({ type: 'GRABX_CAPTURE', capture });
-    showNotice(response?.message || 'Sent to GrabX', !response?.ok);
-    if (response?.ok) setTimeout(() => window.close(), 850);
+    if (response?.status === 'awaiting_confirmation' || response?.status === 'queued') {
+      document.getElementById('notice').classList.add('hidden');
+      window.dispatchEvent(new Event('grabx-queue-updated'));
+    } else {
+      showNotice(response?.message || 'Sent to GrabX', !response?.ok);
+    }
   } catch {
     showNotice('Could not connect to GrabX', true);
   } finally {

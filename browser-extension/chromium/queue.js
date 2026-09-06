@@ -2,6 +2,8 @@
 const message = document.getElementById('message');
 const panel = document.getElementById('queuePanel');
 const toggle = document.getElementById('manageQueue');
+let refreshGeneration = 0;
+let lastPending = false;
 function expand(value) {
   panel.classList.toggle('hidden', !value);
   toggle.setAttribute('aria-expanded', String(value));
@@ -12,11 +14,19 @@ toggle.addEventListener('click', () => {
   refresh().catch(error => message.textContent = error.message);
 });
 async function refresh(autoExpand = false) {
+  const generation = ++refreshGeneration;
   const response = await chrome.runtime.sendMessage({type:'GRABX_QUEUE_LIST'});
+  if (generation !== refreshGeneration) return;
+  const presentation = queuePresentation(response);
+  const status = document.getElementById('queueStatus');
+  status.textContent = presentation.text;
+  status.classList.toggle('hidden', !presentation.text);
+  if (response.ok) message.textContent = '';
   const list = document.getElementById('items'); list.replaceChildren();
   const pending = (response.items || []).some(item => item.confirmation);
   document.getElementById('queueCount').textContent = String((response.items || []).length);
-  if (autoExpand && pending) expand(true);
+  if (pending && (autoExpand || !lastPending)) expand(true);
+  lastPending = pending;
   if (response.ok) {
     await chrome.action.setBadgeText({text:pending ? '?' : response.items.length ? 'Q' : ''});
   }
@@ -24,36 +34,32 @@ async function refresh(autoExpand = false) {
   for (const item of response.items || []) {
     const card = document.createElement('div');
     const title = document.createElement('p'); title.textContent = item.title;
-    const state = document.createElement('small'); state.textContent = item.confirmation ? 'Awaiting your confirmation' : 'Queued for GrabX';
+    const state = document.createElement('small'); state.textContent = item.confirmation ? 'Ready to add' : 'Waiting for GrabX';
     card.append(title, state);
-    for (const action of item.confirmation ? ['Accept', 'Cancel'] : ['Cancel']) {
+    for (const action of item.confirmation ? ['Add to queue', 'Cancel'] : ['Cancel']) {
       const button = document.createElement('button'); button.textContent = action;
       button.addEventListener('click', async () => {
         button.disabled = true;
         try {
-          const result = await chrome.runtime.sendMessage({type:action === 'Accept' ? 'GRABX_QUEUE_ACCEPT' : 'GRABX_QUEUE_CANCEL',
-            requestId:item.requestId, dontAskAgain:document.getElementById('dontAsk').checked});
-          message.textContent = result.message || (result.ok ? 'Done' : 'Could not update request');
+          const result = await chrome.runtime.sendMessage({type:action === 'Add to queue' ? 'GRABX_QUEUE_ACCEPT' : 'GRABX_QUEUE_CANCEL',
+            requestId:item.requestId});
           await refresh();
+          if (!result.ok) message.textContent = result.message || 'Could not update request';
         } catch(error) { message.textContent = error.message; button.disabled = false; }
       });
       card.append(button);
     }
     list.append(card);
   }
-  if (!(response.items || []).length && response.ok) list.textContent = 'No downloads waiting.';
+  if (!(response.items || []).length && response.ok) list.textContent = 'You’re all caught up. No downloads waiting.';
 }
 document.getElementById('refresh').addEventListener('click', () => refresh().catch(error => message.textContent = error.message));
 refresh(true).catch(error => message.textContent = error.message);
-chrome.storage.local.get('skipQueueConfirmation').then(settings => {
-  document.getElementById('dontAsk').checked = Boolean(settings.skipQueueConfirmation);
-});
-document.getElementById('dontAsk').addEventListener('change', event => {
-  chrome.storage.local.set({skipQueueConfirmation:event.target.checked});
-});
-
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && Object.keys(changes).some(key => key.startsWith('pending-')))
     refresh(true).catch(error => message.textContent = error.message);
 });
+window.addEventListener('grabx-queue-updated', () => refresh(true).catch(error => message.textContent = error.message));
+const timer = setInterval(() => refresh().catch(() => {}), 3000);
+window.addEventListener('pagehide', () => clearInterval(timer));
 })();
