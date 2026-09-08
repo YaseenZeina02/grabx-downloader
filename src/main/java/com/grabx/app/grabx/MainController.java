@@ -821,7 +821,8 @@ public class MainController {
                 }
                 String filename = capture.suggestedFilename();
                 if (filename == null || filename.isBlank()) filename = capture.title();
-                if (offerBrowserLinkRefresh(capture, filename)) return;
+                if (addLinkFlowService != null) addLinkFlowService.browserDownloadStarted();
+                if (!com.grabx.app.grabx.ui.dialogs.BrowserDownloadDialog.show(ownerWindow(), filename)) return;
                 if (addLinkFlowService != null) addLinkFlowService.browserDownloadStarted();
                 javafx.stage.DirectoryChooser chooser = new javafx.stage.DirectoryChooser();
                 chooser.setTitle("Choose download folder — " + filename);
@@ -853,18 +854,6 @@ public class MainController {
         if (state != DownloadRow.State.PAUSED && state != DownloadRow.State.FAILED) return false;
         try { return com.grabx.app.grabx.core.service.DirectPartialFiles.hasParts(row.outputFile.get()); }
         catch (Exception error) { return false; }
-    }
-
-    private boolean offerBrowserLinkRefresh(BrowserCapture capture, String filename) {
-        var candidates = downloadItems.stream().filter(this::canRefreshLink).toList();
-        if (candidates.isEmpty()) return false;
-        if (addLinkFlowService != null) addLinkFlowService.browserDownloadStarted();
-        var choice = com.grabx.app.grabx.ui.dialogs.BrowserDownloadDialog.show(ownerWindow(), filename, candidates);
-        if (choice.isEmpty()) return true;
-        DownloadRow previous = choice.get().resume();
-        if (previous == null) return false;
-        refreshDownloadLink(previous, capture.effectiveUrl(), capture.pageUrl());
-        return true;
     }
 
     private void refreshDownloadLink(DownloadRow row, String url, String referer) {

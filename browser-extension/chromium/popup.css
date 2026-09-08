@@ -222,3 +222,6 @@ body { max-height: 580px; overflow-y: auto; }
 .queue-items { font-size:12px; color:#aabbd2; }
 .queue-items > div:last-child { border-bottom:0; }
 .queue-refresh { background:transparent; color:#a6bddd; border-color:#354967; }
+.open-grabx { width:100%; padding:10px 14px; margin:0 0 12px; border:1px solid #668eff; border-radius:9px; background:#386cf0; color:white; font-weight:600; cursor:pointer; }
+.open-grabx:hover { background:#4b7dff; }
+.open-grabx:disabled { opacity:.65; cursor:default; }

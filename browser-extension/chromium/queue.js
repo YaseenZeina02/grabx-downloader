@@ -4,6 +4,23 @@ const panel = document.getElementById('queuePanel');
 const toggle = document.getElementById('manageQueue');
 let refreshGeneration = 0;
 let lastPending = false;
+let openingUntil = 0;
+let launchError = '';
+const openApp = document.getElementById('openGrabX');
+openApp.addEventListener('click', async () => {
+  openingUntil = Date.now() + 20000;
+  launchError = '';
+  openApp.disabled = true;
+  openApp.textContent = 'Opening…';
+  try {
+    const result = await chrome.runtime.sendMessage({type:'GRABX_OPEN_APP'});
+    if (!result?.ok) {
+      openingUntil = 0;
+      launchError = result?.message || 'Could not open GrabX. Try opening it manually.';
+    }
+  } catch (error) { openingUntil = 0; launchError = 'Could not reach GrabX. Try opening it manually.'; }
+  await refresh();
+});
 function expand(value) {
   panel.classList.toggle('hidden', !value);
   toggle.setAttribute('aria-expanded', String(value));
@@ -21,7 +38,15 @@ async function refresh(autoExpand = false) {
   const status = document.getElementById('queueStatus');
   status.textContent = presentation.text;
   status.classList.toggle('hidden', !presentation.text);
-  if (response.ok) message.textContent = '';
+  if (response.running === true) { openingUntil = 0; launchError = ''; }
+  if (openingUntil && Date.now() >= openingUntil) {
+    openingUntil = 0;
+    launchError = 'GrabX hasn’t opened yet. Try again or open it manually.';
+  }
+  openApp.classList.toggle('hidden', response.running !== false);
+  openApp.disabled = openingUntil > 0;
+  openApp.textContent = openingUntil ? 'Opening…' : 'Open GrabX';
+  if (response.ok) message.textContent = launchError;
   const list = document.getElementById('items'); list.replaceChildren();
   const pending = (response.items || []).some(item => item.confirmation);
   document.getElementById('queueCount').textContent = String((response.items || []).length);

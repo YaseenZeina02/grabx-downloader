@@ -149,8 +149,9 @@ async function handOffCapture(capture) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  if (sender.id !== chrome.runtime.id || !['GRABX_QUEUE_LIST','GRABX_QUEUE_ACCEPT','GRABX_QUEUE_CANCEL'].includes(message?.type)) return false;
+  if (sender.id !== chrome.runtime.id || !['GRABX_QUEUE_LIST','GRABX_QUEUE_ACCEPT','GRABX_QUEUE_CANCEL','GRABX_OPEN_APP'].includes(message?.type)) return false;
   (async () => {
+    if (message.type === 'GRABX_OPEN_APP') return nativeControl({type:'launch'});
     const key = 'pending-' + String(message.requestId || '');
     if (message.type === 'GRABX_QUEUE_LIST') {
       const stored = await chrome.storage.local.get(null);

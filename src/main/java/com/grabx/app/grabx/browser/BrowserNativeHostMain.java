@@ -38,6 +38,14 @@ public final class BrowserNativeHostMain {
                 var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
                 var control = mapper.readTree(payload);
                 String type = control.path("type").asText();
+                if ("launch".equals(type)) {
+                    boolean running = isGrabXRunning(inbox.directory().getParent().resolve("app.pid"));
+                    if (!running) requestApplicationLaunch();
+                    writeMessage(output, mapper.writeValueAsBytes(java.util.Map.of("ok", true,
+                            "status", running ? "running" : "opening",
+                            "message", running ? "GrabX is open" : "Opening GrabX…")));
+                    continue;
+                }
                 if ("status".equals(type)) {
                     boolean running = isGrabXRunning(inbox.directory().getParent().resolve("app.pid"));
                     writeMessage(output, mapper.writeValueAsBytes(java.util.Map.of("ok", true, "running", running)));
@@ -79,7 +87,7 @@ public final class BrowserNativeHostMain {
             } catch (BrowserBridgeProtocol.ProtocolException exception) {
                 response = BrowserBridgeResponse.rejected(null, exception.getMessage());
             } catch (Exception exception) {
-                response = BrowserBridgeResponse.rejected(null, "Could not hand off this download");
+                response = BrowserBridgeResponse.rejected(null, "Could not complete the request. Check that GrabX is installed and try again.");
             }
             writeMessage(output, protocol.serialize(response));
         }
@@ -116,23 +124,21 @@ public final class BrowserNativeHostMain {
         }
     }
 
-    private static void requestApplicationLaunch() {
-        try {
-            String configuredExecutable = System.getenv("GRABX_APP_EXECUTABLE");
-            if (configuredExecutable != null && !configuredExecutable.isBlank()) {
-                new ProcessBuilder(configuredExecutable).start();
-                return;
-            }
+    private static void requestApplicationLaunch() throws Exception {
+        String executable = System.getenv("GRABX_APP_EXECUTABLE");
+        ProcessBuilder builder;
+        boolean mac = false;
+        if (executable != null && !executable.isBlank()) builder = new ProcessBuilder(executable);
+        else {
             String os = System.getProperty("os.name", "").toLowerCase();
-            if (os.contains("mac")) {
-                new ProcessBuilder("open", "-a", "GrabX").start();
-            } else if (os.contains("win")) {
-                new ProcessBuilder("cmd", "/c", "start", "", "GrabX.exe").start();
-            } else {
-                new ProcessBuilder("grabx").start();
-            }
-        } catch (Exception ignored) {
-            // The request remains queued and is consumed the next time GrabX opens.
+            mac = os.contains("mac");
+            if (mac) builder = new ProcessBuilder("open", "-a", "GrabX");
+            else if (os.contains("win")) builder = new ProcessBuilder("cmd", "/c", "start", "", "GrabX.exe");
+            else builder = new ProcessBuilder("grabx");
         }
+        Process launcher = builder.redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD).start();
+        if (mac && launcher.waitFor(5, java.util.concurrent.TimeUnit.SECONDS) && launcher.exitValue() != 0)
+            throw new java.io.IOException("Could not open GrabX. Check that the app is installed.");
     }
 }
