@@ -48,7 +48,7 @@ class VideoQualityUtilsTest {
     @Test
     void buildsBoundedYtDlpSelector() {
         assertEquals(
-                "bv*[height<=720]+ba/b[height<=720]/bv*+ba/b",
+                "(bv*[aspect_ratio>=?1][height<=720]/bv*[aspect_ratio<1][width<=720])+ba/(b[aspect_ratio>=?1][height<=720]/b[aspect_ratio<1][width<=720])/bv*+ba/b",
                 VideoQualityUtils.formatSelectorForHeight(720)
         );
     }

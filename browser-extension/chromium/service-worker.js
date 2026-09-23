@@ -38,8 +38,32 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 chrome.downloads.onCreated.addListener(download => {
-  void interceptDownload(download);
+  void watchBrowserDownload(download).catch(() => {});
 });
+
+chrome.downloads.onChanged.addListener(delta => {
+  void browserDownloadChanged(delta).catch(() => {});
+});
+
+const interceptingDownloads = new Set();
+const changedWhileIntercepting = new Set();
+const downloadWatchKey = id => `browser-download-${id}`;
+
+async function watchBrowserDownload(download) {
+  if (!safeHttpUrl(download.finalUrl) && !safeHttpUrl(download.url)) return;
+  const settings = await chrome.storage.local.get(INTERCEPTION_SETTING);
+  if (settings[INTERCEPTION_SETTING] === false) return;
+  await chrome.storage.session.set({ [downloadWatchKey(download.id)]: true });
+  await interceptDownload(download.id);
+}
+
+async function browserDownloadChanged(delta) {
+  if (delta.state?.current === 'complete' || delta.state?.current === 'interrupted') {
+    await chrome.storage.session.remove(downloadWatchKey(delta.id));
+    return;
+  }
+  if (delta.filename?.current) await interceptDownload(delta.id);
+}
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'GRABX_PAGE_CONTEXT') {
@@ -62,6 +86,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
 
+  // A page/popup request is not evidence that the browser selected a destination.
+  capture.browserDestinationResolved = false;
+
   handOffCapture(capture).then(sendResponse);
   return true;
 });
@@ -76,41 +103,74 @@ async function ensureContextMenu() {
   });
 }
 
-async function interceptDownload(download) {
-  const settings = await chrome.storage.local.get(INTERCEPTION_SETTING);
-  if (settings[INTERCEPTION_SETTING] === false) return;
-
-  const url = safeHttpUrl(download.finalUrl) || safeHttpUrl(download.url);
-  if (!url) return;
-
-  // Pause first so a failed bridge can safely fall back to the browser.
+async function interceptDownload(id) {
+  if (interceptingDownloads.has(id)) {
+    changedWhileIntercepting.add(id);
+    return;
+  }
+  interceptingDownloads.add(id);
+  let pausedByGrabX = false;
   try {
-    await chrome.downloads.pause(download.id);
-    const [current] = await chrome.downloads.search({ id: download.id });
-    if (!current || current.state !== 'in_progress' || !current.paused) return;
+    const key = downloadWatchKey(id);
+    const watched = await chrome.storage.session.get(key);
+    if (!watched[key]) return;
+    const [download] = await chrome.downloads.search({ id });
+    if (!download || download.state !== 'in_progress' || download.paused) {
+      await chrome.storage.session.remove(key);
+      return;
+    }
+    // onCreated may precede Save As. Wait for the final filename, however long
+    // the user needs; otherwise GrabX's chooser races the browser's chooser.
+    if (!hasBrowserDestination(download.filename)) return;
+    await chrome.storage.session.remove(key);
+    const settings = await chrome.storage.local.get(INTERCEPTION_SETTING);
+    if (settings[INTERCEPTION_SETTING] === false) return;
+    const url = safeHttpUrl(download.finalUrl) || safeHttpUrl(download.url);
+    if (!url) return;
 
-    const stored = await chrome.storage.session.get('pageContexts');
-    const context = (stored.pageContexts || []).find(item => item.url === safeHttpUrl(download.referrer) && Date.now() - item.at < 1800000);
-    const exactMedia = context?.media?.find(item => item.url === url);
-    const suggested = chooseDownloadName(fileName(current.filename), url, exactMedia?.title || context?.title, download.mime);
+    await chrome.downloads.pause(id);
+    pausedByGrabX = true;
+    const [current] = await chrome.downloads.search({ id });
+    if (!current || current.state !== 'in_progress' || !current.paused) return;
+    const suggested = fileName(current.filename);
     const response = await handOffCapture(fileCapture({
-      url,
-      pageUrl: safeHttpUrl(download.referrer) || url,
+      url: safeHttpUrl(current.finalUrl) || safeHttpUrl(current.url) || url,
+      pageUrl: safeHttpUrl(current.referrer) || url,
       title: suggested,
-      mimeType: download.mime || '',
+      mimeType: current.mime || '',
       suggestedFilename: suggested,
-      suggestedFolder: parentFolder(download.filename)
+      suggestedFolder: parentFolder(current.filename),
+      browserDestinationResolved: hasBrowserDestination(current.filename)
     }));
 
     if (response?.ok) {
-      await ignoreDownloadError(chrome.downloads.cancel(download.id));
-      await ignoreDownloadError(chrome.downloads.erase({ id: download.id }));
+      // Once accepted, a cancellation failure must not start a second transfer.
+      pausedByGrabX = false;
+      await chrome.downloads.cancel(id);
+      await ignoreDownloadError(chrome.downloads.erase({ id }));
     } else {
-      await ignoreDownloadError(chrome.downloads.resume(download.id));
+      await resumeInterceptedDownload(id);
+      pausedByGrabX = false;
     }
   } catch {
-    await ignoreDownloadError(chrome.downloads.resume(download.id));
+    if (pausedByGrabX) await resumeInterceptedDownload(id);
+  } finally {
+    interceptingDownloads.delete(id);
+    if (changedWhileIntercepting.delete(id)) await interceptDownload(id);
   }
+}
+
+async function resumeInterceptedDownload(id) {
+  try {
+    const [item] = await chrome.downloads.search({ id });
+    if (item?.state === 'in_progress' && item.paused) await chrome.downloads.resume(id);
+  } catch { /* Never resurrect a browser download the user cancelled. */ }
+}
+
+function hasBrowserDestination(path) {
+  const value = String(path || '');
+  return /^(?:\/|[A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+\\)/.test(value)
+    && Boolean(fileName(value)) && !/[\\/]$/.test(value);
 }
 
 function nativeControl(message) {
@@ -222,7 +282,7 @@ function contextMenuCapture(info, tab) {
     action: 'ask', createdAt: Date.now() });
 }
 
-function fileCapture({ url, pageUrl, title, mimeType = '', suggestedFilename = '', suggestedFolder = '' }) {
+function fileCapture({ url, pageUrl, title, mimeType = '', suggestedFilename = '', suggestedFolder = '', browserDestinationResolved = false }) {
   return sanitizeCapture({
     protocolVersion: 1,
     type: 'capture',
@@ -235,6 +295,7 @@ function fileCapture({ url, pageUrl, title, mimeType = '', suggestedFilename = '
     action: 'file',
     suggestedFilename,
     suggestedFolder,
+    browserDestinationResolved,
     createdAt: Date.now()
   });
 }
@@ -257,6 +318,8 @@ function fileName(path) {
 function parentFolder(path) {
   const value = String(path || '');
   const separator = Math.max(value.lastIndexOf('/'), value.lastIndexOf('\\'));
+  if (separator === 0) return value.slice(0, 1);
+  if (separator === 2 && /^[A-Za-z]:/.test(value)) return value.slice(0, 3);
   return separator > 0 ? value.slice(0, separator) : '';
 }
 
@@ -303,6 +366,13 @@ function sanitizeCapture(value) {
     action: allowedActions.has(value.action) ? value.action : 'ask',
     suggestedFilename: String(value.suggestedFilename || '').slice(0, 255),
     suggestedFolder: String(value.suggestedFolder || '').slice(0, 4096),
+    browserDestinationResolved: value.browserDestinationResolved === true,
+    availableQualities: Array.isArray(value.availableQualities) && value.availableQualities.length <= 16
+      ? [...new Set(value.availableQualities.filter(h => Number.isInteger(h) && [144,240,360,480,540,720,1080,1440,2160,4320].includes(h)))] : [],
+    qualitySizes: Array.isArray(value.qualitySizes) && value.qualitySizes.length <= 16
+      ? value.qualitySizes.filter(s => s && Number.isInteger(s.quality) && Number.isSafeInteger(s.bytes)
+          && s.bytes > 0 && s.bytes <= 10_000_000_000_000)
+        .map(s => ({quality: s.quality, bytes: s.bytes})) : [],
     createdAt: Number(value.createdAt) || Date.now()
   };
 }

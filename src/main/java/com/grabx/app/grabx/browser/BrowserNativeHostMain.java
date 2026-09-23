@@ -129,6 +129,13 @@ public final class BrowserNativeHostMain {
         ProcessBuilder builder;
         boolean mac = false;
         if (executable != null && !executable.isBlank()) builder = new ProcessBuilder(executable);
+        else if (System.getenv("GRABX_APP_HOME") != null && !System.getenv("GRABX_APP_HOME").isBlank()) {
+            Path appHome = Path.of(System.getenv("GRABX_APP_HOME"));
+            boolean windows = System.getProperty("os.name", "").toLowerCase().contains("win");
+            Path java = Path.of(System.getProperty("java.home"), "bin", windows ? "javaw.exe" : "java");
+            builder = new ProcessBuilder(java.toString(), "--module-path", appHome.resolve("lib").toString(),
+                    "--module", "com.grabx.app.grabx/com.grabx.app.grabx.Launcher");
+        }
         else {
             String os = System.getProperty("os.name", "").toLowerCase();
             mac = os.contains("mac");

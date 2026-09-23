@@ -45,3 +45,8 @@ bin/
 
 *.bundle
 /src.zip
+
+# Python maintenance tools
+__pycache__/
+*.pyc
+*.download

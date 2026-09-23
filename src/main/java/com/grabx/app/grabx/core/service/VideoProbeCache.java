@@ -17,8 +17,10 @@ public final class VideoProbeCache {
     private static final int MAX_ENTRIES = 100;
     private static final long TTL_MS = 30L * 60L * 1000L;
 
-    public record Result(Set<Integer> heights, long createdAtMs) {
+    public record Result(Set<Integer> heights, long createdAtMs, java.util.Map<Integer, Long> sizes) {
+        public Result(Set<Integer> heights, long createdAtMs) { this(heights, createdAtMs, java.util.Map.of()); }
         public Result {
+            sizes = java.util.Map.copyOf(sizes);
             heights = heights == null
                     ? Set.of()
                     : Collections.unmodifiableSet(new TreeSet<>(heights));
@@ -68,6 +70,24 @@ public final class VideoProbeCache {
         synchronized (cacheLock) {
             cache.clear();
         }
+    }
+
+    public void remember(String url, Set<Integer> heights) {
+        if (heights != null && !heights.isEmpty()) put(cacheKey(url), new Result(heights, System.currentTimeMillis()));
+    }
+
+    public void remember(String url, Set<Integer> heights, java.util.List<com.grabx.app.grabx.browser.BrowserVideoSize> sizes) {
+        if (heights == null || heights.isEmpty()) return;
+        var byQuality = new java.util.HashMap<Integer, Long>();
+        for (var size : sizes) if (heights.contains(size.quality()) && size.bytes() > 0) byQuality.put(size.quality(), size.bytes());
+        put(cacheKey(url), new Result(heights, System.currentTimeMillis(), byQuality));
+    }
+
+    public Long estimatedBytes(String url, int quality) {
+        Result result = findFresh(cacheKey(url));
+        if (result == null) return null;
+        int selected = quality > 0 ? quality : result.heights().stream().mapToInt(Integer::intValue).max().orElse(-1);
+        return result.sizes().get(selected);
     }
 
     private Result findFresh(String key) {

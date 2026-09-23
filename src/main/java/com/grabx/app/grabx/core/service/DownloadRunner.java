@@ -155,6 +155,7 @@ public final class DownloadRunner {
 
         Thread downloadThread = new Thread(() -> {
             Process p = null;
+            com.grabx.app.grabx.util.MediaInfoCache.Input mediaInput = null;
             final String[] lastError = new String[]{null};
 
             // detect output file path
@@ -169,7 +170,7 @@ public final class DownloadRunner {
             // gx:  12.3%| 1.2MiB/s| 00:12
             final java.util.regex.Pattern PROG =
                     java.util.regex.Pattern.compile(
-                            "^(?:gx:|download:gx:)\\s*([0-9.]+)%\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)$"
+                            "^(?:gx:|download:gx:)\\s*([0-9.]+|NA)%?\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)\\|\\s*([^|]*)$"
                     );
 
             // fallback native progress line
@@ -202,6 +203,7 @@ public final class DownloadRunner {
 
                 java.util.List<String> cmd = new java.util.ArrayList<>();
                 cmd.add(yt.toAbsolutePath().toString());
+                cmd.addAll(com.grabx.app.grabx.util.YtDlpOptions.extractionArguments());
 
                 cmd.add("--newline");
                 cmd.add("--no-warnings");
@@ -210,12 +212,7 @@ public final class DownloadRunner {
                 // allow resume / pause-resume
                 cmd.add("--continue");
 
-                cmd.add("--user-agent");
-                cmd.add("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36");
-                cmd.add("--referer");
-                cmd.add("https://www.youtube.com/");
-                cmd.add("--extractor-args");
-                cmd.add("youtube:player_client=android");
+                // Use the same extractor defaults as the format-analysis step.
 
                 // Do NOT overwrite existing files (we will decide the naming strategy below)
                 cmd.add("--no-overwrites");
@@ -244,7 +241,7 @@ public final class DownloadRunner {
                     } else {
                         requestedHeight = parseHeightFromLabel.apply(q);
                         if (requestedHeight > 0) {
-                            selector = "bv*[height<=" + requestedHeight + "]+ba/b[height<=" + requestedHeight + "]/best";
+                            selector = com.grabx.app.grabx.util.VideoQualityUtils.formatSelectorForHeight(requestedHeight);
                         } else {
                             selector = "bv*+ba/best";
                             requestedHeight = -1;
@@ -267,31 +264,17 @@ public final class DownloadRunner {
                     }
                 }
 
-                String outTpl = baseTpl;
-                String probedOutput = null;
-                try {
-                    long probeStartMs = System.currentTimeMillis();
-                    String probed = probeOutputFilename.probe(yt, url, selector, outDir, baseTpl);
-                    probedOutput = probed;
-                    LOG.fine(() -> "Output filename probe took "
-                            + (System.currentTimeMillis() - probeStartMs) + " ms");
-                    String selectedTemplate = resume
-                            ? com.grabx.app.grabx.util.DownloadRuntimeUtils.resumeOutputTemplate(
-                                    outDir, row.outputFile == null ? null : row.outputFile.get())
-                            : null;
-                    if (selectedTemplate == null || selectedTemplate.isBlank()) {
-                        selectedTemplate = com.grabx.app.grabx.util.DownloadRuntimeUtils
-                                .uniqueOutputTemplate(outDir, probed);
-                    }
-                    if (selectedTemplate != null && !selectedTemplate.isBlank()) outTpl = selectedTemplate;
-                } catch (Exception ignored) {
-                }
+                long probeStartMs = System.currentTimeMillis();
+                var outputPlan = com.grabx.app.grabx.util.DownloadRuntimeUtils.planOutput(
+                        outDir, row.outputFile == null ? null : row.outputFile.get(), resume, baseTpl,
+                        () -> probeOutputFilename.probe(yt, url, selector, outDir, baseTpl));
+                String outTpl = outputPlan.template();
+                LOG.fine(() -> "Output planning took " + (System.currentTimeMillis() - probeStartMs) + " ms");
 
                 // Persist the chosen source path before yt-dlp starts. If the app is
                 // closed before the first Destination line, the next launch can still
                 // reuse the exact stem and continue its .part file.
-                java.nio.file.Path plannedOutput = com.grabx.app.grabx.util.DownloadRuntimeUtils
-                        .concreteOutputPath(outTpl, probedOutput);
+                java.nio.file.Path plannedOutput = outputPlan.plannedOutput();
                 if (plannedOutput != null) {
                     detectedOutput.set(plannedOutput);
                     final java.nio.file.Path savedPlannedOutput = plannedOutput;
@@ -306,6 +289,10 @@ public final class DownloadRunner {
                         : outDir.resolve(outTpl).toString());
 
 
+                MediaTransferProgress mediaProgress = new MediaTransferProgress();
+                cmd.addAll(java.util.List.of("--print", MediaTransferProgress.SELECTION_TEMPLATE,
+                        "--no-simulate", "--no-quiet", "--progress"));
+
                 // progress template
                 cmd.add("--progress-template");
                 cmd.add(
@@ -316,6 +303,7 @@ public final class DownloadRunner {
                                 + "|%(progress.total_bytes)s"
                                 + "|%(progress.total_bytes_estimate)s"
                                 + "|%(info.duration)s"
+                                + "|%(info.format_id)s|%(progress.status)s|%(progress.speed)s"
                 );
 
                 if (audioOnly) {
@@ -345,10 +333,14 @@ public final class DownloadRunner {
                 } else {
                     cmd.add("-f");
                     cmd.add(selector);
+                    cmd.addAll(java.util.List.of("--merge-output-format", "mp4"));
+                    cmd.addAll(com.grabx.app.grabx.util.YtDlpOptions.videoFormatArguments());
                 }
 
 
-                cmd.add(url);
+                mediaInput = com.grabx.app.grabx.util.MediaInfoCache.SHARED.openInput(url);
+                cmd.addAll(mediaInput.arguments());
+                LOG.fine("Reusing analyzed media information: " + mediaInput.cached());
 
                 Path ffmpeg = com.grabx.app.grabx.util.FfmpegManager.ensureAvailable();
                 if (ffmpeg != null) {
@@ -359,270 +351,339 @@ public final class DownloadRunner {
                     LOG.warning("Managed FFmpeg unavailable; yt-dlp will try the system PATH");
                 }
 
-                ProcessBuilder pb = new ProcessBuilder(cmd);
-                pb.redirectErrorStream(true);
-                pb.environment().putIfAbsent("PYTHONIOENCODING", "utf-8");
+                int attemptCode;
+                String attemptReason;
+                while (true) {
+                    ProcessBuilder pb = new ProcessBuilder(cmd);
+                    pb.redirectErrorStream(true);
+                    pb.environment().putIfAbsent("PYTHONIOENCODING", "utf-8");
 
-                long processStartMs = System.currentTimeMillis();
-                p = pb.start();
-                LOG.fine(() -> "Download process start took "
-                        + (System.currentTimeMillis() - processStartMs) + " ms");
-                long firstOutputClockMs = System.currentTimeMillis();
-                final boolean[] firstOutputLogged = {false};
-                activeProcesses.put(row, p);
+                    long processStartMs = System.currentTimeMillis();
+                    if (stopReasons.get(row) != null) throw new InterruptedException("Preparation stopped");
+                    p = pb.start();
+                    LOG.fine(() -> "Download process start took "
+                            + (System.currentTimeMillis() - processStartMs) + " ms");
+                    long firstOutputClockMs = System.currentTimeMillis();
+                    final boolean[] firstOutputLogged = {false};
+                    activeProcesses.put(row, p);
 
-                try (java.io.BufferedReader br = new java.io.BufferedReader(
-                        new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
+                    try (java.io.BufferedReader br = new java.io.BufferedReader(
+                            new java.io.InputStreamReader(p.getInputStream(), java.nio.charset.StandardCharsets.UTF_8))) {
 
-                    String line;
-                    while ((line = br.readLine()) != null) {
-                        if (!firstOutputLogged[0]) {
-                            firstOutputLogged[0] = true;
-                            LOG.fine(() -> "First yt-dlp output received after "
-                                    + (System.currentTimeMillis() - firstOutputClockMs) + " ms");
-                        }
-
-                        String s = line.trim();
-                        if (s.isEmpty()) continue;
-
-                        String liveStopReason = stopReasons.get(row);
-                        if ("PAUSE".equals(liveStopReason) || "CANCEL".equals(liveStopReason) || "RETRY".equals(liveStopReason)) {
-                            try { killProcessTree.accept(p); } catch (Exception ignored) {}
-                            break;
-                        }
-
-                        // DOWNLOAD PHASE: yt-dlp started a source stream/file.
-                        if (s.startsWith("[download] Destination:")) {
-
-                            final String phaseLabel;
-                            if (audioOnly || modeAudio.equals(mode) || "Audio".equalsIgnoreCase(mode) || "Audio only".equalsIgnoreCase(mode)) {
-                                phaseLabel = "Downloading audio ";
-                            } else {
-                                final boolean isAudioStream = isAudioStreamFromDestinationLine.test(s);
-                                phaseLabel = isAudioStream ? "Downloading audio " : "Downloading video ";
+                        String line;
+                        while ((line = br.readLine()) != null) {
+                            if (!firstOutputLogged[0]) {
+                                firstOutputLogged[0] = true;
+                                LOG.fine(() -> "First yt-dlp output received after "
+                                        + (System.currentTimeMillis() - firstOutputClockMs) + " ms");
                             }
 
-                            lastProgressMap.remove(row);
+                            String s = line.trim();
+                            if (s.isEmpty()) continue;
 
-                            Platform.runLater(() -> {
-                                try {
-                                    row.downloadedBytes.set(0);
-                                    row.totalBytes.set(-1);
-                                    row.speed.set("");
-                                    row.eta.set("");
-                                    row.size.set("");
-                                    if (row.progress.get() < 0) row.progress.set(0);
-                                    row.progress.set(0);
+                            String liveStopReason = stopReasons.get(row);
+                            if ("PAUSE".equals(liveStopReason) || "CANCEL".equals(liveStopReason) || "RETRY".equals(liveStopReason)) {
+                                try { killProcessTree.accept(p); } catch (Exception ignored) {}
+                                break;
+                            }
 
-                                    row.status.set(phaseLabel);
-
-                                    if (row.state.get() != DownloadRow.State.DOWNLOADING)
-                                        row.setState(DownloadRow.State.DOWNLOADING);
-
-                                } catch (Exception ignored) {}
-                            });
-                        }
-
-                        // POST-PROCESS PHASE: yt-dlp does not expose a reliable
-                        // percentage here, so start a distinct animated phase.
-                        String postProcessStatus = com.grabx.app.grabx.util.DownloadRuntimeUtils
-                                .postProcessStatus(s);
-                        if (postProcessStatus != null) {
-
-                            Platform.runLater(() -> {
-                                try {
-                                    long expectedBytes = row.totalBytes.get();
-                                    row.size.set(expectedBytes > 0
-                                            ? formatBytesDecimal.apply(expectedBytes)
-                                            : "");
-                                    row.speed.set("");
-                                    row.eta.set("");
-                                    row.status.set(postProcessStatus);
-                                    row.progress.set(-1);
-                                } catch (Exception ignored) {}
-                            });
-                        }
-
-                        if (s.startsWith("ERROR:")) lastError[0] = s;
-
-                        // capture output path
-                        try {
-                            var d1 = DEST1.matcher(s);
-                            var d2 = DEST2.matcher(s);
-                            var mg = MERGE.matcher(s);
-
-                            String pathStr = null;
-                            if (d1.find()) pathStr = d1.group(1);
-                            else if (d2.find()) pathStr = d2.group(1);
-                            else if (mg.find()) pathStr = mg.group(1);
-
-                            if (pathStr != null && !pathStr.isBlank()) {
-                                String ps = pathStr.trim();
-                                if ((ps.startsWith("\"") && ps.endsWith("\"")) || (ps.startsWith("'") && ps.endsWith("'"))) {
-                                    ps = ps.substring(1, ps.length() - 1);
+                            if (s.startsWith("gxmeta:")) {
+                                String metadata = s.substring("gxmeta:".length());
+                                int separator = metadata.indexOf('|');
+                                double duration = 0;
+                                if (separator >= 0) {
+                                    try { duration = Double.parseDouble(metadata.substring(0, separator)); }
+                                    catch (NumberFormatException ignored) {}
+                                    metadata = metadata.substring(separator + 1);
                                 }
-                                java.nio.file.Path finalOut = java.nio.file.Paths.get(ps);
-                                try {
-                                    if (!finalOut.isAbsolute()) {
-                                        // Resolve relative output paths against the selected output directory
-                                        finalOut = outDir.resolve(finalOut).normalize();
-                                    }
-                                } catch (Exception ignored) {}
-
-                                final java.nio.file.Path finalOut2 = finalOut;
-                                detectedOutput.set(finalOut2);
-                                Platform.runLater(() -> {
-                                    try { row.outputFile.set(finalOut2); } catch (Exception ignored) {}
-                                });
-                            }
-                        } catch (Exception ignored) {}
-
-                        // progress (preferred)
-                        var m = PROG.matcher(s);
-                        if (m.find()) {
-                            if (startedDownloading.compareAndSet(false, true)) {
-                                Platform.runLater(() -> {
-//                                    row.status.set("Downloading");
-                                    String cur = row.status.get();
-                                    if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
-                                        row.status.set("Downloading");
-                                    }
-                                    row.size.set("");
-                                    if (row.progress.get() < 0) row.progress.set(0);
-                                });
+                                mediaProgress.select(metadata, duration);
+                                if (mediaProgress.combined()) {
+                                    var selection = mediaProgress.snapshot();
+                                    Platform.runLater(() -> {
+                                        row.totalBytes.set(selection.total());
+                                        row.size.set(selection.sizeText());
+                                    });
+                                }
+                                continue;
                             }
 
-                            double pct;
+                            // DOWNLOAD PHASE: yt-dlp started a source stream/file.
+                            if (s.startsWith("[download] Destination:")) {
+
+                                final String phaseLabel;
+                                if (audioOnly || modeAudio.equals(mode) || "Audio".equalsIgnoreCase(mode) || "Audio only".equalsIgnoreCase(mode)) {
+                                    phaseLabel = "Downloading audio ";
+                                } else {
+                                    final boolean isAudioStream = isAudioStreamFromDestinationLine.test(s);
+                                    phaseLabel = isAudioStream ? "Downloading audio " : "Downloading video ";
+                                }
+
+                                final boolean combined = mediaProgress.combined();
+                                if (!combined) lastProgressMap.remove(row);
+                                Platform.runLater(() -> {
+                                    try {
+                                        if (!combined) {
+                                            row.downloadedBytes.set(0);
+                                            row.totalBytes.set(-1);
+                                            row.size.set("");
+                                            row.progress.set(0);
+                                        }
+                                        row.speed.set("");
+                                        row.eta.set("");
+                                        if (row.state.get() != DownloadRow.State.DOWNLOADING)
+                                            row.setState(DownloadRow.State.DOWNLOADING);
+                                        row.status.set(phaseLabel);
+                                    } catch (Exception ignored) {}
+                                });
+                            }
+
+                            // POST-PROCESS PHASE: yt-dlp does not expose a reliable
+                            // percentage here, so start a distinct animated phase.
+                            String postProcessStatus = com.grabx.app.grabx.util.DownloadRuntimeUtils
+                                    .postProcessStatus(s);
+                            if (postProcessStatus != null) {
+                                final boolean combined = mediaProgress.combined();
+                                Platform.runLater(() -> {
+                                    try {
+                                        long expectedBytes = row.totalBytes.get();
+                                        row.size.set(expectedBytes > 0
+                                                ? (combined ? "≈ " : "") + formatBytesDecimal.apply(expectedBytes)
+                                                : "");
+                                        row.speed.set("");
+                                        row.eta.set("");
+                                        row.status.set(postProcessStatus);
+                                        row.progress.set(-1);
+                                    } catch (Exception ignored) {}
+                                });
+                            }
+
+                            if (s.startsWith("ERROR:")) lastError[0] = s;
+
+                            // capture output path
                             try {
-                                pct = Double.parseDouble(m.group(1)) / 100.0;
-                            } catch (Exception ex) {
-                                pct = -1;
-                            }
+                                var d1 = DEST1.matcher(s);
+                                var d2 = DEST2.matcher(s);
+                                var mg = MERGE.matcher(s);
 
-                            String spd = m.group(2);
-                            String et  = m.group(3);
+                                String pathStr = null;
+                                if (d1.find()) pathStr = d1.group(1);
+                                else if (d2.find()) pathStr = d2.group(1);
+                                else if (mg.find()) pathStr = mg.group(1);
 
-                            long downloaded = parseLongSafe.apply(m.group(4));
-                            long total = parseLongSafe.apply(m.group(5));
-                            if (total <= 0) total = parseLongSafe.apply(m.group(6));
+                                if (pathStr != null && !pathStr.isBlank()) {
+                                    String ps = pathStr.trim();
+                                    if ((ps.startsWith("\"") && ps.endsWith("\"")) || (ps.startsWith("'") && ps.endsWith("'"))) {
+                                        ps = ps.substring(1, ps.length() - 1);
+                                    }
+                                    java.nio.file.Path finalOut = java.nio.file.Paths.get(ps);
+                                    try {
+                                        if (!finalOut.isAbsolute()) {
+                                            // Resolve relative output paths against the selected output directory
+                                            finalOut = outDir.resolve(finalOut).normalize();
+                                        }
+                                    } catch (Exception ignored) {}
 
-                            long estimatedOutput = 0;
-                            if (audioOnly && "mp3".equals(resolvedAudioFormat)) {
-                                estimatedOutput = com.grabx.app.grabx.util.DownloadRuntimeUtils
-                                        .estimateEncodedAudioBytes(m.group(7), MP3_BITRATE_BITS_PER_SECOND);
-                            }
-                            if (estimatedOutput > 0) {
-                                total = estimatedOutput;
-                                downloaded = pct < 0
-                                        ? 0
-                                        : Math.round(estimatedOutput * Math.min(1, pct));
-                            }
-
-                            // UI size text: downloaded / total (if total known)
-                            final String sizeText = com.grabx.app.grabx.util.DownloadRuntimeUtils
-                                    .formatTransferSize(downloaded, total);
-
-                            double fpct = pct;
-                            long finalDownloaded = downloaded;
-                            long finalTotal = total;
-
-                            Platform.runLater(() -> {
-                                row.downloadedBytes.set(Math.max(0, finalDownloaded));
-                                row.totalBytes.set(finalTotal > 0 ? finalTotal : -1);
-//                                row.status.set("Downloading");
-                                String cur = row.status.get();
-                                if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
-                                    row.status.set("Downloading");
+                                    final java.nio.file.Path finalOut2 = com.grabx.app.grabx.util.DownloadRuntimeUtils
+                                            .mediaOutputPath(finalOut);
+                                    detectedOutput.set(finalOut2);
+                                    Platform.runLater(() -> {
+                                        try { row.outputFile.set(finalOut2); } catch (Exception ignored) {}
+                                    });
                                 }
-                                // أو ببساطة احذفها إذا أنت أصلاً بتضبط status من NEWFILE
-                                row.size.set(sizeText == null ? "" : sizeText);
+                            } catch (Exception ignored) {}
 
-                                applyProgressMonotonic.apply(row, fpct);
+                            // progress (preferred)
+                            var m = PROG.matcher(s);
+                            if (m.find()) {
+                                if (startedDownloading.compareAndSet(false, true)) {
+                                    Platform.runLater(() -> {
+    //                                    row.status.set("Downloading");
+                                        String cur = row.status.get();
+                                        if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
+                                            row.status.set("Downloading");
+                                        }
+                                        row.size.set("");
+                                        if (row.progress.get() < 0) row.progress.set(0);
+                                    });
+                                }
 
-                                if (spd != null && !spd.isBlank() && !"NA".equalsIgnoreCase(spd))
-                                    row.speed.set(normalizeSpeedUnit.apply(spd));
+                                double pct;
+                                try {
+                                    pct = Double.parseDouble(m.group(1)) / 100.0;
+                                } catch (Exception ex) {
+                                    pct = -1;
+                                }
 
-                                if (et != null && !et.isBlank() && !"NA".equalsIgnoreCase(et))
-                                    row.eta.set(et);
-                            });
-                            continue;
-                        }
+                                String spd = m.group(2);
+                                String et  = m.group(3);
 
-                        // progress fallback
-                        var mf = PROG_FALLBACK.matcher(s);
-                        if (mf.find()) {
-                            if (startedDownloading.compareAndSet(false, true)) {
+                                long downloaded = parseLongSafe.apply(m.group(4));
+                                long total = parseLongSafe.apply(m.group(5));
+                                long exactTotal = total;
+                                if (total <= 0) total = parseLongSafe.apply(m.group(6));
+
+                                long estimatedOutput = 0;
+                                if (audioOnly && "mp3".equals(resolvedAudioFormat)) {
+                                    estimatedOutput = com.grabx.app.grabx.util.DownloadRuntimeUtils
+                                            .estimateEncodedAudioBytes(m.group(7), MP3_BITRATE_BITS_PER_SECOND);
+                                }
+                                if (estimatedOutput > 0) {
+                                    total = estimatedOutput;
+                                    downloaded = pct < 0
+                                            ? 0
+                                            : Math.round(estimatedOutput * Math.min(1, pct));
+                                }
+
+                                final boolean combined = mediaProgress.combined();
+                                MediaTransferProgress.Snapshot combinedProgress = null;
+                                String phase = null;
+                                if (combined) {
+                                    String formatId = m.group(8).trim();
+                                    combinedProgress = mediaProgress.update(formatId, downloaded, exactTotal, total,
+                                            "finished".equals(m.group(9).trim()));
+                                    downloaded = combinedProgress.downloaded();
+                                    total = combinedProgress.total();
+                                    pct = combinedProgress.fraction();
+                                    phase = mediaProgress.phase(formatId);
+                                }
+                                final String sizeText = combinedProgress != null ? combinedProgress.sizeText()
+                                        : com.grabx.app.grabx.util.DownloadRuntimeUtils.formatTransferSize(downloaded, total);
+                                final String transferPhase = phase;
+                                final String transferEta = combinedProgress != null ? combinedProgress.eta(m.group(10)) : et;
+
+                                double fpct = pct;
+                                long finalDownloaded = downloaded;
+                                long finalTotal = total;
+
                                 Platform.runLater(() -> {
-//                                    row.status.set("Downloading");
+                                    row.downloadedBytes.set(Math.max(0, finalDownloaded));
+                                    row.totalBytes.set(finalTotal > 0 ? finalTotal : -1);
+    //                                row.status.set("Downloading");
                                     String cur = row.status.get();
                                     if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
                                         row.status.set("Downloading");
                                     }
                                     // أو ببساطة احذفها إذا أنت أصلاً بتضبط status من NEWFILE
-                                    if (row.progress.get() < 0) row.progress.set(0);
+                                    row.size.set(sizeText == null ? "" : sizeText);
+
+                                    if (transferPhase != null) row.status.set(transferPhase);
+                                    if (combined && fpct < 0) row.progress.set(-1);
+                                    else applyProgressMonotonic.apply(row, fpct);
+
+                                    if (spd != null && !spd.isBlank() && !"NA".equalsIgnoreCase(spd))
+                                        row.speed.set(normalizeSpeedUnit.apply(spd));
+
+                                    row.eta.set(transferEta != null && !"NA".equalsIgnoreCase(transferEta)
+                                            ? transferEta : "");
                                 });
+                                continue;
                             }
 
-                            double pct;
-                            try { pct = Double.parseDouble(mf.group(1)) / 100.0; } catch (Exception ex) { pct = -1; }
-                            String spd = mf.group(2);
-                            String et = mf.group(3);
-
-                            double fpct = pct;
-                            Platform.runLater(() -> {
-//                                row.status.set("Downloading");
-                                String cur = row.status.get();
-                                if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
-                                    row.status.set("Downloading");
-                                }
-                                // أو ببساطة احذفها إذا أنت أصلاً بتضبط status من NEWFILE
-                                applyProgressMonotonic.apply(row, fpct);
-                                if (spd != null && !spd.isBlank()) row.speed.set(normalizeSpeedUnit.apply(spd));
-                                if (et != null && !et.isBlank()) row.eta.set(et);
-                            });
-                            continue;
-                        }
-
-                        // phase updates during preparing
-                        if (!startedDownloading.get()) {
-                            // Convert noisy yt-dlp phases to a short friendly text
-                            String phase = null;
-                            String sl = s.toLowerCase(java.util.Locale.ROOT);
-
-                            if (sl.contains("downloading m3u8") || sl.contains("m3u8 information")) {
-                                phase = "Preparing stream";
-                            } else if (sl.contains("downloading webpage")) {
-                                phase = "Preparing";
-                            } else if (sl.contains("extracting")) {
-                                phase = "Extracting info";
-                            } else if (s.startsWith("[info]") || s.startsWith("[youtube]") || s.startsWith("[generic]")) {
-                                phase = "Preparing";
-                            }
-
-                            if (phase != null) {
-                                final String ph = phase;
-                                Platform.runLater(() -> row.status.set(ph));
-                            }
-
-                            // Switch to Downloading as soon as we see download lines
-                            if (s.startsWith("[download]")) {
+                            // progress fallback
+                            var mf = PROG_FALLBACK.matcher(s);
+                            if (mf.find()) {
                                 if (startedDownloading.compareAndSet(false, true)) {
                                     Platform.runLater(() -> {
-//                                        row.status.set("Downloading");
+    //                                    row.status.set("Downloading");
                                         String cur = row.status.get();
                                         if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
                                             row.status.set("Downloading");
                                         }
+                                        // أو ببساطة احذفها إذا أنت أصلاً بتضبط status من NEWFILE
                                         if (row.progress.get() < 0) row.progress.set(0);
                                     });
+                                }
+
+                                double pct;
+                                try { pct = Double.parseDouble(mf.group(1)) / 100.0; } catch (Exception ex) { pct = -1; }
+                                String spd = mf.group(2);
+                                String et = mf.group(3);
+
+                                double fpct = pct;
+                                Platform.runLater(() -> {
+    //                                row.status.set("Downloading");
+                                    String cur = row.status.get();
+                                    if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
+                                        row.status.set("Downloading");
+                                    }
+                                    // أو ببساطة احذفها إذا أنت أصلاً بتضبط status من NEWFILE
+                                    applyProgressMonotonic.apply(row, fpct);
+                                    if (spd != null && !spd.isBlank()) row.speed.set(normalizeSpeedUnit.apply(spd));
+                                    if (et != null && !et.isBlank()) row.eta.set(et);
+                                });
+                                continue;
+                            }
+
+                            // phase updates during preparing
+                            if (!startedDownloading.get()) {
+                                // Convert noisy yt-dlp phases to a short friendly text
+                                String phase = null;
+                                String sl = s.toLowerCase(java.util.Locale.ROOT);
+
+                                if (sl.contains("downloading m3u8") || sl.contains("m3u8 information")) {
+                                    phase = "Preparing stream";
+                                } else if (sl.contains("downloading webpage")) {
+                                    phase = "Preparing";
+                                } else if (sl.contains("extracting")) {
+                                    phase = "Extracting info";
+                                } else if (s.startsWith("[info]") || s.startsWith("[youtube]") || s.startsWith("[generic]")) {
+                                    phase = "Preparing";
+                                }
+
+                                if (phase != null) {
+                                    final String ph = phase;
+                                    Platform.runLater(() -> row.status.set(ph));
+                                }
+
+                                // Switch to Downloading as soon as we see download lines
+                                if (s.startsWith("[download]")) {
+                                    if (startedDownloading.compareAndSet(false, true)) {
+                                        Platform.runLater(() -> {
+    //                                        row.status.set("Downloading");
+                                            String cur = row.status.get();
+                                            if (cur == null || cur.isBlank() || cur.equals("Preparing")) {
+                                                row.status.set("Downloading");
+                                            }
+                                            if (row.progress.get() < 0) row.progress.set(0);
+                                        });
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                int code = p.waitFor();
-                String reason = stopReasons.get(row);
+                    attemptCode = p.waitFor();
+                    attemptReason = stopReasons.get(row);
+                    var retry = com.grabx.app.grabx.util.MediaInfoCache.SHARED
+                            .retryCommand(cmd, mediaInput, attemptCode, attemptReason);
+                    if (retry == null) break;
+                    cmd.clear();
+                    cmd.addAll(retry);
+                    lastError[0] = null;
+                    Platform.runLater(() -> {
+                        if (stopReasons.get(row) == null) row.status.set("Refreshing stream links...");
+                    });
+                }
+                if (attemptCode == 0 && !audioOnly && attemptReason == null) {
+                    Path compatible = com.grabx.app.grabx.util.MacVideoCompatibility.prepare(
+                            detectedOutput.get(), ffmpeg,
+                            process -> {
+                                activeProcesses.put(row, process);
+                                if (stopReasons.get(row) != null) killProcessTree.accept(process);
+                            }, () -> stopReasons.get(row) != null,
+                            () -> Platform.runLater(() -> {
+                                row.status.set("Preparing video for macOS...");
+                                row.progress.set(-1);
+                                row.speed.set("");
+                                row.eta.set("");
+                            }));
+                    if (compatible != null) {
+                        detectedOutput.set(compatible);
+                        Platform.runLater(() -> row.outputFile.set(compatible));
+                    }
+                }
+                final int code = attemptCode;
+                final String reason = stopReasons.get(row);
 
                 if (code == 0 && audioOnly) {
                     com.grabx.app.grabx.util.MacFileIconService.applyEmbeddedArtwork(
@@ -667,6 +728,8 @@ public final class DownloadRunner {
                             if (out != null && java.nio.file.Files.exists(out)) {
                                 long sz = java.nio.file.Files.size(out);
                                 row.size.set(formatBytesDecimal.apply(sz));
+                                row.downloadedBytes.set(sz);
+                                row.totalBytes.set(sz);
                             } else {
                                 row.size.set("");
                             }
@@ -742,6 +805,8 @@ public final class DownloadRunner {
                     row.eta.set("");
                     saveHistory();
                 });
+            } finally {
+                if (mediaInput != null) mediaInput.close();
             }
         }, "yt-dlp-download");
         downloadThread.setDaemon(true);

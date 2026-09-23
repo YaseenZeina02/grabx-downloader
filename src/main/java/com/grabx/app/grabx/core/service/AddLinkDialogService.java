@@ -158,6 +158,25 @@ private static javafx.scene.Node buildSuccessGraphic() {
         return addLinkDialogOpen;
     }
 
+    public void offerBrowserQualities(String url, java.util.List<Integer> heights,
+                                      java.util.List<com.grabx.app.grabx.browser.BrowserVideoSize> sizes) {
+        videoProbeCache.remember(url, new java.util.TreeSet<>(heights), sizes);
+    }
+
+    public void offerBrowserQualities(String url, java.util.List<Integer> heights) {
+        if (heights != null && !heights.isEmpty()) videoProbeCache.remember(url, new java.util.TreeSet<>(heights));
+    }
+
+    /** Each newly copied URL replaces the current Add Link URL. */
+    public void updateUrlFromClipboard(String url) {
+        if (!addLinkDialogOpen || activeAddLinkUrlField == null || url == null
+                || !urlAnalysisService.isHttpUrl(url.trim())) return;
+        String current = activeAddLinkUrlField.getText();
+        if (url.trim().equals(current)) return;
+        activeAddLinkUrlField.setText(url.trim());
+        activeAddLinkUrlField.positionCaret(activeAddLinkUrlField.getLength());
+    }
+
     /** optional: close if open */
     public void closeIfOpen() {
         try {
@@ -411,6 +430,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
 
         // size loading
         final long[] sizeReqId = {0};
+        final long[] urlRevision = {0};
         final boolean[] dialogAlive = { true };
         final int[] sizeDots = {0};
 
@@ -525,8 +545,11 @@ private static javafx.scene.Node buildSuccessGraphic() {
             }
 
             if (lastType[0] == ContentType.VIDEO) {
-                stopSizeLoading.run();
-                setSizeText.accept("");
+                Long bytes = cfg.MODE_AUDIO.equals(modeV) ? null
+                        : videoProbeCache.estimatedBytes(u, VideoQualityUtils.parseHeight(qV));
+                setSizeText.accept(cfg.MODE_AUDIO.equals(modeV) ? "" : bytes != null
+                        ? "Estimated download: ≈ " + formatBytesDecimal(bytes) + " (video + audio)"
+                        : "Estimated download: unavailable before download");
                 return;
             }
 
@@ -543,7 +566,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
                 qualityCombo.getSelectionModel().select(cfg.QUALITY_BEST);
             }
             if (okBtn != null && !okBtn.isDisabled() && lastType[0] == ContentType.VIDEO) {
-                setSizeText.accept("");
+                updateSizeAsync.run();
             }
         });
 
@@ -552,7 +575,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
             if (lastType[0] != ContentType.VIDEO) return;
             if (newQ == null) return;
             if (cfg.QUALITY_SEPARATOR.equals(newQ)) return;
-            setSizeText.accept("");
+            updateSizeAsync.run();
         });
 
         Runnable applyTypeToUi = () -> {
@@ -566,7 +589,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
                 showSuccess.run();
                 if (okBtn != null) okBtn.setDisable(false);
                 setGetButtonLoading(getBtn, false);
-                setSizeText.accept("");
+                updateSizeAsync.run();
 
             } else if (t == ContentType.PLAYLIST) {
                 modeCombo.setDisable(true);
@@ -619,11 +642,13 @@ private static javafx.scene.Node buildSuccessGraphic() {
                 hideSuccess.run();
 
                 final long probeSession = sessionId.get();
+                final long probeRevision = urlRevision[0];
                 final String requestedKey = videoProbeCache.cacheKey(url);
                 videoProbeCache.get(url, () -> videoProbeService.probeHeights(url))
                         .whenComplete((cachedProbe, probeError) -> Platform.runLater(() -> {
                         if (!dialogAlive[0]) return;
                         if (probeSession != sessionId.get()) return;
+                        if (probeRevision != urlRevision[0]) return;
                         String currentUrl = urlField.getText() == null ? "" : urlField.getText().trim();
                         if (!requestedKey.equals(videoProbeCache.cacheKey(currentUrl))) return;
 
@@ -640,6 +665,9 @@ private static javafx.scene.Node buildSuccessGraphic() {
                             fillQualityComboFromHeights(qualityCombo, heights);
                         }
                         applyTypeToUi.run();
+                        if (heights.isEmpty() && !cfg.MODE_AUDIO.equals(modeCombo.getValue())) {
+                            info.setText("Could not read available qualities. Retry Get, or download Best quality.");
+                        }
                         if (okBtn != null) okBtn.setDisable(false);
                         setGetButtonLoading(getBtn, false);
                         }));
@@ -661,6 +689,11 @@ private static javafx.scene.Node buildSuccessGraphic() {
         urlField.setOnAction(e -> getBtn.fire());
 
         urlField.textProperty().addListener((obs, oldV, newV) -> {
+            urlRevision[0]++;
+            sizeReqId[0]++;
+            stopSizeLoading.run();
+            setGetButtonLoading(getBtn, false);
+            lastProbedHeights[0] = null;
             lastType[0] = ContentType.UNSUPPORTED;
             lastProbedSizeTextByQualityLabel[0].clear();
 
@@ -757,20 +790,10 @@ private static javafx.scene.Node buildSuccessGraphic() {
 
     // ===================== logic helpers =====================
 
-    private static void fillQualityCombo(ComboBox<String> qualityCombo) {
+    private void fillQualityCombo(ComboBox<String> qualityCombo) {
         if (qualityCombo == null) return;
-        // fallback safe list (no 4K/2K by default)
-        qualityCombo.getItems().setAll(
-                "Best",
-                "────────",
-                "1080p",
-                "720p",
-                "540p",
-                "480p",
-                "360p",
-                "240p",
-                "144p"
-        );
+        // Until a probe succeeds, offer no unverified resolution choices.
+        qualityCombo.getItems().setAll(cfg.QUALITY_BEST);
         qualityCombo.getSelectionModel().select(0);
     }
 

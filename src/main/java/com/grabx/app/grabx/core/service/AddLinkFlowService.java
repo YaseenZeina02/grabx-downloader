@@ -12,6 +12,12 @@ public final class AddLinkFlowService {
         boolean isOpen();
         void show(String prefillUrl);
         default void closeIfUrlMatches(String url) { }
+        default void updateUrlFromClipboard(String url) { }
+        default void offerBrowserQualities(String url, java.util.List<Integer> heights) { }
+        default void offerBrowserQualities(String url, java.util.List<Integer> heights,
+                                           java.util.List<com.grabx.app.grabx.browser.BrowserVideoSize> sizes) {
+            offerBrowserQualities(url, heights);
+        }
 
         default void show(String prefillUrl, String preferredAction) {
             show(prefillUrl);
@@ -48,7 +54,12 @@ public final class AddLinkFlowService {
         suppressedClipboard = null;
         long generation = ++clipboardGeneration;
         schedule(() -> uiExecutor.accept(() -> {
-            if (generation != clipboardGeneration || dialog == null || dialog.isOpen()) return;
+            if (generation != clipboardGeneration || dialog == null) return;
+            if (dialog.isOpen()) {
+                dialog.updateUrlFromClipboard(normalized);
+                if (automaticClipboardUrl != null) automaticClipboardUrl = normalized;
+                return;
+            }
             automaticClipboardUrl = normalized;
             dialog.show(normalized);
         }));
@@ -61,6 +72,15 @@ public final class AddLinkFlowService {
             dialog.closeIfUrlMatches(automaticClipboardUrl);
         }
         automaticClipboardUrl = null;
+    }
+
+    public void offerBrowserQualities(String url, java.util.List<Integer> heights,
+                                      java.util.List<com.grabx.app.grabx.browser.BrowserVideoSize> sizes) {
+        if (dialog != null) dialog.offerBrowserQualities(url, heights, sizes);
+    }
+
+    public void offerBrowserQualities(String url, java.util.List<Integer> heights) {
+        if (dialog != null) dialog.offerBrowserQualities(url, heights);
     }
 
     public AddLinkFlowService(

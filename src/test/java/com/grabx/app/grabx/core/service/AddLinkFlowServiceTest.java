@@ -12,6 +12,31 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 class AddLinkFlowServiceTest {
     @Test
+    void successiveClipboardUrlsUpdateAnOpenDialogWithoutOpeningAnother() {
+        List<String> filled = new ArrayList<>();
+        List<String> shown = new ArrayList<>();
+        List<String> closed = new ArrayList<>();
+        String url = "https://example.com/video";
+        var service = new AddLinkFlowService(new AddLinkFlowService.DialogGateway() {
+            public boolean isOpen() { return true; }
+            public void show(String value) { shown.add(value); }
+            public void updateUrlFromClipboard(String value) { filled.add(value); }
+            public void closeIfUrlMatches(String value) { closed.add(value); }
+        }, value -> value != null && value.startsWith("https://"), () -> url,
+                (task, delay) -> task.run(), Runnable::run, text -> { });
+        service.openFromClipboardMonitor("  " + url + "  ");
+        assertEquals(List.of(url), filled);
+        String next = "https://www.youtube.com/watch?v=Oe8bk0CmdzQ";
+        service.openFromClipboardMonitor(next);
+        assertEquals(List.of(url, next), filled);
+        assertEquals(List.of(), shown);
+        service.browserDownloadStarted();
+        assertEquals(List.of(), closed);
+        service.openFromClipboardMonitor(url);
+        assertEquals(List.of(url, next), filled);
+    }
+
+    @Test
     void browserDownloadCancelsPendingClipboardDialogAndSuppressesLatePoll() {
         List<String> shown = new ArrayList<>();
         AtomicReference<Runnable> scheduled = new AtomicReference<>();

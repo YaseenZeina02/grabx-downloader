@@ -23,8 +23,7 @@ public final class NativeDialogs {
     /**
      * Native confirm per OS.
      * - macOS: osascript display dialog (native)
-     * - Windows: PowerShell MessageBox (native)
-     * - Linux: zenity (if available)
+     * - Windows/Linux: JavaFX confirmation with explicit actions
      *
      * @param fileName        display name for the file/task
      * @param canDeleteFiles  if true, show option to delete files too
@@ -81,93 +80,29 @@ public final class NativeDialogs {
             }
         }
 
-        // -------- Windows (PowerShell MessageBox) --------
-        if (os.contains("win")) {
-            try {
-                String title = "Remove download";
-                String msg = "What would you like to do with this download?\n\n\"" + safeName + "\"\n\n" +
-                        (canDeleteFiles
-                                ? "Yes: Delete from device\nNo: Remove from GrabX only\nCancel: Keep"
-                                : "Yes: Remove from GrabX\nNo: Keep");
+        // JavaFX provides the same explicit choices on Windows and Linux without
+        // depending on PowerShell/WPF, zenity, a shell, or platform-specific exit codes.
+        return showPortableRemoveConfirm(safeName, canDeleteFiles);
+    }
 
-                String ps;
-                if (canDeleteFiles) {
-                    // Yes = delete, No = remove only, Cancel = cancel
-                    ps = "Add-Type -AssemblyName PresentationFramework; " +
-                            "$r=[System.Windows.MessageBox]::Show('" + msg.replace("'", "''") + "','" +
-                            title.replace("'", "''") + "','YesNoCancel','Warning'); " +
-                            "Write-Output $r";
-                } else {
-                    ps = "Add-Type -AssemblyName PresentationFramework; " +
-                            "$r=[System.Windows.MessageBox]::Show('" + msg.replace("'", "''") + "','" +
-                            title.replace("'", "''") + "','YesNo','Warning'); " +
-                            "Write-Output $r";
-                }
-
-                Process p = new ProcessBuilder("powershell", "-NoProfile", "-Command", ps)
-                        .redirectErrorStream(true)
-                        .start();
-
-                String out;
-                try (BufferedReader br = new BufferedReader(
-                        new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
-                    out = br.readLine();
-                }
-                p.waitFor();
-
-                if (out == null) return RemoveChoice.CANCEL;
-                out = out.trim();
-
-                if (canDeleteFiles) {
-                    if (out.equalsIgnoreCase("Yes")) return RemoveChoice.REMOVE_AND_DELETE;
-                    if (out.equalsIgnoreCase("No")) return RemoveChoice.REMOVE_ONLY;
-                    return RemoveChoice.CANCEL;
-                } else {
-                    if (out.equalsIgnoreCase("Yes")) return RemoveChoice.REMOVE_ONLY;
-                    return RemoveChoice.CANCEL;
-                }
-
-            } catch (Exception ignored) {
-            }
+    private static RemoveChoice showPortableRemoveConfirm(String name, boolean canDeleteFiles) {
+        if (!javafx.application.Platform.isFxApplicationThread()) {
+            var task = new java.util.concurrent.FutureTask<RemoveChoice>(() -> showPortableRemoveConfirm(name, canDeleteFiles));
+            javafx.application.Platform.runLater(task);
+            try { return task.get(); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); return RemoveChoice.CANCEL; }
+            catch (Exception e) { return RemoveChoice.CANCEL; }
         }
-
-        // -------- Linux (zenity) --------
-        try {
-            String title = "Remove download";
-            String msg = "What would you like to do with this download?\n\n\"" + safeName + "\"";
-
-            if (canDeleteFiles) {
-                Process p = new ProcessBuilder(
-                        "sh", "-lc",
-                        "command -v zenity >/dev/null 2>&1 && " +
-                                "zenity --question --title='" + title.replace("'", "'\\''") + "' " +
-                                "--text='" + msg.replace("'", "'\\''") + "\\n\\nOK=Delete from device, Extra=Remove only' " +
-                                "--ok-label='Delete from Device' --cancel-label='Cancel' --extra-button='Remove'"
-                ).redirectErrorStream(true).start();
-
-                int code = p.waitFor();
-                if (code == 0) return RemoveChoice.REMOVE_AND_DELETE; // OK
-                if (code == 5) return RemoveChoice.REMOVE_ONLY;       // extra button
-                return RemoveChoice.CANCEL;
-
-            } else {
-                Process p = new ProcessBuilder(
-                        "sh", "-lc",
-                        "command -v zenity >/dev/null 2>&1 && " +
-                                "zenity --question --title='" + title.replace("'", "'\\''") + "' " +
-                                "--text='" + msg.replace("'", "'\\''") + "' " +
-                                "--ok-label='Remove' --cancel-label='Cancel'"
-                ).redirectErrorStream(true).start();
-
-                int code = p.waitFor();
-                if (code == 0) return RemoveChoice.REMOVE_ONLY;
-                return RemoveChoice.CANCEL;
-            }
-
-        } catch (Exception ignored) {
-        }
-
-        // Fallback: cancel
-        return RemoveChoice.CANCEL;
+        var remove = new javafx.scene.control.ButtonType("Remove from list");
+        var delete = new javafx.scene.control.ButtonType("Delete from device");
+        var cancel = javafx.scene.control.ButtonType.CANCEL;
+        var dialog = new javafx.scene.control.Alert(javafx.scene.control.Alert.AlertType.CONFIRMATION);
+        javafx.stage.Window.getWindows().stream().filter(javafx.stage.Window::isFocused).findFirst().ifPresent(dialog::initOwner);
+        dialog.setTitle("Remove download");
+        dialog.setHeaderText("Remove this download?");
+        dialog.setContentText(name);
+        dialog.getButtonTypes().setAll(canDeleteFiles ? java.util.List.of(remove, delete, cancel) : java.util.List.of(remove, cancel));
+        var choice = dialog.showAndWait().orElse(cancel);
+        return choice == delete ? RemoveChoice.REMOVE_AND_DELETE : choice == remove ? RemoveChoice.REMOVE_ONLY : RemoveChoice.CANCEL;
     }
 }

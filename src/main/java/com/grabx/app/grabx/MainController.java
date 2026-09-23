@@ -131,9 +131,6 @@ public class MainController {
     private boolean searchExpanded;
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
     private boolean compactView;
-    private Node fullTop;
-    private Node fullCenter;
-    private Node fullBottom;
     private VBox compactRoot;
     private javafx.stage.Stage compactStage;
     private javafx.stage.Stage fullStage;
@@ -150,19 +147,7 @@ public class MainController {
     private boolean compactResizeRight;
     private boolean compactResizeTop;
     private boolean compactResizeBottom;
-    private double fullWidth;
-    private double fullHeight;
-    private double fullMinWidth;
-    private double fullMinHeight;
-    private double fullX;
-    private double fullY;
-    private boolean fullAlwaysOnTop;
-    private boolean fullMaximized;
-    private boolean fullFullScreen;
-    private double windowedWidth = Double.NaN;
-    private double windowedHeight = Double.NaN;
-    private double windowedX = Double.NaN;
-    private double windowedY = Double.NaN;
+    private com.grabx.app.grabx.ui.components.CompactWindowState fullWindowState;
     private boolean compactTransitioning;
     private SVGPath searchToggleIcon;
     private static final String SEARCH_ICON_PATH =
@@ -250,7 +235,6 @@ public class MainController {
 
     private IconButtonService initializeWindowUi() {
         Platform.runLater(() -> ScrollbarAutoHide.enableGlobalAutoHide(root));
-        Platform.runLater(this::initializeStageBoundsTracking);
         Platform.runLater(() -> {
             if (root != null) root.requestFocus();
         });
@@ -270,30 +254,6 @@ public class MainController {
                 cancelAllBtn, clearAllButton, settingsButton, compactViewButton
         );
         return iconButtons;
-    }
-
-    private void initializeStageBoundsTracking() {
-        if (root == null || root.getScene() == null
-                || !(root.getScene().getWindow() instanceof javafx.stage.Stage stage)) return;
-        Runnable capture = () -> captureWindowedBounds(stage);
-        stage.xProperty().addListener(observable -> capture.run());
-        stage.yProperty().addListener(observable -> capture.run());
-        stage.widthProperty().addListener(observable -> capture.run());
-        stage.heightProperty().addListener(observable -> capture.run());
-        stage.maximizedProperty().addListener(observable -> capture.run());
-        stage.fullScreenProperty().addListener(observable -> capture.run());
-        capture.run();
-    }
-
-    private void captureWindowedBounds(javafx.stage.Stage stage) {
-        if (stage == null || compactView || compactTransitioning
-                || stage.isMaximized() || stage.isFullScreen()) return;
-        if (stage.getWidth() > 0 && stage.getHeight() > 0) {
-            windowedWidth = stage.getWidth();
-            windowedHeight = stage.getHeight();
-            windowedX = stage.getX();
-            windowedY = stage.getY();
-        }
     }
 
     private void initializeHistoryFilter() {
@@ -660,20 +620,8 @@ public class MainController {
         if (!(window instanceof javafx.stage.Stage stage)) return;
         fullStage = stage;
 
-        captureWindowedBounds(stage);
+        fullWindowState = com.grabx.app.grabx.ui.components.CompactWindowState.capture(stage);
         compactView = true;
-        fullTop = root.getTop();
-        fullCenter = root.getCenter();
-        fullBottom = root.getBottom();
-        fullWidth = stage.getWidth();
-        fullHeight = stage.getHeight();
-        fullMinWidth = stage.getMinWidth();
-        fullMinHeight = stage.getMinHeight();
-        fullX = stage.getX();
-        fullY = stage.getY();
-        fullAlwaysOnTop = stage.isAlwaysOnTop();
-        fullMaximized = stage.isMaximized();
-        fullFullScreen = stage.isFullScreen();
 
         double compactWidth = 390;
         double compactHeight = 290;
@@ -694,9 +642,10 @@ public class MainController {
         }
         compactStage.setWidth(compactWidth);
         compactStage.setHeight(compactHeight);
-        compactStage.setX(fullX + Math.max(0, (fullWidth - compactWidth) / 2));
-        compactStage.setY(fullY + Math.max(0, (fullHeight - compactHeight) / 2));
+        compactStage.setX(fullWindowState.x() + Math.max(0, (fullWindowState.width() - compactWidth) / 2));
+        compactStage.setY(fullWindowState.y() + Math.max(0, (fullWindowState.height() - compactHeight) / 2));
         stage.hide();
+        compactStage.setIconified(false);
         compactStage.show();
         if (compactStage.getProperties().putIfAbsent("grabx-smart-scroll", Boolean.TRUE) == null) {
             Platform.runLater(() -> ScrollbarAutoHide.enableGlobalAutoHide(compactRoot));
@@ -705,45 +654,13 @@ public class MainController {
     }
 
     private void exitCompactView() {
-        if (!compactView || compactTransitioning || root == null || root.getScene() == null) return;
-        javafx.stage.Stage stage = fullStage;
-        if (stage == null) return;
-        if (compactStage != null) compactStage.hide();
-        stage.show();
-        if (!fullMaximized && !fullFullScreen) {
-            stage.setWidth(fullWidth);
-            stage.setHeight(fullHeight);
-            stage.setX(fullX);
-            stage.setY(fullY);
-        }
-        stage.setMaximized(fullMaximized);
-        stage.setFullScreen(fullFullScreen);
-        stage.toFront();
-        compactView = false;
-        windowedWidth = fullWidth;
-        windowedHeight = fullHeight;
-        windowedX = fullX;
-        windowedY = fullY;
-    }
-
-    private void transitionStage(javafx.stage.Stage stage, Runnable applyLayout) {
+        if (!compactView || compactTransitioning || fullStage == null || fullWindowState == null) return;
         compactTransitioning = true;
-        Timeline fadeOut = new Timeline(
-                new KeyFrame(Duration.ZERO, new KeyValue(stage.opacityProperty(), stage.getOpacity())),
-                new KeyFrame(Duration.millis(80), new KeyValue(stage.opacityProperty(), 0.0))
-        );
-        fadeOut.setOnFinished(event -> {
-            applyLayout.run();
-            root.applyCss();
-            root.layout();
-            Timeline fadeIn = new Timeline(
-                    new KeyFrame(Duration.ZERO, new KeyValue(stage.opacityProperty(), 0.0)),
-                    new KeyFrame(Duration.millis(130), new KeyValue(stage.opacityProperty(), 1.0))
-            );
-            fadeIn.setOnFinished(done -> compactTransitioning = false);
-            fadeIn.play();
+        if (compactStage != null) compactStage.hide();
+        fullWindowState.restore(fullStage, () -> {
+            compactView = false;
+            compactTransitioning = false;
         });
-        fadeOut.play();
     }
 
     private void initializeAddLink() {
@@ -822,27 +739,32 @@ public class MainController {
                 String filename = capture.suggestedFilename();
                 if (filename == null || filename.isBlank()) filename = capture.title();
                 if (addLinkFlowService != null) addLinkFlowService.browserDownloadStarted();
-                if (!com.grabx.app.grabx.ui.dialogs.BrowserDownloadDialog.show(ownerWindow(), filename)) return;
-                if (addLinkFlowService != null) addLinkFlowService.browserDownloadStarted();
-                javafx.stage.DirectoryChooser chooser = new javafx.stage.DirectoryChooser();
-                chooser.setTitle("Choose download folder — " + filename);
-                java.io.File initial = new java.io.File(folder);
-                if (initial.isDirectory()) chooser.setInitialDirectory(initial);
-                java.io.File selected = chooser.showDialog(ownerWindow());
-                if (selected == null) {
-                    if (statusText != null) statusText.setText("Browser download cancelled");
-                    return;
+                java.nio.file.Path browserFolder = capture.browserDestinationDirectory();
+                if (browserFolder != null) {
+                    folder = browserFolder.toString();
+                } else {
+                    javafx.stage.DirectoryChooser chooser = new javafx.stage.DirectoryChooser();
+                    chooser.setTitle("Choose download folder — " + filename);
+                    java.io.File initial = new java.io.File(folder);
+                    if (initial.isDirectory()) chooser.setInitialDirectory(initial);
+                    java.io.File selected = chooser.showDialog(ownerWindow());
+                    if (selected == null) {
+                        if (statusText != null) statusText.setText("Browser download cancelled");
+                        return;
+                    }
+                    folder = selected.getAbsolutePath();
                 }
-                folder = selected.getAbsolutePath();
                 downloadFolderPreferences.saveLastFolder(folder);
                 downloadQueueService.enqueueDirect(capture.effectiveUrl(), folder, filename, capture.pageUrl());
                 if (addLinkFlowService != null) addLinkFlowService.browserDownloadStarted();
                 if (statusText != null) statusText.setText("Browser download started in GrabX");
             } else if (addLinkFlowService != null) {
+                addLinkFlowService.offerBrowserQualities(capture.effectiveUrl(), capture.availableQualities(), capture.qualitySizes());
                 addLinkFlowService.openOrUpdate(
                         capture.effectiveUrl(), capture.action(), true, capture.suggestedFolder());
             }
-        } catch (Exception ignored) {
+        } catch (Exception exception) {
+            if (statusText != null) statusText.setText("Could not start browser download: " + exception.getMessage());
         }
     }
 

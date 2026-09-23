@@ -30,8 +30,8 @@ public final class YtDlpManager {
 
     public static OS detectOS() {
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        if (os.contains("win")) return OS.WINDOWS;
         if (os.contains("mac") || os.contains("darwin")) return OS.MAC;
+        if (os.contains("win")) return OS.WINDOWS;
         if (os.contains("nux") || os.contains("nix")) return OS.LINUX;
         return OS.OTHER;
     }
@@ -71,11 +71,29 @@ public final class YtDlpManager {
         if (initDone) return;
         synchronized (INIT_LOCK) {
             if (initDone) return;
+            // Prefer the current directory bundle over a persisted legacy single-file
+            // executable. The latter unpacks its Python runtime on every invocation.
+            if (detectOS() != OS.OTHER) {
+                try {
+                    Path runtime = detectOS() == OS.MAC ? BundledYtDlpRuntime.installMac(getAppToolsDir())
+                            : BundledYtDlpRuntime.installStandalone(getAppToolsDir(), detectOS(), detectArch());
+                    if (runtime != null && (detectOS() == OS.MAC || ToolExecutable.version(runtime, "--version") != null)) {
+                        cached = runtime;
+                        PREFS.put(PREF_YTDLP_PATH, runtime.toString());
+                        PREFS.put(PREF_YTDLP_VER, BundledYtDlpRuntime.VERSION);
+                        PREFS.putLong(PREF_YTDLP_TS, System.currentTimeMillis());
+                        initDone = true;
+                        return;
+                    }
+                } catch (Exception error) {
+                    LOG.warning("Could not initialize the current yt-dlp bundle: " + error.getMessage());
+                }
+            }
             try {
                 String saved = PREFS.get(PREF_YTDLP_PATH, null);
                 if (saved != null && !saved.isBlank()) {
                     Path p = Paths.get(saved);
-                    if (Files.exists(p)) {
+                    if (ToolExecutable.version(p, "--version") != null) {
                         cached = p;
                         initDone = true;
                         return;
@@ -114,18 +132,8 @@ public final class YtDlpManager {
                     }
 
                     // Persist + smoke test (only once, here)
-                    String ver = null;
-                    try {
-                        List<String> test = new ArrayList<>();
-                        test.add(out.toAbsolutePath().toString());
-                        test.add("--version");
-                        Process t = new ProcessBuilder(test).redirectErrorStream(true).start();
-                        try (BufferedReader r = new BufferedReader(new InputStreamReader(t.getInputStream(), StandardCharsets.UTF_8))) {
-                            ver = r.readLine();
-                        }
-                        t.waitFor();
-                    } catch (Exception ignored) {}
-
+                    String ver = ToolExecutable.version(out, "--version");
+                    if (ver == null || ver.isBlank()) throw new IOException("Bundled yt-dlp cannot run on this system");
                     cached = out;
                     try {
                         PREFS.put(PREF_YTDLP_PATH, out.toAbsolutePath().toString());
@@ -185,6 +193,11 @@ public final class YtDlpManager {
 
         List<String> cmd = new ArrayList<>();
         cmd.add(bin.toAbsolutePath().toString());
+        cmd.addAll(YtDlpOptions.extractionArguments());
+        int formatIndex = args.indexOf("-f");
+        if (formatIndex >= 0 && formatIndex + 1 < args.size()) {
+            cmd.addAll(YtDlpOptions.selectionArguments(args.get(formatIndex + 1)));
+        }
         cmd.addAll(args);
 
         ProcessBuilder pb = new ProcessBuilder(cmd);
@@ -215,6 +228,11 @@ public final class YtDlpManager {
 
         List<String> cmd = new ArrayList<>();
         cmd.add(bin.toAbsolutePath().toString());
+        cmd.addAll(YtDlpOptions.extractionArguments());
+        int formatIndex = args.indexOf("-f");
+        if (formatIndex >= 0 && formatIndex + 1 < args.size()) {
+            cmd.addAll(YtDlpOptions.selectionArguments(args.get(formatIndex + 1)));
+        }
         cmd.addAll(args);
 
         ProcessBuilder pb = new ProcessBuilder(cmd);
@@ -270,6 +288,8 @@ public final class YtDlpManager {
         List<String> cmd = new ArrayList<>();
         cmd.add(bin.toAbsolutePath().toString());
 
+        cmd.addAll(YtDlpOptions.extractionArguments());
+
         cmd.add("--newline");
         cmd.add("--no-warnings");
         cmd.add("--progress");
@@ -297,6 +317,7 @@ public final class YtDlpManager {
             cmd.add("-f"); cmd.add("bestaudio/best");
         } else {
             String fmt = buildVideoFormatSelector(req.quality);
+            cmd.addAll(YtDlpOptions.videoFormatArguments());
             cmd.add("-f"); cmd.add(fmt);
         }
 
@@ -367,7 +388,7 @@ public final class YtDlpManager {
         if (h == null || h <= 0) return "bv*+ba/b";
 
         // best video up to height + best audio
-        return "bv*[height<=" + h + "]+ba/b[height<=" + h + "]/bv*+ba/b";
+        return VideoQualityUtils.formatSelectorForHeight(h);
     }
 
     private static Integer extractHeight(String q) {
@@ -454,12 +475,11 @@ public final class YtDlpManager {
             // Try multiple layouts (some repos keep a universal binary, others keep per-arch)
             c.add("tools/yt-dlp/mac/yt-dlp");
         } else if (os == OS.LINUX) {
-            // linux/{arm64|x64}/yt-dlp
-            c.add("tools/yt-dlp/linux/" + (arch == ARCH.ARM64 ? "arm64" : "x64") + "/yt-dlp");
+            String resource = BundledYtDlpRuntime.platformResource(os, arch);
+            if (resource != null) c.add("tools/yt-dlp/" + resource);
         } else if (os == OS.WINDOWS) {
-            // windows/{arm64|x86|x64}/yt-dlp.exe
-            String a = (arch == ARCH.ARM64) ? "arm64" : (arch == ARCH.X86 ? "x86" : "x64");
-            c.add("tools/yt-dlp/windows/" + a + "/yt-dlp.exe");
+            String resource = BundledYtDlpRuntime.platformResource(os, arch);
+            if (resource != null) c.add("tools/yt-dlp/" + resource);
         }
 
         // Optional flat layout later:
@@ -474,12 +494,8 @@ public final class YtDlpManager {
     }
 
     private static Path findOnPath(String exe) {
-        String path = System.getenv("PATH");
-        if (path == null || path.isBlank()) return null;
-        for (String part : path.split(File.pathSeparator)) {
-            if (part == null || part.isBlank()) continue;
-            Path cand = Paths.get(part, exe);
-            if (Files.exists(cand)) return cand;
+        for (Path candidate : ToolExecutable.candidates(exe, System.getenv(), Path.of(System.getProperty("user.home")), detectOS() == OS.WINDOWS)) {
+            if (Files.isRegularFile(candidate) && Files.isExecutable(candidate)) return candidate;
         }
         return null;
     }

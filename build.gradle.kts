@@ -55,6 +55,11 @@ val nativeHostStartScripts by tasks.registering(CreateStartScripts::class) {
 distributions {
     named("main") {
         contents {
+            from("browser-extension") {
+                into("browser-extension")
+                exclude("tests/**", "**/__pycache__/**")
+            }
+            from("PLATFORMS.md")
             from(nativeHostStartScripts) {
                 into("bin")
             }

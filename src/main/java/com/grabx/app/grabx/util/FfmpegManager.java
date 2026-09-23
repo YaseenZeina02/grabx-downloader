@@ -58,7 +58,7 @@ public final class FfmpegManager {
         try {
             String exe = isWindows() ? "ffmpeg.exe" : "ffmpeg";
             Path fromPath = findOnPath(exe);
-            if (fromPath != null) {
+            if (fromPath != null && probeVersion(fromPath) != null) {
                 cached = fromPath;
                 log("✅ Found ffmpeg on PATH: " + cached);
                 return cached;
@@ -100,7 +100,7 @@ public final class FfmpegManager {
                 String saved = PREFS.get(PREF_FFMPEG_PATH, null);
                 if (saved != null && !saved.isBlank()) {
                     Path p = Paths.get(saved);
-                    if (Files.exists(p)) {
+                    if (probeVersion(p) != null) {
                         cached = p;
                         log("✅ Loaded ffmpeg from preferences: " + p);
                         initDone = true;
@@ -115,13 +115,23 @@ public final class FfmpegManager {
                 log("Prefs read failed: " + e.getMessage());
             }
 
+            // Prefer a usable system installation before any network download.
+            Path systemTool = findOnPath(outputBinaryFileName());
+            String systemVersion = systemTool == null ? null : probeVersion(systemTool);
+            if (systemVersion != null) {
+                cached = systemTool;
+                persist(systemTool, systemVersion);
+                initDone = true;
+                return;
+            }
+
             // 2) Download from GitHub Release (latest)
             try {
                 Path toolsDir = getAppToolsDir();
                 Files.createDirectories(toolsDir);
 
                 Path ffmpegOut = toolsDir.resolve(outputBinaryFileName());
-                if (Files.exists(ffmpegOut) && Files.size(ffmpegOut) > 0) {
+                if (Files.exists(ffmpegOut) && Files.size(ffmpegOut) > 0 && probeVersion(ffmpegOut) != null) {
                     log("✅ ffmpeg already present in tools dir: " + ffmpegOut);
                     if (!isWindows()) makeExecutable(ffmpegOut);
 
@@ -207,6 +217,7 @@ public final class FfmpegManager {
                 }
 
                 String ver = probeVersion(ffmpegOut);
+                if (ver == null) throw new IOException("Downloaded FFmpeg cannot run on this platform");
 
                 cached = ffmpegOut;
                 persist(ffmpegOut, ver);
@@ -317,27 +328,18 @@ public final class FfmpegManager {
     }
 
     private static String chooseAssetName() {
-        // Names you are uploading in the Release:
-        // ffmpeg-win-x64.zip
-        // ffmpeg-mac-x64.zip
-        // ffmpeg-mac-arm64.zip
-        // ffmpeg-linux-x64.tar.xz
-        // ffmpeg-linux-arm64.tar.xz
+        return chooseAssetName(YtDlpManager.detectOS(), YtDlpManager.detectArch());
+    }
 
-        String arch = detectArch();
-        if (isWindows()) {
-            // If you ever add win-arm64 later, adjust here
-            return "ffmpeg-win-x64.zip";
-        }
-        if (isMac()) {
-            if ("arm64".equals(arch)) return "ffmpeg-mac-arm64.zip";
-            return "ffmpeg-mac-x64.zip";
-        }
-        if (isLinux()) {
-            if ("arm64".equals(arch)) return "ffmpeg-linux-arm64.tar.xz";
-            return "ffmpeg-linux-x64.tar.xz";
-        }
-        return null;
+    static String chooseAssetName(YtDlpManager.OS os, YtDlpManager.ARCH arch) {
+        if (arch != YtDlpManager.ARCH.X64 && arch != YtDlpManager.ARCH.ARM64) return null;
+        String cpu = arch == YtDlpManager.ARCH.ARM64 ? "arm64" : "x64";
+        return switch (os) {
+            case WINDOWS -> arch == YtDlpManager.ARCH.X64 ? "ffmpeg-win-x64.zip" : null;
+            case MAC -> "ffmpeg-mac-" + cpu + ".zip";
+            case LINUX -> "ffmpeg-linux-" + cpu + ".tar.xz";
+            default -> null;
+        };
     }
 
     /* ========= Extract helpers ========= */
@@ -474,21 +476,8 @@ public final class FfmpegManager {
     }
 
     private static String probeVersion(Path ffmpeg) {
-        try {
-            Process p = new ProcessBuilder(ffmpeg.toAbsolutePath().toString(), "-version")
-                    .redirectErrorStream(true)
-                    .start();
-
-            String firstLine;
-            try (BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
-                firstLine = r.readLine();
-            }
-            p.waitFor();
-            return firstLine;
-        } catch (Exception e) {
-            log("Version probe failed: " + e.getMessage());
-            return null;
-        }
+        String line = ToolExecutable.version(ffmpeg, "-version");
+        return line != null && line.startsWith("ffmpeg version") ? line : null;
     }
 
     private static void persist(Path ffmpegPath, String versionLine) {
@@ -503,13 +492,8 @@ public final class FfmpegManager {
     }
 
     private static Path findOnPath(String exe) {
-        String path = System.getenv("PATH");
-        if (path == null || path.isBlank()) return null;
-
-        for (String part : path.split(File.pathSeparator)) {
-            if (part == null || part.isBlank()) continue;
-            Path p = Paths.get(part, exe);
-            if (Files.exists(p)) return p;
+        for (Path candidate : ToolExecutable.candidates(exe, System.getenv(), Path.of(System.getProperty("user.home")), isWindows())) {
+            if (Files.isRegularFile(candidate) && Files.isExecutable(candidate)) return candidate;
         }
         return null;
     }
@@ -525,16 +509,6 @@ public final class FfmpegManager {
     private static boolean isLinux() {
         String n = System.getProperty("os.name").toLowerCase(Locale.ROOT);
         return n.contains("nux") || n.contains("linux");
-    }
-
-    private static String detectArch() {
-        String a = System.getProperty("os.arch");
-        if (a == null) return "x64";
-        a = a.toLowerCase(Locale.ROOT);
-
-        if (a.contains("aarch64") || a.contains("arm64")) return "arm64";
-        // treat everything else as x64 for our release assets
-        return "x64";
     }
 
     private static void log(String msg) {

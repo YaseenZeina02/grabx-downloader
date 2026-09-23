@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const context = { URL, TextEncoder, crypto: require('node:crypto').webcrypto, chrome: {
  runtime: {onInstalled:{addListener(){}},onStartup:{addListener(){}},onMessage:{addListener(){}}},
- contextMenus:{onClicked:{addListener(){}}},downloads:{onCreated:{addListener(){}}}
+ contextMenus:{onClicked:{addListener(){}}},downloads:{onCreated:{addListener(){}},onChanged:{addListener(){}}}
 }};
 vm.createContext(context);
 vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../chromium/service-worker.js'),'utf8'),context);

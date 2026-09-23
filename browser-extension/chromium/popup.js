@@ -1,5 +1,6 @@
 let pageInfo = null;
 let candidates = [];
+let activeTabId = null;
 const INTERCEPTION_SETTING = 'interceptBrowserDownloads';
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -21,6 +22,7 @@ async function scanActivePage() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id || !/^https?:/.test(tab.url || '')) throw new Error('This page cannot be scanned');
+    activeTabId = tab.id;
     let result = null;
     try {
       const injectionResults = await chrome.scripting.executeScript({
@@ -231,7 +233,19 @@ function actionButton(label, candidate, action, primary = false) {
 
 async function sendCapture(candidate, action) {
   setButtonsDisabled(true);
+  let qualityHint = null;
+  if (isYouTubePage(pageInfo.url) && activeTabId) {
+    try {
+      const results = await chrome.scripting.executeScript({target: {tabId: activeTabId}, world: 'MAIN', func: readYouTubeQualities});
+      qualityHint = results?.[0]?.result;
+    } catch { /* The app falls back to its own format probe. */ }
+  }
+  const pageUrl = new URL(pageInfo.url);
+  const expectedVideo = pageUrl.searchParams.get('v') || pageUrl.pathname.match(/^\/shorts\/([\w-]{11})/)?.[1];
+  const matchingVideo = qualityHint?.videoId && expectedVideo === qualityHint.videoId;
   const capture = {
+    availableQualities: matchingVideo ? qualityHint.qualities : [],
+    qualitySizes: matchingVideo ? qualityHint.sizes : [],
     protocolVersion: 1,
     type: 'capture',
     requestId: crypto.randomUUID(),
@@ -297,4 +311,58 @@ function showNotice(message, error = false) {
 
 function setButtonsDisabled(disabled) {
   document.querySelectorAll('button').forEach(button => button.disabled = disabled);
+}
+
+// Runs in the page world so it can read the player's already-loaded format list.
+// Returns only bounded numeric qualities, never media URLs, cookies, or scripts.
+function readYouTubeQualities() {
+  if (!/(^|\.)youtube\.com$/.test(location.hostname)) return null;
+  const expected = new URL(location.href).searchParams.get('v') || location.pathname.match(/^\/shorts\/([\w-]{11})/)?.[1];
+  const player = document.getElementById('movie_player');
+  const data = player?.getVideoData?.();
+  if (!expected || data?.video_id !== expected) return null;
+  const heights = new Set();
+  const levels = {tiny:144, small:240, medium:360, large:480, hd720:720, hd1080:1080, hd1440:1440, hd2160:2160, highres:4320};
+  for (const level of (player.getAvailableQualityLevels?.() || []).slice(0,16)) {
+    // highres is ambiguous; use an explicit quality label from metadata instead.
+    if (levels[level] && level !== 'highres') heights.add(levels[level]);
+  }
+  const response = player.getPlayerResponse?.();
+  const sizes = [];
+  if (response?.videoDetails?.videoId === expected) {
+    for (const format of [...(response.streamingData?.formats || []), ...(response.streamingData?.adaptiveFormats || [])].slice(0,300)) {
+      const match = String(format.qualityLabel || '').match(/^(\d{3,4})p/);
+      if (match && [144,240,360,480,540,720,1080,1440,2160,4320].includes(Number(match[1]))) heights.add(Number(match[1]));
+    }
+  }
+  // These are transfer estimates for one video track plus one audio track.
+  // Even known stream lengths are not the final muxed/converted file size.
+  if (response?.videoDetails?.videoId === expected && !response.videoDetails.isLive && !response.videoDetails.isLiveContent) {
+    const formats = [...(response.streamingData?.adaptiveFormats || []), ...(response.streamingData?.formats || [])]
+      .slice(0,300).filter(f => !f.drmFamilies?.length);
+    const positive = value => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 0;
+    const bytes = format => {
+      const length = positive(format.contentLength);
+      const duration = positive(format.approxDurationMs) / 1000 || positive(response.videoDetails.lengthSeconds);
+      const estimate = length || positive(format.averageBitrate || format.bitrate) * duration / 8;
+      return estimate > 0 && estimate <= 10_000_000_000_000 ? Math.round(estimate) : 0;
+    };
+    const audio = formats.filter(f => String(f.mimeType).startsWith('audio/')).sort((a,b) =>
+      Number(b.audioTrack?.audioIsDefault === true) - Number(a.audioTrack?.audioIsDefault === true)
+      || Number(/mp4a/.test(b.mimeType)) - Number(/mp4a/.test(a.mimeType))
+      || positive(b.bitrate) - positive(a.bitrate))[0];
+    for (const quality of heights) {
+      const video = formats.filter(f => String(f.mimeType).startsWith('video/') && parseInt(f.qualityLabel,10) === quality)
+        .sort((a,b) => Number(/avc1/.test(b.mimeType)) - Number(/avc1/.test(a.mimeType))
+          || positive(b.fps) - positive(a.fps) || positive(b.bitrate) - positive(a.bitrate))[0];
+      if (!video) continue;
+      const videoBytes = bytes(video);
+      const hasAudio = /mp4a|opus|vorbis/.test(video.mimeType) || !!video.audioQuality;
+      const audioBytes = hasAudio ? 0 : audio ? bytes(audio) : 0;
+      if (videoBytes && (hasAudio || audioBytes) && videoBytes + audioBytes <= 10_000_000_000_000) {
+        sizes.push({quality, bytes: videoBytes + audioBytes});
+      }
+    }
+  }
+  return {videoId: expected, qualities: [...heights].sort((a,b)=>b-a).slice(0,16), sizes};
 }

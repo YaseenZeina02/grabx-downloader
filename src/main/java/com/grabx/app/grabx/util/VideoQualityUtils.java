@@ -52,6 +52,13 @@ public final class VideoQualityUtils {
         return closestDifference <= tolerance ? closest : -1;
     }
 
+    /** YouTube quality is the short side for portrait video, not its pixel height. */
+    public static int qualityHeight(int width, int height, String label) {
+        int advertised = parseHeight(label);
+        if (advertised > 0) return normalizeHeight(advertised);
+        return normalizeHeight(width > 0 && height > 0 ? Math.min(width, height) : height);
+    }
+
     public static Set<Integer> normalizeHeights(Set<Integer> heights) {
         Set<Integer> normalized = new TreeSet<>();
         if (heights == null) return normalized;
@@ -65,7 +72,9 @@ public final class VideoQualityUtils {
 
     public static String formatSelectorForHeight(int height) {
         int safeHeight = Math.max(1, height);
-        return "bv*[height<=" + safeHeight + "]+ba/b[height<=" + safeHeight + "]/bv*+ba/b";
+        String landscape = "[aspect_ratio>=?1][height<=" + safeHeight + "]";
+        String portrait = "[aspect_ratio<1][width<=" + safeHeight + "]";
+        return "(bv*" + landscape + "/bv*" + portrait + ")+ba/(b" + landscape + "/b" + portrait + ")/bv*+ba/b";
     }
 
     public static String closestSupportedLabel(

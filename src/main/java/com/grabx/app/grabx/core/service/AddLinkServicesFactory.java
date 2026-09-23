@@ -46,6 +46,16 @@ public final class AddLinkServicesFactory {
         AddLinkDialogService connectedDialog = dialog;
         AddLinkFlowService flow = new AddLinkFlowService(
                 new AddLinkFlowService.DialogGateway() {
+                    @Override public void offerBrowserQualities(String url, java.util.List<Integer> heights,
+                                                                 java.util.List<com.grabx.app.grabx.browser.BrowserVideoSize> sizes) {
+                        connectedDialog.offerBrowserQualities(url, heights, sizes);
+                    }
+                    @Override public void offerBrowserQualities(String url, java.util.List<Integer> heights) {
+                        connectedDialog.offerBrowserQualities(url, heights);
+                    }
+                    @Override public void updateUrlFromClipboard(String url) {
+                        connectedDialog.updateUrlFromClipboard(url);
+                    }
                     @Override public void closeIfUrlMatches(String url) {
                         connectedDialog.closeIfUrlMatches(url);
                     }

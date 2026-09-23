@@ -64,46 +64,74 @@ public final class DownloadRuntimeUtils {
     }
 
     public static String probeOutputFilename(Path ytDlp, String url, String selector, Path outputDirectory, String template) {
+        return probeOutputFilename(ytDlp, url, selector, outputDirectory, template, true);
+    }
+
+    private static String probeOutputFilename(Path ytDlp, String url, String selector, Path outputDirectory,
+                                              String template, boolean useCache) {
         if (ytDlp == null || url == null || url.isBlank() || selector == null
                 || outputDirectory == null || template == null) return null;
 
-        try {
+        Process process = null;
+        try (MediaInfoCache.Input input = useCache ? MediaInfoCache.SHARED.openInput(url) : new MediaInfoCache.Input(url, null)) {
             List<String> command = new ArrayList<>();
             command.add(ytDlp.toAbsolutePath().toString());
+            command.addAll(YtDlpOptions.extractionArguments());
+            command.addAll(YtDlpOptions.selectionArguments(selector));
             command.add("--no-warnings");
             command.add("--no-playlist");
             command.add("--skip-download");
             command.add("--encoding");
             command.add("utf-8");
-            command.add("--user-agent");
-            command.add("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36");
-            command.add("--referer");
-            command.add("https://www.youtube.com/");
-            command.add("--extractor-args");
-            command.add("youtube:player_client=android");
+            command.add("--dump-single-json");
             command.add("-f");
             command.add(selector);
             command.add("-o");
             command.add(outputDirectory.resolve(template).toString());
             command.add("--print");
             command.add("filename");
-            command.add(url.trim());
+            command.addAll(input.arguments());
 
-            Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
-            String line;
+            process = new ProcessBuilder(command).redirectErrorStream(true).start();
+            String filename = null;
+            String metadata = null;
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                line = reader.readLine();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String value = line.trim();
+                    if (value.startsWith("{")) metadata = value;
+                    else if (filename == null) {
+                        try {
+                            if (Path.of(value).isAbsolute()) filename = value;
+                        } catch (Exception ignored) {}
+                    }
+                }
             }
-            try {
-                process.waitFor();
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
+            if (process.waitFor() != 0) {
+                if (input.cached()) {
+                    MediaInfoCache.SHARED.invalidate(url);
+                    return probeOutputFilename(ytDlp, url, selector, outputDirectory, template, false);
+                }
                 return null;
             }
-            return line == null || line.trim().isEmpty() ? null : line.trim();
+            // Reading a cached snapshot must not extend its signed URLs' lifetime.
+            if (!input.cached()) MediaInfoCache.SHARED.remember(url, metadata);
+            if (filename != null && metadata != null && template.contains("%(height)sp")) {
+                var info = new com.fasterxml.jackson.databind.ObjectMapper().readTree(metadata);
+                int height = info.path("height").asInt(-1);
+                int quality = VideoQualityUtils.qualityHeight(info.path("width").asInt(-1), height,
+                        info.path("format_note").asText(""));
+                if (quality > 0 && height > 0) filename = filename.replace("[" + height + "p].", "[" + quality + "p].");
+            }
+            return filename;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return null;
         } catch (Exception ignored) {
             return null;
+        } finally {
+            if (process != null && process.isAlive()) process.destroyForcibly();
         }
     }
 
@@ -131,6 +159,20 @@ public final class DownloadRuntimeUtils {
         }
     }
 
+    public record OutputPlan(String template, Path plannedOutput) {}
+
+    public static OutputPlan planOutput(Path directory, Path recordedOutput, boolean resume,
+                                        String baseTemplate, java.util.function.Supplier<String> probe) {
+        String saved = resume ? resumeOutputTemplate(directory, recordedOutput) : null;
+        if (saved != null) return new OutputPlan(saved, mediaOutputPath(recordedOutput).toAbsolutePath().normalize());
+        try {
+            String probed = probe.get();
+            String selected = uniqueOutputTemplate(directory, probed);
+            if (selected != null) return new OutputPlan(selected, concreteOutputPath(selected, probed));
+        } catch (Exception ignored) {}
+        return new OutputPlan(baseTemplate, null);
+    }
+
     /**
      * Reuses the exact stem recorded for a paused row. A .part file is not a
      * collision: it is the data yt-dlp must see under the same output template
@@ -143,7 +185,7 @@ public final class DownloadRuntimeUtils {
             Path recorded = recordedOutput.toAbsolutePath().normalize();
             if (recorded.getParent() == null || !recorded.getParent().equals(directory)) return null;
 
-            String filename = recorded.getFileName().toString();
+            String filename = mediaOutputPath(recorded).getFileName().toString();
             if (filename.endsWith(".part")) filename = filename.substring(0, filename.length() - 5);
             String stem = stripExtension(filename);
             if (stem.isBlank()) return null;
@@ -151,6 +193,19 @@ public final class DownloadRuntimeUtils {
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    /** Keep yt-dlp's intermediate format suffixes out of the persisted output stem.
+     * Also repairs paths saved by older builds after repeated pause/resume.
+     * Only GrabX's generated media naming pattern is recognized; ordinary titles
+     * ending in something like .f401 are left intact.
+     */
+    public static Path mediaOutputPath(Path path) {
+        if (path == null || path.getFileName() == null) return path;
+        String name = path.getFileName().toString();
+        if (name.endsWith(".part")) name = name.substring(0, name.length() - 5);
+        name = name.replaceFirst("^(.*\\[(?:audio|[0-9]+p)\\](?: \\([0-9]+\\))?)(?:\\.f[\\w-]+)+(\\.[^.]+)$", "$1$2");
+        return path.resolveSibling(name);
     }
 
     /** Resolves a literal %(ext)s template to the extension returned by the probe. */
@@ -169,7 +224,7 @@ public final class DownloadRuntimeUtils {
     }
 
     /**
-     * Removes abandoned partials and thumbnail sidecars for the same media stem
+     * Removes partials and thumbnail sidecars for this exact numbered media stem
      * after a download completes. Finished audio/video files are never removed.
      */
     public static int cleanupSupersededArtifacts(Path completedOutput) {
@@ -178,7 +233,7 @@ public final class DownloadRuntimeUtils {
             Path completed = completedOutput.toAbsolutePath().normalize();
             Path directory = completed.getParent();
             if (directory == null || !Files.isDirectory(directory)) return 0;
-            String familyStem = canonicalNumberedStem(stripExtension(completed.getFileName().toString()));
+            String familyStem = stripExtension(completed.getFileName().toString());
             int removed = 0;
             try (var files = Files.list(directory)) {
                 for (Path path : files.toList()) {
@@ -220,8 +275,8 @@ public final class DownloadRuntimeUtils {
             }
         }
         value = stripExtension(value);
-        value = value.replaceFirst("(?i)\\.f\\d{2,4}$", "");
-        return canonicalNumberedStem(value);
+        value = value.replaceFirst("(?i)(?:\\.f\\d{2,4})+$", "");
+        return value;
     }
 
     private static String canonicalNumberedStem(String stem) {

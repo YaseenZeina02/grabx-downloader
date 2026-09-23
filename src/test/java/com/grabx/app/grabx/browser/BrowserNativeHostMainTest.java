@@ -20,6 +20,26 @@ class BrowserNativeHostMainTest {
     Path temporaryDirectory;
 
     @Test
+    void movieCaptureKeepsItsDestinationThroughNativeMessagingAndTheInbox() throws Exception {
+        var protocol = new BrowserBridgeProtocol();
+        var capture = new BrowserCapture(1, "capture", "movie-request-1234", "https://example.com/watch",
+                "https://cdn.example.com/Movie[1080p]|1.mp4?token=a%2Fb", "Movie.mp4", "video/mp4",
+                "file", "file", "Movie.mp4", temporaryDirectory.toString(), true, 100);
+        Files.writeString(temporaryDirectory.resolve("app.pid"), Long.toString(ProcessHandle.current().pid()));
+        var inbox = new BrowserBridgeInbox(temporaryDirectory.resolve("browser-inbox"));
+        var input = new ByteArrayOutputStream();
+        BrowserNativeHostMain.writeMessage(input, protocol.serialize(capture));
+        var output = new ByteArrayOutputStream();
+        BrowserNativeHostMain.run(new ByteArrayInputStream(input.toByteArray()), output, protocol, inbox);
+        String response = new String(BrowserNativeHostMain.readMessage(new ByteArrayInputStream(output.toByteArray())),
+                StandardCharsets.UTF_8);
+        assertTrue(response.contains("\"ok\":true"));
+        var received = protocol.parse(Files.readAllBytes(inbox.directory().resolve("movie-request-1234.json")));
+        assertEquals(temporaryDirectory, received.browserDestinationDirectory());
+        assertEquals("https://cdn.example.com/Movie%5B1080p%5D%7C1.mp4?token=a%2Fb", received.mediaUrl());
+    }
+
+    @Test
     void statusDoesNotQueueAndCancellationRemovesOnlySelectedRequest() throws Exception {
         Path dir = temporaryDirectory.resolve("browser-inbox");
         var inbox = new BrowserBridgeInbox(dir);

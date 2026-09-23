@@ -15,6 +15,24 @@ class DownloadRuntimeUtilsTest {
     Path tempDir;
 
     @Test
+    void resumingUsesTheSavedFilenameWithoutRunningAnotherExtractor() {
+        Path saved = tempDir.resolve("Song 100% [audio].webm");
+        var plan = DownloadRuntimeUtils.planOutput(tempDir, saved, true, "%(title)s.%(ext)s",
+                () -> { throw new AssertionError("Resume must skip the filename probe"); });
+        assertEquals(tempDir.resolve("Song 100%% [audio].%(ext)s").toString(), plan.template());
+        assertEquals(saved, plan.plannedOutput());
+    }
+
+    @Test
+    void freshDownloadsStillResolveCollisionsBeforeStarting() throws Exception {
+        Files.writeString(tempDir.resolve("Song [audio].mp3"), "existing");
+        var plan = DownloadRuntimeUtils.planOutput(tempDir, null, false, "%(title)s.%(ext)s",
+                () -> tempDir.resolve("Song [audio].webm").toString());
+        assertEquals(tempDir.resolve("Song [audio] (1).%(ext)s").toString(), plan.template());
+        assertEquals(tempDir.resolve("Song [audio] (1).webm"), plan.plannedOutput());
+    }
+
+    @Test
     void recognizesAudioDestinations() {
         assertTrue(DownloadRuntimeUtils.isAudioStreamFromDestinationLine("[ExtractAudio] Destination: song.mp3"));
         assertTrue(DownloadRuntimeUtils.isAudioStreamFromDestinationLine("[download] Destination: title.f140.m4a"));
@@ -96,6 +114,25 @@ class DownloadRuntimeUtilsTest {
     }
 
     @Test
+    void resumesTheOriginalPartAfterRepeatedFormatSuffixesWereSaved() throws Exception {
+        Path originalPart = tempDir.resolve("Song [2160p] (1).f401.mp4.part");
+        Files.writeString(originalPart, "already downloaded data");
+        Path oldRecord = tempDir.resolve("Song [2160p] (1).f401.f401.f401.mp4");
+        var plan = DownloadRuntimeUtils.planOutput(tempDir, oldRecord, true, "unused", () -> {
+            throw new AssertionError("Resume must not select a new filename");
+        });
+        assertEquals(tempDir.resolve("Song [2160p] (1).%(ext)s").toString(), plan.template());
+        assertEquals(tempDir.resolve("Song [2160p] (1).mp4"), plan.plannedOutput());
+        assertEquals("already downloaded data", Files.readString(originalPart));
+        for (String format : new String[]{"401", "251", "140-drc"}) {
+            assertEquals(tempDir.resolve("Song [2160p] (1).webm"),
+                    DownloadRuntimeUtils.mediaOutputPath(tempDir.resolve("Song [2160p] (1).f" + format + ".webm")));
+        }
+        assertEquals(tempDir.resolve("Title.f401.mp4"),
+                DownloadRuntimeUtils.mediaOutputPath(tempDir.resolve("Title.f401.mp4")));
+    }
+
+    @Test
     void resolvesThePlannedOutputUsingTheProbedExtension() {
         assertEquals(
                 tempDir.resolve("100% Song [audio].webm"),
@@ -107,17 +144,19 @@ class DownloadRuntimeUtilsTest {
     }
 
     @Test
-    void cleansOnlyPartialAndThumbnailArtifactsFromTheCompletedFilesFamily() throws Exception {
+    void cleanupPreservesOtherNumberedDownloadsThatMayBePaused() throws Exception {
         Path completed = Files.writeString(tempDir.resolve("Song [audio] (3).mp3"), "done");
         Path oldPart = Files.writeString(tempDir.resolve("Song [audio].webm.part"), "old");
         Path numberedPart = Files.writeString(tempDir.resolve("Song [audio] (2).webm.part"), "old");
+        Path ownPart = Files.writeString(tempDir.resolve("Song [audio] (3).webm.part"), "own");
         Path thumbnail = Files.writeString(tempDir.resolve("Song [audio] (3).jpg"), "cover");
         Path otherPartial = Files.writeString(tempDir.resolve("Other song.webm.part"), "keep");
         Path olderCompleted = Files.writeString(tempDir.resolve("Song [audio] (1).mp3"), "keep");
 
-        assertEquals(3, DownloadRuntimeUtils.cleanupSupersededArtifacts(completed));
-        assertEquals(false, Files.exists(oldPart));
-        assertEquals(false, Files.exists(numberedPart));
+        assertEquals(2, DownloadRuntimeUtils.cleanupSupersededArtifacts(completed));
+        assertEquals(true, Files.exists(oldPart));
+        assertEquals(true, Files.exists(numberedPart));
+        assertEquals(false, Files.exists(ownPart));
         assertEquals(false, Files.exists(thumbnail));
         assertEquals(true, Files.exists(otherPartial));
         assertEquals(true, Files.exists(olderCompleted));

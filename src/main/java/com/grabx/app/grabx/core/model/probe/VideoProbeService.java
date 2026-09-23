@@ -23,6 +23,7 @@ public final class VideoProbeService {
                     "--encoding", "utf-8",
                     url.trim()
             ));
+            com.grabx.app.grabx.util.MediaInfoCache.SHARED.remember(url, json);
             return parseHeights(json);
         } catch (Exception ignored) {
             return Set.of();
@@ -42,7 +43,10 @@ public final class VideoProbeService {
 
             Set<Integer> heights = new TreeSet<>();
             for (JsonNode format : formats) {
-                int normalized = VideoQualityUtils.normalizeHeight(format.path("height").asInt(-1));
+                if ("none".equals(format.path("vcodec").asText())
+                        || format.path("has_drm").asBoolean()) continue;
+                int normalized = VideoQualityUtils.qualityHeight(format.path("width").asInt(-1),
+                        format.path("height").asInt(-1), format.path("format_note").asText(""));
                 if (normalized > 0) heights.add(normalized);
             }
             return heights;
