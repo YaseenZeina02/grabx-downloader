@@ -173,10 +173,22 @@ function hasBrowserDestination(path) {
     && Boolean(fileName(value)) && !/[\\/]$/.test(value);
 }
 
+function nativeBridgeError(error) {
+  const detail = error?.message || 'Unknown native messaging error';
+  const registration = `Run the native-host installer for your OS and this browser with extension ID ${chrome.runtime.id}, then restart the browser. See browser-extension/README.md (Windows: install-windows.ps1).`;
+  if (/specified native messaging host not found/i.test(detail)) {
+    return `GrabX browser bridge could not be found. ${registration} Opening GrabX alone does not register the bridge. (${detail})`;
+  }
+  if (/access to the specified native messaging host is forbidden/i.test(detail)) {
+    return `GrabX browser bridge does not allow this extension ID. ${registration} (${detail})`;
+  }
+  return `GrabX bridge error: ${detail}`;
+}
+
 function nativeControl(message) {
   return new Promise(resolve => chrome.runtime.sendNativeMessage(NATIVE_HOST, message, response => {
     const error = chrome.runtime.lastError;
-    resolve(error ? {ok:false, message:error.message} : response || {ok:false, message:'No response from GrabX'});
+    resolve(error ? {ok:false, message:nativeBridgeError(error)} : response || {ok:false, message:'No response from GrabX'});
   }));
 }
 
@@ -239,11 +251,11 @@ function sendCaptureNative(capture, queueApproved = false) {
   return new Promise(resolve => {
     chrome.runtime.sendNativeMessage(NATIVE_HOST, {...capture, queueApproved}, async response => {
       if (chrome.runtime.lastError) {
-        const nativeError = chrome.runtime.lastError.message || "Unknown native messaging error";
+        const nativeError = nativeBridgeError(chrome.runtime.lastError);
         resolve({
           ok: false,
           status: "unavailable",
-          message: `GrabX bridge error: ${nativeError}`
+          message: nativeError
         });
         return;
       }

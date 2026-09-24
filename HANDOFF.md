@@ -1,6 +1,29 @@
 # GrabX handoff
 
-Updated: 2026-09-23 after Windows/Linux compatibility work and saving all recent changes.
+Updated: 2026-09-24 after investigating the user's Windows native-host error.
+
+## Latest outcome: Windows host not found (2026-09-24)
+
+- User's Windows screenshot shows `Specified native messaging host not found.`
+  This is a host-discovery failure; the screenshot does not establish whether
+  registration was skipped, targets another browser/account, or has a broken path.
+  Reviewed installer and official Chrome/Edge native messaging documentation.
+  Starting IntelliJ/GrabX and loading the extension do not run the installer.
+- Asked which browser was used and whether `install-windows.ps1` was run after
+  updating; no answer received at this checkpoint. No Windows machine is connected.
+  Do not claim the Windows installation or end-to-end problem is fixed.
+- Extension errors now give registration guidance with the actual extension ID
+  for both control and capture requests; forbidden-origin errors remain distinct
+  from missing-host errors, and original browser diagnostics are retained.
+  README now includes Windows registry/manifest/wrapper inspection instructions.
+- Verified today: all 23 extension tests passed; an additional inline Node VM
+  check exercised missing/forbidden host errors through status, capture and handoff,
+  preserving successful status responses and other error details. `git diff --check`
+  passed. No Java or installer implementation changes; no Windows execution.
+- Next: establish the user's browser and installation result, run registration on
+  their Windows account with that browser's extension ID, then verify Open GrabX
+  and Video/Audio. If registration already succeeded, inspect registry default value,
+  manifest and wrapper paths before changing the installer speculatively.
 
 ## Latest outcome: Windows/Linux readiness and checkpoint (2026-09-23)
 

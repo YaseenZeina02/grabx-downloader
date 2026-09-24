@@ -86,11 +86,30 @@ the native host's staged JARs. Reload the extension after JavaScript changes too
 ## Diagnosing media URL errors
 
 `Invalid media URL` is a validation response from the Java native host; it means the host was reached.
-It is different from `Specified native messaging host not found` (registration / extension ID) or
+It is different from `Specified native messaging host not found` (missing/broken registration,
+manifest or host path), `Access to the specified native messaging host is forbidden`
+(extension ID missing from `allowed_origins`), or
 `Native host has exited` (launcher / runtime). Version 0.2.1 quotes browser-accepted URL characters such
 as brackets in movie filenames and pipes, while retaining existing percent escapes and signed query
 parameters. Both the native host and running app must be updated. An expired link or a server that
 requires browser cookies can still fail later during transfer; those are separate from URL validation.
+
+For **host not found on Windows**, complete the Windows registration steps above using the
+same Windows account as the browser. Select the browser you actually use with `-Browser`.
+Loading the extension or starting GrabX from IntelliJ does not perform this registration.
+If registration reports success but the error remains, inspect the default registry value:
+
+```powershell
+# Chrome; for Edge use Software\Microsoft\Edge instead of Software\Google\Chrome.
+reg query "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.grabx.browser_bridge" /ve
+Get-Content -LiteralPath "$env:LOCALAPPDATA\GrabX\browser-bridge\com.grabx.browser_bridge.json"
+Test-Path -LiteralPath "$env:LOCALAPPDATA\GrabX\browser-bridge\grabx-native-host.cmd"
+```
+
+The registry must point to the existing JSON manifest, its `path` must point to the existing
+wrapper, and `allowed_origins` must include the ID from that browser's extensions page.
+An unpacked extension can have a different ID on another computer. Keep the installer's
+full error output if it fails; an unsuccessful installation is not repaired by Reload.
 
 API references: [Chrome downloads](https://developer.chrome.com/docs/extensions/reference/api/downloads)
 and [native messaging registration](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging).
