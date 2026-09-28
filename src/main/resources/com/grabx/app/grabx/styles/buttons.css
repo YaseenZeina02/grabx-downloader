@@ -411,16 +411,17 @@
 
 /* Compact View has its own tighter, media-control-like action sizing. */
 .gx-icon-btn.gx-compact-action {
-    -fx-min-width: 38;
-    -fx-pref-width: 38;
-    -fx-max-width: 38;
-    -fx-min-height: 38;
-    -fx-pref-height: 38;
-    -fx-max-height: 38;
-    -fx-background-radius: 13;
-    -fx-border-radius: 13;
+    -fx-min-width: 30;
+    -fx-pref-width: 30;
+    -fx-max-width: 30;
+    -fx-min-height: 30;
+    -fx-pref-height: 30;
+    -fx-max-height: 30;
+    -fx-background-radius: 10;
+    -fx-border-radius: 10;
     -fx-background-color: rgba(255,255,255,0.09);
     -fx-border-color: rgba(255,255,255,0.12);
+    -fx-padding: 0;
 }
 
 .gx-icon-btn.gx-compact-pause,
@@ -444,16 +445,17 @@
 }
 
 .gx-icon-btn.gx-compact-restore {
-    -fx-min-width: 34;
-    -fx-pref-width: 34;
-    -fx-max-width: 34;
-    -fx-min-height: 34;
-    -fx-pref-height: 34;
-    -fx-max-height: 34;
+    -fx-min-width: 30;
+    -fx-pref-width: 30;
+    -fx-max-width: 30;
+    -fx-min-height: 30;
+    -fx-pref-height: 30;
+    -fx-max-height: 30;
     -fx-background-radius: 11;
     -fx-border-radius: 11;
     -fx-background-color: rgba(159,182,255,0.07);
     -fx-border-color: rgba(159,182,255,0.14);
+    -fx-padding: 0;
 }
 
 .gx-icon-btn.gx-compact-restore:hover {

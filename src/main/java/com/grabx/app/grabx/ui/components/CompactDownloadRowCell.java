@@ -35,7 +35,7 @@ public final class CompactDownloadRowCell extends ListCell<DownloadRow> {
     private final Button pauseButton = new Button();
     private final Button resumeButton = new Button();
     private final Button cancelButton = new Button();
-    private final VBox card = new VBox(6);
+    private final VBox card = new VBox(4);
     private DownloadRow boundRow;
     private javafx.beans.value.ChangeListener<DownloadRow.State> stateListener;
     private javafx.beans.value.ChangeListener<String> titleListener;
@@ -48,7 +48,8 @@ public final class CompactDownloadRowCell extends ListCell<DownloadRow> {
             Consumer<DownloadRow> resume,
             Consumer<DownloadRow> cancel,
             BiConsumer<Button, String> installTooltip,
-            BiConsumer<Node, ObservableValue<String>> installDynamicTooltip
+            BiConsumer<Node, ObservableValue<String>> installDynamicTooltip,
+            ObservableValue<? extends Number> mediaOpacity
     ) {
         this.pause = pause;
         this.resume = resume;
@@ -56,7 +57,7 @@ public final class CompactDownloadRowCell extends ListCell<DownloadRow> {
 
         setContentDisplay(ContentDisplay.GRAPHIC_ONLY);
         setStyle("-fx-background-color: transparent;");
-        setPadding(new Insets(5, 0, 5, 0));
+        setPadding(new Insets(2, 0, 2, 0));
         title.getStyleClass().add("gx-compact-title");
         title.setTextOverrun(OverrunStyle.CLIP);
         title.setWrapText(false);
@@ -84,12 +85,14 @@ public final class CompactDownloadRowCell extends ListCell<DownloadRow> {
         mediaHeader.setLeft(thumbnail);
         BorderPane.setMargin(thumbnail, new Insets(0, 9, 0, 0));
         mediaHeader.getStyleClass().add("gx-compact-media-header");
+        mediaHeader.opacityProperty().bind(mediaOpacity);
         if (installDynamicTooltip != null) {
             installDynamicTooltip.accept(title, title.textProperty());
         }
         status.getStyleClass().add("gx-compact-status");
         status.setMaxWidth(Double.MAX_VALUE);
-        status.setAlignment(Pos.CENTER);
+        status.setAlignment(Pos.CENTER_LEFT);
+        status.setMinWidth(0);
         progress.getStyleClass().add("gx-compact-progress");
         progress.setMaxWidth(Double.MAX_VALUE);
 
@@ -105,19 +108,23 @@ public final class CompactDownloadRowCell extends ListCell<DownloadRow> {
             installTooltip.accept(cancelButton, "Cancel");
         }
 
+        for (Button button : new Button[]{pauseButton, resumeButton, cancelButton}) {
+            String icon = button == pauseButton ? IconButtonService.PAUSE
+                    : button == resumeButton ? IconButtonService.PLAY : IconButtonService.CANCEL;
+            button.setGraphic(IconButtonService.createSvgIcon(icon, 26));
+        }
         HBox actions = new HBox(5, pauseButton, resumeButton, cancelButton);
         actions.setAlignment(Pos.CENTER_RIGHT);
         actions.setMinWidth(Region.USE_PREF_SIZE);
-        Region controlSpacer = new Region();
-        HBox.setHgrow(controlSpacer, Priority.ALWAYS);
-        HBox controls = new HBox(8, controlSpacer, actions);
+        HBox.setHgrow(status, Priority.ALWAYS);
+        HBox controls = new HBox(8, status, actions);
         controls.setAlignment(Pos.CENTER_RIGHT);
         card.getStyleClass().add("gx-compact-card");
         ObservableValue<? extends Number> availableCardWidth =
                 javafx.beans.binding.Bindings.max(0, widthProperty().subtract(10));
         card.prefWidthProperty().bind(availableCardWidth);
         card.maxWidthProperty().bind(availableCardWidth);
-        card.getChildren().addAll(mediaHeader, controls, progress, status);
+        card.getChildren().addAll(mediaHeader, controls, progress);
 
         pauseButton.setOnAction(event -> fire(pause));
         resumeButton.setOnAction(event -> fire(resume));

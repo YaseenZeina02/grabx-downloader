@@ -272,8 +272,8 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         speed.setTextOverrun(OverrunStyle.CLIP);
 
         eta.setMinWidth(60);
-        eta.setPrefWidth(60);
-        eta.setMaxWidth(60);
+        eta.setPrefWidth(Region.USE_COMPUTED_SIZE);
+        eta.setMaxWidth(Region.USE_PREF_SIZE);
         eta.setAlignment(Pos.CENTER_RIGHT);
         eta.setTextOverrun(OverrunStyle.CLIP);
 
@@ -382,7 +382,7 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         title.textProperty().bind(item.title);
         status.textProperty().bind(item.status);
         speed.textProperty().bind(item.speed);
-        eta.textProperty().bind(item.eta);
+        eta.textProperty().bind(item.eta.map(DownloadEtaFormatter::format));
         sizeLabel.textProperty().bind(item.size);
         bindSmoothProgress(item);
         meta.setText(item.mode + " • " + item.quality + " • " + item.folder);

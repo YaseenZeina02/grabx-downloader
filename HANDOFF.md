@@ -1,6 +1,89 @@
 # GrabX handoff
 
-Updated: 2026-09-24 after investigating the user's Windows native-host error.
+Updated: 2026-09-29 after preparing the user-requested daily UI checkpoint.
+
+Today's compact-view and ETA changes are included in the requested checkpoint
+commit, `Refine compact view controls, dragging and remaining-time display`.
+Verification is recorded below; no push was requested.
+
+## Latest outcome: clearer toolbar over download media (2026-09-29)
+
+- Darkened the translucent toolbar gradient. The download thumbnail/file preview
+  and title now fade to 22% opacity in sync with the existing toolbar animation,
+  returning to 100% when it hides. Status, progress and download buttons stay clear.
+  A shared binding handles newly created/reused cells while the toolbar is visible;
+  the empty-state icon follows the same dimming. Header-only hover and sizing remain.
+- Verification: Java 21 installDist and git diff --check passed. Temporary native
+  preview checked 22%/100% media opacity, unchanged status/button opacity, header-only
+  hover, centered controls, pause/resume and minimum layout; inspected rendered
+  hover screenshot. One initial pointer run lost hover at final re-entry; repeating
+  the unchanged harness passed. No JUnit rerun for this visual follow-up.
+- Next: Stop/Run GrabX in IntelliJ to view the darker header and media dimming.
+  No implementation work remains pending; no real downloads/history were modified.
+
+## Latest outcome: header-only hover and aligned controls (2026-09-29)
+
+- Replaced the compact close/minimize traffic-light circles with 26px translucent
+  rounded buttons and SVG icons. They are vertically centered in the header;
+  close/minimize use red/amber highlights only when individually hovered.
+- A persistent transparent 34px header hit area now controls the existing fade.
+  Hover over the body/footer does not reveal the toolbar; moving onto its buttons
+  keeps it visible, and leaving the header fades it out. All-area dragging stays.
+- Verification: Java 21 installDist passed. Updated temporary CompactPreviewCheck
+  exercised actual mouse hover on body, footer, header and a header button; checked
+  centered button geometry, hide after leaving, and drag from footer/status/progress/
+  empty area with button exclusion. Rendered toolbar inspected. No real downloads
+  or user history touched. Earlier JUnit results below were not rerun this follow-up.
+- Next: Stop/Run GrabX in IntelliJ to load this revision; hover the top strip to
+  view the controls. No implementation work remains pending.
+
+## Latest outcome: drag anywhere and lighter hover toolbar (2026-09-29)
+
+- Compact View can now be dragged from the card, status, progress bar, footer,
+  and empty area. Primary-button drag uses a fixed screen-space offset and consumes
+  the gesture to prevent ListView selection handlers from competing. Buttons (with
+  SVG descendants) and scrollbars retain their interactions; edges still resize.
+  Open/closed hand cursors indicate draggable areas and active dragging.
+- Replaced the opaque hover toolbar background with a translucent gradient, faint
+  highlight border, soft shadow, and reversible 140ms opacity transition. Hover now
+  covers the whole compact window, including the footer. This is a glass-like tint,
+  not a native backdrop-blur implementation. Hidden controls do not intercept input.
+- Verified this follow-up: Java 21 build/installDist and all 4 native compact-window
+  restoration tests passed. Temporary CompactPreviewCheck used actual mouse drags
+  from footer, status, progress, and empty area; intermediate/final window positions
+  followed the pointer, while a drag starting on a button did not move the window.
+  Minimum layout, hover, pause/resume and ETA checks also passed. Inspected the new
+  rendered toolbar screenshot. No real downloads or user history were modified.
+- Next: Stop/Run GrabX in IntelliJ to load the changes and try dragging the compact
+  window from the footer or download card. No implementation work remains pending.
+
+## Latest outcome: smaller Compact View and hour-based ETA (2026-09-29)
+
+- Compact View now enters at its minimum 350 × 160 instead of 390 × 290.
+  Resizing remains available up to 390 × 290. Status and pause/resume/cancel share
+  a row, with tighter card/footer spacing and 30px action buttons.
+- Window controls overlay the download area only while hovered; they reserve no
+  extra title-bar height. Hovering the toolbar itself keeps it visible. Download
+  actions remain below the overlay. Window dragging checks button ancestors so
+  dragging an SVG button does not inadvertently move the window.
+- DownloadRowCell formats both direct mm:ss and extractor hh:mm:ss ETA values as
+  hours/minutes at one hour or above (81:35 → 1h 21m). Short estimates and unknown
+  placeholders stay unchanged; ETA preferred width adapts to its text.
+- Verified today using Java 21: 12 targeted tests passed with zero skips, including
+  all four native CompactWindowState restoration checks; installDist succeeded.
+  Default Java 24 failed Gradle test-task configuration, so use the installed
+  temurin-21.0.9 JAVA_HOME for these commands.
+- Temporary /private/tmp/CompactPreviewCheck.java exercised the real controller
+  with fixture downloads: 350 × 160 layout, hidden toolbar, actual mouse hover,
+  unchanged height, unobstructed pause control, paused/resume state, empty state,
+  and eight ETA examples. Rendered snapshots were visually checked. The initial
+  layout assertion included the card drop shadow; checking layout bounds confirmed
+  the card ends at y=120, above the footer at y=123. No real download was started.
+- Build output is refreshed; the running IDE app/native-host staged copy was not
+  restarted/replaced. No Windows/Linux GUI run in this turn. Prior Windows native
+  host investigation below remains unresolved and unrelated to these UI changes.
+- Next: Stop/Run GrabX in IntelliJ to load this build, then open Compact View and
+  hover the download card to see the new layout and controls.
 
 ## Latest outcome: Windows host not found (2026-09-24)
 

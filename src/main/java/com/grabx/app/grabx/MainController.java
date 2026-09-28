@@ -136,6 +136,11 @@ public class MainController {
     private javafx.stage.Stage fullStage;
     private double compactDragX;
     private double compactDragY;
+    private static final double COMPACT_MIN_WIDTH = 350;
+    private static final double COMPACT_MIN_HEIGHT = 160;
+    private static final double COMPACT_MAX_WIDTH = 390;
+    private static final double COMPACT_MAX_HEIGHT = 290;
+    private boolean compactDragging;
     private boolean compactResizing;
     private double compactResizeScreenX;
     private double compactResizeScreenY;
@@ -482,13 +487,6 @@ public class MainController {
         emptyState.setAlignment(javafx.geometry.Pos.CENTER);
         emptyState.getStyleClass().add("gx-compact-empty");
         compactList.setPlaceholder(emptyState);
-        compactList.setCellFactory(list -> new CompactDownloadRowCell(
-                downloadStateCoordinator::pause,
-                downloadStateCoordinator::resume,
-                downloadStateCoordinator::cancel,
-                iconButtons::installTooltip,
-                (node, text) -> hoverTooltipService.install(node, text)
-        ));
 
         Button restoreButton = new Button();
         IconButtonService.setupSvgButton(restoreButton, IconButtonService.FULL_VIEW);
@@ -496,8 +494,14 @@ public class MainController {
         iconButtons.installTooltip(restoreButton, "Full View");
         restoreButton.setOnAction(event -> exitCompactView());
 
-        Button closeButton = new Button("×");
-        Button minimizeButton = new Button("−");
+        Button closeButton = new Button();
+        Button minimizeButton = new Button();
+        closeButton.setGraphic(IconButtonService.createSvgIcon(IconButtonService.CANCEL, 22));
+        minimizeButton.setGraphic(IconButtonService.createSvgIcon("M5 11h14v2H5z", 22));
+        closeButton.setAccessibleText("Close");
+        minimizeButton.setAccessibleText("Minimize");
+        closeButton.setFocusTraversable(false);
+        minimizeButton.setFocusTraversable(false);
         closeButton.getStyleClass().addAll("gx-window-control", "gx-window-close");
         minimizeButton.getStyleClass().addAll("gx-window-control", "gx-window-minimize");
         closeButton.setOnAction(event -> {
@@ -508,6 +512,7 @@ public class MainController {
             if (compactStage != null) compactStage.setIconified(true);
         });
         HBox windowControls = new HBox(7, closeButton, minimizeButton);
+        windowControls.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         windowControls.getStyleClass().add("gx-window-controls");
 
         BorderPane compactToolbar = new BorderPane();
@@ -516,15 +521,19 @@ public class MainController {
         compactToolbar.setRight(mac ? restoreButton : windowControls);
         compactToolbar.getStyleClass().add("gx-compact-toolbar");
         compactToolbar.setPickOnBounds(true);
-        compactToolbar.setOnMousePressed(event -> {
-            compactDragX = event.getSceneX();
-            compactDragY = event.getSceneY();
-        });
-        compactToolbar.setOnMouseDragged(event -> {
-            if (compactStage == null) return;
-            compactStage.setX(event.getScreenX() - compactDragX);
-            compactStage.setY(event.getScreenY() - compactDragY);
-        });
+        // Share the toolbar animation so media fades down and returns in exact sync,
+        // including cells created/reused while the overlay is already visible.
+        javafx.beans.binding.DoubleBinding mediaOpacity =
+                compactToolbar.opacityProperty().multiply(-0.78).add(1);
+        emptyIcon.opacityProperty().bind(mediaOpacity);
+        compactList.setCellFactory(list -> new CompactDownloadRowCell(
+                downloadStateCoordinator::pause,
+                downloadStateCoordinator::resume,
+                downloadStateCoordinator::cancel,
+                iconButtons::installTooltip,
+                (node, text) -> hoverTooltipService.install(node, text),
+                mediaOpacity
+        ));
 
         Label activeCount = new Label();
         activeCount.textProperty().bind(javafx.beans.binding.Bindings.size(downloadService.activeView())
@@ -539,8 +548,35 @@ public class MainController {
         compactFooter.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         compactFooter.getStyleClass().add("gx-compact-footer");
 
-        compactRoot = new VBox(6, compactToolbar, compactList, compactFooter);
+        // Overlay window controls without reserving a title-bar row. Keeping the
+        // toolbar inside the hover target prevents flicker when entering a button.
+        // The transparent header region stays pickable while its controls fade out.
+        // Hovering the download body or footer must not reveal the toolbar.
+        StackPane headerHoverArea = new StackPane(compactToolbar);
+        headerHoverArea.setMaxHeight(Region.USE_PREF_SIZE);
+        headerHoverArea.setPickOnBounds(true);
+        StackPane downloadArea = new StackPane(compactList, headerHoverArea);
+        downloadArea.setMinHeight(0);
+        compactList.setMinHeight(0);
+        StackPane.setAlignment(headerHoverArea, javafx.geometry.Pos.TOP_CENTER);
+        compactRoot = new VBox(4, downloadArea, compactFooter);
         compactRoot.getStyleClass().add("gx-compact-root");
+        compactToolbar.setOpacity(0);
+        compactToolbar.setVisible(false);
+        compactToolbar.setMouseTransparent(true);
+        javafx.animation.FadeTransition toolbarFade = new javafx.animation.FadeTransition(
+                javafx.util.Duration.millis(140), compactToolbar);
+        headerHoverArea.hoverProperty().addListener((observable, wasHovered, hovered) -> {
+            toolbarFade.stop();
+            compactToolbar.setMouseTransparent(!hovered);
+            if (hovered) compactToolbar.setVisible(true);
+            toolbarFade.setFromValue(compactToolbar.getOpacity());
+            toolbarFade.setToValue(hovered ? 1 : 0);
+            toolbarFade.setOnFinished(event -> {
+                if (!headerHoverArea.isHover()) compactToolbar.setVisible(false);
+            });
+            toolbarFade.playFromStart();
+        });
         compactRoot.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_MOVED, event -> {
             if (compactStage == null) return;
             boolean nearLeft = event.getSceneX() <= 10;
@@ -555,9 +591,12 @@ public class MainController {
             else if (nearRight) compactRoot.setCursor(javafx.scene.Cursor.E_RESIZE);
             else if (nearTop) compactRoot.setCursor(javafx.scene.Cursor.N_RESIZE);
             else if (nearBottom) compactRoot.setCursor(javafx.scene.Cursor.S_RESIZE);
-            else compactRoot.setCursor(javafx.scene.Cursor.DEFAULT);
+            else compactRoot.setCursor(isCompactInteractiveTarget(event.getTarget())
+                    ? javafx.scene.Cursor.DEFAULT : javafx.scene.Cursor.OPEN_HAND);
         });
         compactRoot.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_PRESSED, event -> {
+            if (event.getButton() != javafx.scene.input.MouseButton.PRIMARY) return;
+            compactDragging = false;
             compactResizeLeft = event.getSceneX() <= 10;
             compactResizeRight = compactStage != null && event.getSceneX() >= compactStage.getWidth() - 10;
             compactResizeTop = event.getSceneY() <= 10;
@@ -575,9 +614,13 @@ public class MainController {
                 event.consume();
                 return;
             }
-            if (event.getSceneY() > 62 || event.getTarget() instanceof Button) return;
-            compactDragX = event.getSceneX();
-            compactDragY = event.getSceneY();
+            if (compactStage == null || isCompactInteractiveTarget(event.getTarget())) return;
+            compactDragging = true;
+            // A fixed screen-space offset avoids feedback from moving scene coordinates.
+            compactDragX = event.getScreenX() - compactStage.getX();
+            compactDragY = event.getScreenY() - compactStage.getY();
+            compactRoot.setCursor(javafx.scene.Cursor.CLOSED_HAND);
+            event.consume();
         });
         compactRoot.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_DRAGGED, event -> {
             if (compactResizing && compactStage != null) {
@@ -585,7 +628,7 @@ public class MainController {
                 double dy = event.getScreenY() - compactResizeScreenY;
                 if (compactResizeLeft || compactResizeRight) {
                     double requestedWidth = compactResizeWidth + (compactResizeLeft ? -dx : dx);
-                    double newWidth = Math.max(350, Math.min(390, requestedWidth));
+                    double newWidth = Math.max(COMPACT_MIN_WIDTH, Math.min(COMPACT_MAX_WIDTH, requestedWidth));
                     if (compactResizeLeft) {
                         compactStage.setX(compactResizeStageX + compactResizeWidth - newWidth);
                     }
@@ -593,7 +636,7 @@ public class MainController {
                 }
                 if (compactResizeTop || compactResizeBottom) {
                     double requestedHeight = compactResizeHeight + (compactResizeTop ? -dy : dy);
-                    double newHeight = Math.max(270, Math.min(290, requestedHeight));
+                    double newHeight = Math.max(COMPACT_MIN_HEIGHT, Math.min(COMPACT_MAX_HEIGHT, requestedHeight));
                     if (compactResizeTop) {
                         compactStage.setY(compactResizeStageY + compactResizeHeight - newHeight);
                     }
@@ -602,15 +645,29 @@ public class MainController {
                 event.consume();
                 return;
             }
-            if (event.getSceneY() > 80 || compactStage == null || event.getTarget() instanceof Button) return;
+            if (!compactDragging || compactStage == null) return;
             compactStage.setX(event.getScreenX() - compactDragX);
             compactStage.setY(event.getScreenY() - compactDragY);
+            event.consume();
         });
         compactRoot.addEventFilter(javafx.scene.input.MouseEvent.MOUSE_RELEASED, event -> {
+            if (event.getButton() != javafx.scene.input.MouseButton.PRIMARY) return;
+            if (compactDragging || compactResizing) event.consume();
+            compactRoot.setCursor(isCompactInteractiveTarget(event.getTarget())
+                    ? javafx.scene.Cursor.DEFAULT : javafx.scene.Cursor.OPEN_HAND);
             compactResizing = false;
+            compactDragging = false;
             compactResizeLeft = compactResizeRight = compactResizeTop = compactResizeBottom = false;
         });
-        VBox.setVgrow(compactList, Priority.ALWAYS);
+        VBox.setVgrow(downloadArea, Priority.ALWAYS);
+    }
+
+    private static boolean isCompactInteractiveTarget(Object target) {
+        // SVG paths and labels inside a button can be the actual event target.
+        for (Node node = target instanceof Node n ? n : null; node != null; node = node.getParent()) {
+            if (node instanceof ButtonBase || node instanceof ScrollBar) return true;
+        }
+        return false;
     }
 
     private void enterCompactView() {
@@ -623,8 +680,8 @@ public class MainController {
         fullWindowState = com.grabx.app.grabx.ui.components.CompactWindowState.capture(stage);
         compactView = true;
 
-        double compactWidth = 390;
-        double compactHeight = 290;
+        double compactWidth = COMPACT_MIN_WIDTH;
+        double compactHeight = COMPACT_MIN_HEIGHT;
         if (compactStage == null) {
             compactStage = new javafx.stage.Stage(javafx.stage.StageStyle.TRANSPARENT);
             javafx.scene.Scene compactScene = new javafx.scene.Scene(compactRoot, compactWidth, compactHeight);
@@ -634,10 +691,10 @@ public class MainController {
             compactScene.getStylesheets().setAll(root.getScene().getStylesheets());
             compactScene.getStylesheets().addAll(root.getStylesheets());
             compactStage.setScene(compactScene);
-            compactStage.setMinWidth(350);
-            compactStage.setMaxWidth(compactWidth);
-            compactStage.setMinHeight(270);
-            compactStage.setMaxHeight(compactHeight);
+            compactStage.setMinWidth(COMPACT_MIN_WIDTH);
+            compactStage.setMaxWidth(COMPACT_MAX_WIDTH);
+            compactStage.setMinHeight(COMPACT_MIN_HEIGHT);
+            compactStage.setMaxHeight(COMPACT_MAX_HEIGHT);
             compactStage.setAlwaysOnTop(true);
         }
         compactStage.setWidth(compactWidth);
