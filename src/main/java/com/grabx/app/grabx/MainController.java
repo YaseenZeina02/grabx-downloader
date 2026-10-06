@@ -243,6 +243,7 @@ public class MainController {
 
         soundFeedback = new com.grabx.app.grabx.core.service.SoundFeedbackService(PREFS);
         downloadSounds = new com.grabx.app.grabx.core.service.DownloadSoundObserver(downloadItems, soundFeedback::play);
+        historyService.configureStartupResume(taskPreferences::autoResume, downloadStateCoordinator::resume);
         historyService.loadOnce();
         initializePlaylistServices();
         initializeAddLink();
@@ -962,11 +963,11 @@ public class MainController {
                 new com.grabx.app.grabx.ui.components.SettingsPage.Values(
                         downloadFolderPreferences.configuredFolder(), downloadFolderPreferences.remembersLastFolder(),
                         transferPreferences.directRate(), transferPreferences.mediaRate(),
-                        soundFeedback.isEnabled(), soundFeedback.volume(), partialRetentionDays(), taskPreferences.maxActive()),
+                        soundFeedback.isEnabled(), soundFeedback.volume(), partialRetentionDays(), taskPreferences.maxActive(), taskPreferences.autoResume()),
                 soundFeedback, settings -> {
                     downloadFolderPreferences.configure(settings.folder(), settings.rememberFolder());
                     transferPreferences.save(settings.directRate(), settings.mediaRate());
-                    taskPreferences.save(settings.maxActive());
+                    taskPreferences.save(settings.maxActive(), settings.autoResume());
                     downloadScheduler.setLimit(settings.maxActive());
                     PREFS.putInt("partialRetentionDays", settings.retentionDays());
                     soundFeedback.configure(settings.sounds(), settings.volume());
@@ -1025,6 +1026,7 @@ public class MainController {
 
     public void shutdown() {
         if (!shuttingDown.compareAndSet(false, true)) return;
+        historyService.prepareForShutdown();
         if (downloadScheduler != null) downloadScheduler.close();
         // Stop feedback before pauseAll: closing the app is intentionally silent.
         if (downloadSounds != null) downloadSounds.close();

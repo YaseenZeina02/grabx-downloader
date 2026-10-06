@@ -20,7 +20,11 @@ import java.util.function.Consumer;
 /** A draft-based settings workspace. Navigation never silently commits edits. */
 public final class SettingsPage extends BorderPane {
     public record Values(String folder, boolean rememberFolder, long directRate, long mediaRate,
-                         boolean sounds, double volume, int retentionDays, int maxActive) {
+                         boolean sounds, double volume, int retentionDays, int maxActive, boolean autoResume) {
+        public Values(String folder, boolean rememberFolder, long directRate, long mediaRate,
+                      boolean sounds, double volume, int retentionDays, int maxActive) {
+            this(folder, rememberFolder, directRate, mediaRate, sounds, volume, retentionDays, maxActive, false);
+        }
         public Values(String folder, boolean rememberFolder, long directRate, long mediaRate,
                       boolean sounds, double volume, int retentionDays) {
             this(folder, rememberFolder, directRate, mediaRate, sounds, volume, retentionDays, TaskPreferences.DEFAULT_LIMIT);
@@ -36,6 +40,7 @@ public final class SettingsPage extends BorderPane {
     private final Slider volume = new Slider(0, 100, 30);
     private final TextField days = new TextField();
     private final ComboBox<Integer> maxActive = new ComboBox<>();
+    private final CheckBox autoResume = new CheckBox("Resume interrupted downloads when GrabX opens");
     private final Label notice = new Label();
     private final Label dirtyStatus = new Label();
     private final Button save = new Button("Save changes");
@@ -55,7 +60,7 @@ public final class SettingsPage extends BorderPane {
         nav.setMinWidth(0); nav.setPrefWidth(190);
         nav.getChildren().addAll(
                 navigation("Downloads", "Folders & destinations", downloads(), true),
-                navigation("Tasks", "Concurrency & queue", tasks(), false),
+                navigation("Tasks", "Queue & startup", tasks(), false),
                 navigation("Network", "Download speed limits", network(), false),
                 navigation("Sounds", "Volume & event previews", audio(), false),
                 navigation("Storage", "Incomplete file cleanup", storage(), false));
@@ -82,6 +87,7 @@ public final class SettingsPage extends BorderPane {
         direct.listen(edited); media.listen(edited); sounds.selectedProperty().addListener(edited);
         volume.valueProperty().addListener(edited); days.textProperty().addListener(edited);
         maxActive.valueProperty().addListener(edited);
+        autoResume.selectedProperty().addListener(edited);
         load(initial);
         reset.disableProperty().bind(save.disableProperty());
     }
@@ -106,6 +112,7 @@ public final class SettingsPage extends BorderPane {
                 note("You can still choose a different destination for each download."));
     }
     private Node tasks() {
+        autoResume.setId("settings-auto-resume"); autoResume.setWrapText(true);
         maxActive.setId("settings-max-active"); maxActive.setAccessibleText("Maximum active downloads");
         for (int count = 1; count <= TaskPreferences.MAX_LIMIT; count++) maxActive.getItems().add(count);
         maxActive.setPrefWidth(100);
@@ -114,7 +121,8 @@ public final class SettingsPage extends BorderPane {
                 card("Maximum active downloads", "Applies to direct files, video, audio and playlists together. Preparing, checking saved data and finishing a file count as active tasks.", choice),
                 card("Automatic queue", "When all slots are busy, new requests wait in submission order. The next eligible task starts when a slot becomes free.",
                         note("Pausing a task frees its slot. Resuming puts it back in the queue. Pause all also pauses waiting tasks.")),
-                note("Increasing the limit can start waiting tasks after Save. Lowering it lets current tasks finish without interruption. After reopening GrabX, use Resume to restart unfinished tasks."));
+                card("On startup", "Continue tasks that were running or waiting when GrabX closed. Manually paused, failed and cancelled tasks stay stopped. Saved data is checked as usual before resuming.", autoResume),
+                note("Startup resume is off by default and uses the same task limit. Changes apply the next time GrabX opens. Increasing the limit can start waiting tasks after Save; lowering it leaves current tasks running."));
     }
     private Node network() {
         return section("Network", "Leave room for browsing, calls and everything else.",
@@ -180,7 +188,7 @@ public final class SettingsPage extends BorderPane {
         if (maximum == null || maximum < 1 || maximum > TaskPreferences.MAX_LIMIT)
             throw new IllegalArgumentException("Tasks: choose between 1 and 16 active downloads.");
         return new Values(Path.of(text).normalize().toString(), remember.isSelected(), direct.rate(), media.rate(),
-                sounds.isSelected(), volume.getValue() / 100.0, retention, maximum);
+                sounds.isSelected(), volume.getValue() / 100.0, retention, maximum, autoResume.isSelected());
     }
     public boolean isDirty() {
         try {
@@ -189,7 +197,7 @@ public final class SettingsPage extends BorderPane {
             // fractional volume as dirty due to floating-point roundoff.
             if (Math.abs(current.volume() - saved.volume()) < 1e-9)
                 current = new Values(current.folder(), current.rememberFolder(), current.directRate(), current.mediaRate(),
-                        current.sounds(), saved.volume(), current.retentionDays(), current.maxActive());
+                        current.sounds(), saved.volume(), current.retentionDays(), current.maxActive(), current.autoResume());
             return !saved.equals(current);
         } catch (RuntimeException e) { return true; }
     }
@@ -203,6 +211,7 @@ public final class SettingsPage extends BorderPane {
         loading = true;
         folder.setText(value.folder()); remember.setSelected(value.rememberFolder());
         direct.load(value.directRate()); media.load(value.mediaRate()); maxActive.setValue(value.maxActive());
+        autoResume.setSelected(value.autoResume());
         sounds.setSelected(value.sounds()); volume.setValue(value.volume() * 100); days.setText(Integer.toString(value.retentionDays()));
         loading = false; changed(); sound.silence();
     }

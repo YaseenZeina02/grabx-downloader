@@ -57,6 +57,34 @@ public class HistoryService {
 
     private final AtomicBoolean historySaveScheduled = new AtomicBoolean(false);
     private volatile boolean downloadHistoryLoaded = false;
+    private java.util.Set<DownloadRow> interruptedOnShutdown;
+    private java.util.function.BooleanSupplier autoResumeEnabled = () -> false;
+    private java.util.function.Consumer<DownloadRow> resumeInterrupted = row -> {};
+
+    public void configureStartupResume(java.util.function.BooleanSupplier enabled,
+                                       java.util.function.Consumer<DownloadRow> resume) {
+        autoResumeEnabled = java.util.Objects.requireNonNull(enabled);
+        resumeInterrupted = java.util.Objects.requireNonNull(resume);
+    }
+
+    /** Capture intent before shutdown pauses workers; later saves retain that intent. FX thread only. */
+    public void prepareForShutdown() {
+        if (interruptedOnShutdown != null) return;
+        interruptedOnShutdown = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        for (DownloadRow row : downloadItems) {
+            if (isInterruptedState(row.getState())) interruptedOnShutdown.add(row);
+        }
+    }
+
+    private static boolean isInterruptedState(DownloadRow.State state) {
+        return state == DownloadRow.State.DOWNLOADING || state == DownloadRow.State.PENDING
+                || state == DownloadRow.State.QUEUED;
+    }
+
+    private boolean shouldResumeAfterRestart(DownloadRow row) {
+        return isInterruptedState(row.getState()) || (row.getState() == DownloadRow.State.PAUSED
+                && interruptedOnShutdown != null && interruptedOnShutdown.contains(row));
+    }
 
     private final java.util.Set<DownloadRow> historyAttachedRows =
             java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
@@ -135,6 +163,7 @@ public class HistoryService {
                                 + esc(row.folder) + "\t" + esc(row.mode) + "\t"
                                 + esc(row.quality) + "\t" + esc(state) + "\t"
                                 + esc(outputPath) + "\t" + updated + "\t" + esc(row.getReferer()) + "\t" + esc(row.resumeEtag) + "\t" + row.totalBytes.get() + "\t" + esc(row.originalUrl) + "\t" + esc(row.status.get())
+                                + "\t" + shouldResumeAfterRestart(row)
                 );
             }
             if (!lines.isEmpty()) {
@@ -268,6 +297,7 @@ public class HistoryService {
 
             List<String> lines = Files.readAllLines(historyFile, StandardCharsets.UTF_8);
             List<DownloadRow> restored = new ArrayList<>();
+            List<DownloadRow> interrupted = new ArrayList<>();
 
             for (String line : lines) {
                 if (line == null || line.isBlank()) continue;
@@ -319,8 +349,10 @@ public class HistoryService {
                     String norm = (state == null) ? "QUEUED" : state.trim().toUpperCase(Locale.ROOT);
                     DownloadRow.State st = DownloadRow.State.valueOf(norm);
 
-                    // Startup stays manual, including requests that were waiting when the app closed.
-                    if (st == DownloadRow.State.DOWNLOADING || st == DownloadRow.State.PENDING || st == DownloadRow.State.QUEUED) st = DownloadRow.State.PAUSED;
+                    // Legacy active states identify abrupt exits. Old PAUSED rows stay manual.
+                    if (isInterruptedState(st) || (st == DownloadRow.State.PAUSED
+                            && c.length > 13 && Boolean.parseBoolean(c[13]))) interrupted.add(r);
+                    if (isInterruptedState(st)) st = DownloadRow.State.PAUSED;
 
                     // if completed but file missing => missing
                     if (st == DownloadRow.State.COMPLETED) {
@@ -385,8 +417,21 @@ public class HistoryService {
                 Platform.runLater(() -> {
                     try {
                         downloadItems.addAll(restored);
+                        restored.forEach(this::attachAutoSave);
 
                         if (reconcileLoadedRowsWithDisk != null) reconcileLoadedRowsWithDisk.run();
+                        // Disk reconciliation may itself be queued on FX; admission must follow it.
+                        Platform.runLater(() -> {
+                            if (interruptedOnShutdown != null) return;
+                            if (autoResumeEnabled.getAsBoolean()) {
+                                for (DownloadRow row : interrupted) {
+                                    if (downloadItems.contains(row) && row.getState() == DownloadRow.State.PAUSED)
+                                        resumeInterrupted.accept(row);
+                                }
+                            }
+                            // Consume this startup's intent, even with the preference disabled.
+                            saveNow();
+                        });
 
                         if (warmMissingThumbnailsAsync != null) {
                             warmMissingThumbnailsAsync.accept(restored);

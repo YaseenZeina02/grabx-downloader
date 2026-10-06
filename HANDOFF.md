@@ -1,6 +1,35 @@
 # GrabX handoff
 
-Updated: 2026-10-06 for the user-requested local commit checkpoint.
+Updated: 2026-10-06 after optional startup resume.
+
+## Latest outcome: optional startup resume (2026-10-06)
+
+- Implemented the authorized next step in Settings > Tasks: Resume interrupted
+  downloads when GrabX opens. Default off, draft-based Save/Discard/Keep editing,
+  persistent preference; saving it does not start paused downloads immediately.
+- History adds a backwards-compatible trailing interruption boolean. Shutdown
+  captures running/preparing/queued rows before pauseAll; repeated late snapshots
+  preserve this intent. Manual pause/Pause all, failure, cancellation and completion
+  remain excluded. Old active states identify crashes; ambiguous old PAUSED records
+  stay manual. Existing saved data verification and transfer paths are unchanged.
+- Startup reconciles disk state before submitting only still-paused interrupted
+  rows through the coordinator/shared scheduler. It respects the concurrency cap,
+  skips newly completed/failed rows, and does not start work during shutdown.
+  Disabled startup consumes old intent so a later opt-in does not revive past pauses.
+  Restored rows now receive history autosave listeners for subsequent state changes.
+- Verification: Java 21 full test + installDist with GRABX_TEST_RESUME=true passed:
+  267 discovered, 257 passed, 10 optional skips, zero failures/errors. All 34 native
+  resume tests passed. Added normal shutdown/repeated saves, crash/legacy migration,
+  default-off/reload, manual pause, failed/completed reconciliation, shared limit,
+  disabled-then-enabled launch and close-during-load checks.
+- Isolated JavaFX harness verified startup draft, Keep editing, discard, confirmation
+  Save, and existing five-section settings behavior at 1200x800 and 900x500. Snapshot
+  /private/tmp/grabx-settings-tasks.png inspected. No real app restart, downloads,
+  history or preferences changed. Browser extension unchanged; no reload needed.
+- User now wants multiple concrete proposed next steps grouped at the end to reduce
+  back-and-forth. Suggested next batch: clearer delete/clear confirmations, desktop
+  notifications with preferences, then appearance/window-memory options. These are
+  proposals, not implemented or separately authorized yet. Torrent/Safari deferred.
 
 ## Commit checkpoint (2026-10-06)
 

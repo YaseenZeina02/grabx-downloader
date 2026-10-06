@@ -20,8 +20,11 @@ leave room for future supported preferences without presenting nonfunctional opt
   of visual sorting. Pausing releases a slot once the engine stops transferring;
   resuming joins the same queue. Raising the limit admits waiting tasks; lowering it
   lets existing tasks finish without interrupting them. Pause/Cancel all also withdraw
-  pending requests before the next admission pass. Restart remains manual: restored
-  queued/preparing/downloading rows become Paused, not stuck in a dormant queue.
+  pending requests before the next admission pass. Optional **Resume interrupted
+  downloads when GrabX opens** is off by default. It only resumes tasks that were
+  running, preparing or queued at exit, through the same limit and verification.
+  Manually paused, failed, cancelled, completed and missing tasks stay stopped.
+  Saving this option takes effect at the next launch, not immediately.
 - **Network:** optional direct-download combined limit and independent video/audio
   per-task limit, decimal KB/s and MB/s. Default is unlimited. Values range from
   1 KB/s to 1,000 MB/s. These are **not one total application-wide ceiling**.
@@ -70,9 +73,27 @@ The scheduler closes before pauseAll on shutdown.
 PlaylistBatchService now submits all selected items, with per-row mode/quality captured,
 to this shared scheduler. It no longer maintains an independent sequential chain or
 terminal-state listeners that could restart later playlist rows more than once.
-History restores waiting requests as Paused for explicit Resume/Resume all.
+History first restores unfinished rows as Paused and reconciles their files before
+optional startup admission. A new trailing TSV boolean preserves interruption intent
+across orderly shutdown (captured before shutdown's pauseAll) and repeated late saves.
+For older history files, active/queued states identify abrupt exits; old PAUSED rows
+are left manual because their original reason cannot be recovered. Intent is consumed
+at startup even when the preference is off; enabling it later does not revive tasks
+left paused in an earlier session. Closing during restoration prevents admission.
+Restored rows receive autosave listeners so later state changes are persisted.
 
-## Verification
+## Startup-resume verification (2026-10-06)
+
+- Full Java 21 test + installDist with GRABX_TEST_RESUME=true: 267 discovered,
+  257 passed, 10 optional skips, zero failures/errors; all 34 native resume cases passed.
+- Covers shutdown versus manual pause, repeated saves, legacy crash states, failed
+  link migration, disk reconciliation before admission, shared concurrency, disabled
+  then enabled launches, closing during restore, and preference persistence.
+- Isolated JavaFX harness verified default off, unsaved draft, Keep editing, discard,
+  confirmation Save, and footer visibility at both normal and minimum window sizes.
+  No real downloads, preferences or history touched.
+
+## Earlier verification
 
 - Full Java 21 suite with GRABX_TEST_RESUME=true: 261 discovered, 251 passed,
   10 optional skips, zero failures/errors. All 30 smart-resume cases passed.

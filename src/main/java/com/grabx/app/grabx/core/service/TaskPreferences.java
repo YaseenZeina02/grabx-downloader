@@ -7,6 +7,11 @@ public final class TaskPreferences {
     public static final int MAX_LIMIT = 16;
     private final Preferences preferences;
     public TaskPreferences(Preferences preferences) { this.preferences = preferences; }
+    public boolean autoResume() { return preferences.getBoolean("grabx.tasks.autoResume", false); }
+    public void save(int limit, boolean autoResume) {
+        save(limit);
+        preferences.putBoolean("grabx.tasks.autoResume", autoResume);
+    }
     public int maxActive() {
         int saved = preferences.getInt("grabx.tasks.maxActive", DEFAULT_LIMIT);
         return saved >= 1 && saved <= MAX_LIMIT ? saved : DEFAULT_LIMIT;

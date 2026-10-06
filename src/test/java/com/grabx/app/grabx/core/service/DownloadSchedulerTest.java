@@ -107,4 +107,15 @@ class DownloadSchedulerTest {
         assertThrows(IllegalArgumentException.class,()->prefs.save(0));assertThrows(IllegalArgumentException.class,()->prefs.save(17));
         assertEquals(5,prefs.maxActive());storage.putInt("grabx.tasks.maxActive",Integer.MAX_VALUE);assertEquals(3,prefs.maxActive());
     }
+    @Test void startupResumeIsOptInAndPersistsWithoutBeingChangedByLimitOnlySave() {
+        var storage = new SoundFeedbackServiceTest.MemoryPreferences();
+        var prefs = new TaskPreferences(storage);
+        assertFalse(prefs.autoResume());
+        prefs.save(2, true);
+        assertTrue(new TaskPreferences(storage).autoResume());
+        prefs.save(4); assertTrue(prefs.autoResume());
+        assertThrows(IllegalArgumentException.class, () -> prefs.save(0, false));
+        assertTrue(prefs.autoResume());
+        prefs.save(4, false); assertFalse(new TaskPreferences(storage).autoResume());
+    }
 }

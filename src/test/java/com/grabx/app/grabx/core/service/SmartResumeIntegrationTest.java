@@ -88,6 +88,103 @@ class SmartResumeIntegrationTest {
             } finally { fx(scheduler::close); }
         }
     }
+    @Test void startupResumesOnlyInterruptedTasksThroughTheSharedLimitAfterReconciliation() throws Exception {
+        Path history = dir.resolve("startup.tsv");
+        var rows = FXCollections.<DownloadRow>observableArrayList();
+        for (String title : List.of("running", "waiting", "manual", "failed", "cancelled", "finished", "bad-state"))
+            rows.add(new DownloadRow("https://example.test/" + title, title, rows.size(), dir.toString(), "Video", "Best"));
+        var saver = history(rows, history, null);
+        fx(() -> {
+            rows.get(0).setState(DownloadRow.State.DOWNLOADING);
+            rows.get(2).setState(DownloadRow.State.PAUSED);
+            rows.get(3).setState(DownloadRow.State.FAILED);
+            rows.get(4).setState(DownloadRow.State.CANCELLED);
+            saver.prepareForShutdown();
+            var coordinator = new DownloadStateCoordinator(rows, Map.of(), new HashMap<>(), (r, b) -> {}, () -> {});
+            assertEquals(4, coordinator.pauseAll());
+            saver.prepareForShutdown(); // repeated close must not forget the earlier active states
+            saver.saveNow(); saver.saveNow(); // late snapshots keep the interruption marker
+        });
+        var restored = FXCollections.<DownloadRow>observableArrayList();
+        var started = new ArrayList<DownloadRow>();
+        var scheduler = new DownloadScheduler(restored, (r, resume) -> {
+            assertTrue(resume); started.add(r); r.setState(DownloadRow.State.DOWNLOADING);
+        }, (r, b) -> true, r -> false, Platform::runLater);
+        var coordinator = new DownloadStateCoordinator(restored, Map.of(), new HashMap<>(), scheduler::request, () -> {});
+        var loader = history(restored, history, () -> Platform.runLater(() -> {
+            restored.get(5).setState(DownloadRow.State.COMPLETED);
+            restored.get(6).setState(DownloadRow.State.FAILED);
+        }));
+        loader.configureStartupResume(() -> true, coordinator::resume);
+        try {
+            fx(() -> { scheduler.setLimit(1); loader.loadOnce(); loader.loadOnce(); });
+            flushHistoryLoad();
+            fx(() -> {
+                assertEquals(List.of(restored.get(0)), started);
+                assertEquals(DownloadRow.State.QUEUED, restored.get(1).getState());
+                assertEquals(DownloadRow.State.PAUSED, restored.get(2).getState());
+                assertEquals(DownloadRow.State.FAILED, restored.get(3).getState());
+                assertEquals(DownloadRow.State.CANCELLED, restored.get(4).getState());
+                assertEquals(DownloadRow.State.COMPLETED, restored.get(5).getState());
+                assertEquals(DownloadRow.State.FAILED, restored.get(6).getState());
+                restored.get(0).setState(DownloadRow.State.COMPLETED);
+            });
+            flushHistoryLoad();
+            fx(() -> assertEquals(List.of(restored.get(0), restored.get(1)), started));
+        } finally { fx(scheduler::close); }
+    }
+    @Test void disabledStartupConsumesOldIntentAndPauseAllStaysManual() throws Exception {
+        for (boolean explicitPause : List.of(false, true)) {
+            Path file = dir.resolve("disabled-" + explicitPause + ".tsv");
+            var row = new DownloadRow("https://example.test/a", "a", 0, dir.toString(), "Video", "Best");
+            var rows = FXCollections.observableArrayList(row);
+            var saver = history(rows, file, null);
+            fx(() -> {
+                if (explicitPause) new DownloadStateCoordinator(rows, Map.of(), new HashMap<>(), (r,b) -> {}, () -> {}).pauseAll();
+                saver.prepareForShutdown(); row.setState(DownloadRow.State.PAUSED); saver.saveNow();
+            });
+            for (boolean enabled : List.of(false, true)) {
+                var restored = FXCollections.<DownloadRow>observableArrayList();
+                var loader = history(restored, file, null);
+                var calls = new AtomicInteger();
+                loader.configureStartupResume(() -> enabled, r -> calls.incrementAndGet());
+                fx(loader::loadOnce); flushHistoryLoad();
+                fx(() -> { assertEquals(0, calls.get()); assertEquals(DownloadRow.State.PAUSED, restored.getFirst().getState()); });
+            }
+        }
+    }
+    @Test void legacyCrashStatesResumeButLegacyPausedAndFailuresDoNot() throws Exception {
+        Path file = dir.resolve("legacy-startup.tsv");
+        var lines = new ArrayList<String>();
+        for (String state : List.of("DOWNLOADING", "PENDING", "QUEUED", "PAUSED", "FAILED", "CANCELLED", "MISSING", "INVALID"))
+            lines.add("https://example.test/" + state + "\t" + state + "\t" + dir + "\tVideo\tBest\t" + state + "\t\t" + System.currentTimeMillis());
+        // Legacy rejected Direct rows must migrate to Failed before automatic admission.
+        lines.add("https://example.test/expired\texpired\t" + dir + "\tDirect\tAuto\tPAUSED\t\t" + System.currentTimeMillis()
+                + "\t\t\t-1\t\tDownload link/session rejected (HTTP 498); saved data kept\ttrue");
+        Files.write(file, lines);
+        var restored = FXCollections.<DownloadRow>observableArrayList();
+        var requested = new ArrayList<String>();
+        var loader = history(restored, file, null);
+        loader.configureStartupResume(() -> true, row -> requested.add(row.title.get()));
+        fx(loader::loadOnce); flushHistoryLoad();
+        fx(() -> assertEquals(List.of("DOWNLOADING", "PENDING", "QUEUED"), requested));
+    }
+    @Test void closingDuringHistoryRestoreCannotStartTransfers() throws Exception {
+        Path file = dir.resolve("closing-startup.tsv");
+        var rows = FXCollections.observableArrayList(new DownloadRow("https://example.test/a", "a", 0, dir.toString(), "Video", "Best"));
+        fx(history(rows, file, null)::saveNow);
+        var restored = FXCollections.<DownloadRow>observableArrayList();
+        var loader = history(restored, file, null);
+        var calls = new AtomicInteger();
+        loader.configureStartupResume(() -> true, row -> calls.incrementAndGet());
+        fx(() -> { loader.loadOnce(); loader.prepareForShutdown(); }); flushHistoryLoad();
+        assertEquals(0, calls.get());
+    }
+    private HistoryService history(javafx.collections.ObservableList<DownloadRow> rows, Path file, Runnable reconcile) {
+        return new HistoryService(rows, new java.util.concurrent.atomic.AtomicLong(), null, () -> 30,
+                reconcile, null, null, null, file);
+    }
+    private void flushHistoryLoad() throws Exception { fx(() -> {}); fx(() -> {}); fx(() -> {}); }
     @Test void queuedHistoryRestoresPausedForManualResume() throws Exception {
         var row = new DownloadRow("https://example.test/pending", "queued", 0, dir.toString(), "Video", "Best");
         Path history = dir.resolve("queued-history.tsv");
