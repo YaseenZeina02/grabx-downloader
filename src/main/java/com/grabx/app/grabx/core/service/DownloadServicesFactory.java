@@ -24,10 +24,10 @@ public final class DownloadServicesFactory {
             Dependencies dependencies,
             Config config
     ) {
-        AtomicReference<DownloadRunner> runnerRef = new AtomicReference<>();
+        AtomicReference<DownloadScheduler> schedulerRef = new AtomicReference<>();
         BiConsumer<DownloadRow, Boolean> startDownload = (row, resume) -> {
-            DownloadRunner runner = runnerRef.get();
-            if (runner != null) runner.start(row, resume);
+            DownloadScheduler scheduler = schedulerRef.get();
+            if (scheduler != null) scheduler.request(row, resume);
         };
 
         DownloadEngineFactory.Runtime engine = DownloadEngineFactory.create(
@@ -47,7 +47,11 @@ public final class DownloadServicesFactory {
                         config.defaultAudioFormat()
                 )
         );
-        runnerRef.set(engine.runner());
+        DownloadScheduler scheduler = new DownloadScheduler(items, engine.runner()::start,
+                engine.runner()::canStart, engine.runner()::occupiesSlot, dependencies.uiExecutor());
+        schedulerRef.set(scheduler);
+        engine.runner().onWorkerReleased(scheduler::wake);
+        engine.stateCoordinator().onWithdrawPending(scheduler::withdraw);
 
         DownloadQueueService queue = new DownloadQueueService(
                 items,
@@ -82,14 +86,15 @@ public final class DownloadServicesFactory {
                 dependencies.statusUpdater()
         );
 
-        return new Runtime(state, engine.runner(), queue, bulkActions);
+        return new Runtime(state, engine.runner(), queue, bulkActions, scheduler);
     }
 
     public record Runtime(
             DownloadStateCoordinator stateCoordinator,
             DownloadRunner runner,
             DownloadQueueService queue,
-            BulkDownloadActionsService bulkActions
+            BulkDownloadActionsService bulkActions,
+            DownloadScheduler scheduler
     ) {
     }
 

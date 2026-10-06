@@ -47,8 +47,7 @@ public final class DownloadService {
     private volatile String searchQuery = "";
     private volatile HistoryView historyView = HistoryView.NEWEST;
 
-    // Active rows stay together at the top. orderIndex keeps their positions stable
-    // while they move between queued/downloading/paused states.
+    // Running work precedes waiting/paused work, with stable ordering within each group.
     private volatile Comparator<DownloadRow> comparator =
             DownloadService::compareActiveFirst;
 
@@ -63,8 +62,7 @@ public final class DownloadService {
         this.activeItems.addAll(this.items.stream()
                 .filter(row -> row != null && isActive(row.getState()))
                 .toList());
-        this.activeSorted = new SortedList<>(this.activeItems,
-                Comparator.comparingLong(row -> row.orderIndex));
+        this.activeSorted = new SortedList<>(this.activeItems, this.comparator);
         this.sorted.setComparator(this.comparator);
         for (DownloadRow row : this.items) observeState(row);
         this.items.addListener((ListChangeListener<DownloadRow>) change -> {
@@ -114,16 +112,15 @@ public final class DownloadService {
         return filtered;
     }
 
-    /** ثابت حسب orderIndex فقط (لتثبيت مكان الكروت) */
+    /** Stable insertion order within each activity group. */
     public void setStableOrderIndexSort() {
         setComparator(Comparator.comparingLong(r -> r.orderIndex));
     }
 
     public void setComparator(Comparator<DownloadRow> cmp) {
-        this.comparator = (cmp == null)
-                ? Comparator.comparingLong(r -> r.orderIndex)
-                : cmp;
-        this.sorted.setComparator(this.comparator);
+        Comparator<DownloadRow> withinGroup = cmp == null ? Comparator.comparingLong(r -> r.orderIndex) : cmp;
+        this.comparator = Comparator.comparingInt(DownloadService::groupRank).thenComparing(withinGroup);
+        resort();
     }
 
     /** Update sidebar key (ALL / DOWNLOADING / PAUSED / COMPLETED / CANCELLED / MISSING) */
@@ -169,10 +166,11 @@ public final class DownloadService {
     }
 
     private void resort() {
-        // A SortedList does not observe properties inside its rows. Re-applying the
-        // comparator makes a terminal state change move the row below active work.
-        sorted.setComparator(null);
-        sorted.setComparator(comparator);
+        // Neither SortedList observes row properties. A fresh comparator re-sorts
+        // both views immediately without briefly exposing an unsorted list.
+        Comparator<DownloadRow> current = comparator;
+        sorted.setComparator((first, second) -> current.compare(first, second));
+        activeSorted.setComparator((first, second) -> current.compare(first, second));
     }
 
     private void observeState(DownloadRow row) {
@@ -213,7 +211,8 @@ public final class DownloadService {
         int byGroup = Integer.compare(groupRank(first), groupRank(second));
         if (byGroup != 0) return byGroup;
         if (isActive(first == null ? null : first.getState())) {
-            return Long.compare(first.orderIndex, second.orderIndex);
+            int byOrder = Long.compare(first.orderIndex, second.orderIndex);
+            return historyView == HistoryView.OLDEST ? byOrder : -byOrder;
         }
         int byDate = Long.compare(historyTime(first), historyTime(second));
         if (historyView != HistoryView.OLDEST) byDate = -byDate;
@@ -227,7 +226,10 @@ public final class DownloadService {
 
     private static int groupRank(DownloadRow row) {
         DownloadRow.State state = row == null ? null : row.getState();
-        return isActive(state) ? 0 : 1;
+        if (state == DownloadRow.State.DOWNLOADING) return 0;
+        if (state == DownloadRow.State.PENDING || state == DownloadRow.State.QUEUED) return 1;
+        if (state == DownloadRow.State.PAUSED) return 2;
+        return 3;
     }
 
     public static boolean isActive(DownloadRow.State state) {

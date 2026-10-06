@@ -37,4 +37,30 @@ class DirectResumeVerifierTest {
                 () -> { throw new InterruptedException(); }, n -> {}));
         assertArrayEquals(new byte[]{1}, Files.readAllBytes(partial));
     }
+
+    @Test void fragmentedReadsReportProgressWithoutConsumingTheUnsavedTail() throws Exception {
+        byte[] data = new byte[300003]; new java.util.Random(17).nextBytes(data);
+        int prefix = 270001;
+        Path partial = Files.write(directory.resolve("fragmented.part"), java.util.Arrays.copyOf(data, prefix));
+        var counts = new java.util.ArrayList<Long>();
+        InputStream response = new ByteArrayInputStream(data) {
+            @Override public synchronized int read(byte[] b, int off, int len) {
+                return super.read(b, off, Math.min(701, len));
+            }
+        };
+        DirectResumeVerifier.verify(response, partial, prefix, () -> {}, counts::add);
+        assertEquals(701, counts.getFirst());
+        assertEquals(prefix, counts.getLast());
+        assertArrayEquals(java.util.Arrays.copyOfRange(data, prefix, data.length), response.readAllBytes());
+        assertArrayEquals(java.util.Arrays.copyOf(data, prefix), Files.readAllBytes(partial));
+    }
+
+    @Test void mismatchInFinalShortBlockStillRejectsWithoutChangingThePart() throws Exception {
+        byte[] data = new byte[262151]; new java.util.Random(17).nextBytes(data);
+        Path partial = Files.write(directory.resolve("mismatch.part"), data);
+        byte[] changed = data.clone(); changed[changed.length - 1] ^= 1;
+        assertThrows(DirectRemoteProbe.NeedsAction.class, () -> DirectResumeVerifier.verify(
+                new ByteArrayInputStream(changed), partial, data.length, () -> {}, n -> {}));
+        assertArrayEquals(data, Files.readAllBytes(partial));
+    }
 }

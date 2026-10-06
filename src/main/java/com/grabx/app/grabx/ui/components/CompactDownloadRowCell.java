@@ -31,6 +31,7 @@ public final class CompactDownloadRowCell extends ListCell<DownloadRow> {
     private final StackPane titleViewport = new StackPane(title);
     private final BorderPane mediaHeader = new BorderPane();
     private final Label status = new Label();
+    private final ResumeVerificationPane verificationPane = new ResumeVerificationPane(true);
     private final ProgressBar progress = new ProgressBar();
     private final Button pauseButton = new Button();
     private final Button resumeButton = new Button();
@@ -50,6 +51,18 @@ public final class CompactDownloadRowCell extends ListCell<DownloadRow> {
             BiConsumer<Button, String> installTooltip,
             BiConsumer<Node, ObservableValue<String>> installDynamicTooltip,
             ObservableValue<? extends Number> mediaOpacity
+    ) {
+        this(pause, resume, cancel, installTooltip, installDynamicTooltip, mediaOpacity, () -> {});
+    }
+
+    public CompactDownloadRowCell(
+            Consumer<DownloadRow> pause,
+            Consumer<DownloadRow> resume,
+            Consumer<DownloadRow> cancel,
+            BiConsumer<Button, String> installTooltip,
+            BiConsumer<Node, ObservableValue<String>> installDynamicTooltip,
+            ObservableValue<? extends Number> mediaOpacity,
+            Runnable onVerificationShown
     ) {
         this.pause = pause;
         this.resume = resume;
@@ -93,6 +106,11 @@ public final class CompactDownloadRowCell extends ListCell<DownloadRow> {
         status.setMaxWidth(Double.MAX_VALUE);
         status.setAlignment(Pos.CENTER_LEFT);
         status.setMinWidth(0);
+        status.visibleProperty().bind(verificationPane.visibleProperty().not());
+        status.managedProperty().bind(verificationPane.visibleProperty().not());
+        verificationPane.visibleProperty().addListener((observable, wasVisible, visible) -> {
+            if (visible) javafx.application.Platform.runLater(onVerificationShown);
+        });
         progress.getStyleClass().add("gx-compact-progress");
         progress.setMaxWidth(Double.MAX_VALUE);
 
@@ -124,7 +142,7 @@ public final class CompactDownloadRowCell extends ListCell<DownloadRow> {
                 javafx.beans.binding.Bindings.max(0, widthProperty().subtract(10));
         card.prefWidthProperty().bind(availableCardWidth);
         card.maxWidthProperty().bind(availableCardWidth);
-        card.getChildren().addAll(mediaHeader, controls, progress);
+        card.getChildren().addAll(mediaHeader, controls, progress, verificationPane);
 
         pauseButton.setOnAction(event -> fire(pause));
         resumeButton.setOnAction(event -> fire(resume));
@@ -146,6 +164,7 @@ public final class CompactDownloadRowCell extends ListCell<DownloadRow> {
         row.thumbUrl.addListener(thumbnailListener);
         updateMedia(row.title.get(), row.thumbUrl.get());
         status.textProperty().bind(row.status);
+        verificationPane.bind(row);
         progress.progressProperty().bind(row.progress);
         stateListener = (observable, oldState, newState) -> updateActions(newState);
         row.stateProperty().addListener(stateListener);
@@ -177,6 +196,7 @@ public final class CompactDownloadRowCell extends ListCell<DownloadRow> {
         if (titleMarquee != null) titleMarquee.stop();
         titleMarquee = null;
         status.textProperty().unbind();
+        verificationPane.unbind();
         progress.progressProperty().unbind();
         if (boundRow != null && titleListener != null) boundRow.title.removeListener(titleListener);
         if (boundRow != null && thumbnailListener != null) boundRow.thumbUrl.removeListener(thumbnailListener);

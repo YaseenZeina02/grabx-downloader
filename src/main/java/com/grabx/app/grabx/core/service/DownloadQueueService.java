@@ -99,10 +99,15 @@ public final class DownloadQueueService {
     }
 
     public DownloadRow enqueueDirect(String url, String folder, String suggestedFilename, String referer) {
+        return enqueueDirect(url, folder, suggestedFilename, referer, null);
+    }
+
+    public DownloadRow enqueueDirect(String url, String folder, String suggestedFilename, String referer, String userAgent) {
         String filename = trimToEmpty(suggestedFilename);
         DownloadRow row = create(url, folder, "Direct", "Auto",
                 filename.isBlank() ? null : filename);
         row.setReferer(referer);
+        row.requestUserAgent = userAgent;
         if (!filename.isBlank()) row.titleLocked.set(true);
         return enqueueRow(row, false);
     }
@@ -114,8 +119,9 @@ public final class DownloadQueueService {
             if (duplicate != null) {
                 if (duplicate.getState() == DownloadRow.State.PAUSED) {
                     if (row.getReferer() != null) duplicate.setReferer(row.getReferer());
-                    duplicate.setState(DownloadRow.State.PENDING);
-                    duplicate.status.set("Preparing");
+                    // A paused duplicate is a new admission request, not an active worker.
+                    duplicate.setState(DownloadRow.State.QUEUED);
+                    duplicate.status.set("Queued");
                     if (startDownload != null) startDownload.accept(duplicate, true);
                 } else if (statusUpdater != null) {
                     statusUpdater.accept("This download is already in progress");

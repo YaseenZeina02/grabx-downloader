@@ -256,6 +256,11 @@ private static javafx.scene.Node buildSuccessGraphic() {
     private void showAddLinkDialog(String prefillUrl, String preferredAction,
                                    boolean autoAnalyze, String preferredFolder) {
         if (addLinkDialogOpen) {
+            if (activeAddLinkDialog != null) {
+                DialogPane activePane = activeAddLinkDialog.getDialogPane();
+                try { cb.bringWindowToFront(activePane.getScene() == null ? null : activePane.getScene().getWindow()); }
+                catch (Exception ignored) { }
+            }
             if (prefillUrl != null && urlAnalysisService.isHttpUrl(prefillUrl) && activeAddLinkUrlField != null) {
                 activeAddLinkUrlField.setText(prefillUrl.trim());
                 activeAddLinkUrlField.positionCaret(activeAddLinkUrlField.getText().length());

@@ -48,7 +48,13 @@ public final class BrowserNativeHostMain {
                 }
                 if ("status".equals(type)) {
                     boolean running = isGrabXRunning(inbox.directory().getParent().resolve("app.pid"));
-                    writeMessage(output, mapper.writeValueAsBytes(java.util.Map.of("ok", true, "running", running)));
+                    writeMessage(output, mapper.writeValueAsBytes(java.util.Map.of("ok", true, "running", running, "fileInspection", true)));
+                    continue;
+                }
+                if ("inspectFile".equals(type)) {
+                    var result = com.grabx.app.grabx.core.service.BrowserFileProbe.inspect(
+                            control.path("url").asText(), control.path("referer").asText(), control.path("userAgent").asText());
+                    writeMessage(output, mapper.writeValueAsBytes(result));
                     continue;
                 }
                 if ("listQueued".equals(type)) {

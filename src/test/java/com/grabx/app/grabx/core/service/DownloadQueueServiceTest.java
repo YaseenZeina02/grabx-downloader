@@ -89,7 +89,7 @@ class DownloadQueueServiceTest {
         assertEquals(1, rows.size());
         assertEquals(List.of(false, true), starts);
         assertEquals("https://example.com/page", references.get(1));
-        assertEquals(DownloadRow.State.PENDING, first.getState());
+        assertEquals(DownloadRow.State.QUEUED, first.getState());
     }
 
     private static DownloadQueueService service(ObservableList<DownloadRow> rows, List<String> events) {

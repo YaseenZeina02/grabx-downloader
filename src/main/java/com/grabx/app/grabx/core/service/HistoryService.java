@@ -9,11 +9,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -24,12 +22,26 @@ import java.util.function.Supplier;
 
 public class HistoryService {
 
-    private static final String PREF_HISTORY_DAYS = "grabx.history.days";
     private static final int DEFAULT_HISTORY_DAYS = 30;
 
-    private static final Path DOWNLOAD_HISTORY_FILE =
+    /** Migrate the previous release's blocked Direct tasks out of ordinary Paused. */
+    static void restoreFailureStatus(DownloadRow row, String savedStatus) {
+        if (savedStatus == null || savedStatus.isBlank()) return;
+        boolean previousDirectFailure = "Direct".equalsIgnoreCase(row.mode)
+                && row.getState() == DownloadRow.State.PAUSED
+                && (savedStatus.contains(" • saved data ke") || savedStatus.contains("saved data kept")
+                    || savedStatus.contains(" • partial files kept") || savedStatus.contains("HTTP 498")
+                    || savedStatus.startsWith("Link not updated:")
+                    || savedStatus.startsWith("Download link could not be refreshed")
+                    || savedStatus.startsWith("Server does not support resume"));
+        if (previousDirectFailure) row.setState(DownloadRow.State.FAILED);
+        if (row.getState() == DownloadRow.State.FAILED) row.status.set(savedStatus);
+    }
+
+    private static final Path DEFAULT_HISTORY_FILE =
             Paths.get(System.getProperty("user.home"), ".grabx", "download-history.tsv");
 
+    private final Path historyFile;
     private final ObservableList<DownloadRow> downloadItems;
     private final AtomicLong downloadOrderSeq;
 
@@ -79,7 +91,7 @@ public class HistoryService {
         // output file changes => save
         try {
             if (r.outputFile != null) {
-                r.outputFile.addListener((obs, o, n) -> scheduleSave());
+                r.outputFile.addListener((obs, o, n) -> { if ("Direct".equalsIgnoreCase(r.mode)) saveNow(); else scheduleSave(); });
             }
         } catch (Exception ignored) {}
 
@@ -94,14 +106,7 @@ public class HistoryService {
     public void clearHistoryFile() {
         try {
             ensureHistoryDir();
-            java.nio.file.Files.write(
-                    DOWNLOAD_HISTORY_FILE,
-                    java.util.List.of(),
-                    java.nio.charset.StandardCharsets.UTF_8,
-                    java.nio.file.StandardOpenOption.CREATE,
-                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING,
-                    java.nio.file.StandardOpenOption.WRITE
-            );
+            DirectDownloadState.atomicWrite(historyFile, new byte[0]);
         } catch (Exception ignored) {}
     }
 
@@ -129,15 +134,15 @@ public class HistoryService {
                         esc(row.url) + "\t" + esc(safeGet(row.title)) + "\t"
                                 + esc(row.folder) + "\t" + esc(row.mode) + "\t"
                                 + esc(row.quality) + "\t" + esc(state) + "\t"
-                                + esc(outputPath) + "\t" + updated + "\t" + esc(row.getReferer()) + "\t" + esc(row.resumeEtag) + "\t" + row.totalBytes.get()
+                                + esc(outputPath) + "\t" + updated + "\t" + esc(row.getReferer()) + "\t" + esc(row.resumeEtag) + "\t" + row.totalBytes.get() + "\t" + esc(row.originalUrl) + "\t" + esc(row.status.get())
                 );
             }
             if (!lines.isEmpty()) {
-                Files.write(DOWNLOAD_HISTORY_FILE, lines, StandardCharsets.UTF_8,
-                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-                        StandardOpenOption.WRITE);
+                DirectDownloadState.atomicWrite(historyFile,
+                        (String.join("\n", lines) + "\n").getBytes(StandardCharsets.UTF_8));
             }
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            com.grabx.app.grabx.util.AppLog.get(HistoryService.class).warning("Could not persist download history: " + error.getClass().getSimpleName());
         }
     }
 
@@ -152,6 +157,16 @@ public class HistoryService {
             java.util.function.Consumer<List<DownloadRow>> warmMissingThumbnailsAsync,
             Function<String, String> thumbFromUrl
     ) {
+        this(downloadItems, downloadOrderSeq, uiDelayExec, historyDaysSupplier, reconcileLoadedRowsWithDisk,
+                updateMissingSidebarItem, warmMissingThumbnailsAsync, thumbFromUrl, DEFAULT_HISTORY_FILE);
+    }
+
+    HistoryService(ObservableList<DownloadRow> downloadItems, AtomicLong downloadOrderSeq,
+            ScheduledExecutorService uiDelayExec, Supplier<Integer> historyDaysSupplier,
+            Runnable reconcileLoadedRowsWithDisk, Runnable updateMissingSidebarItem,
+            java.util.function.Consumer<List<DownloadRow>> warmMissingThumbnailsAsync,
+            Function<String, String> thumbFromUrl, Path historyFile) {
+        this.historyFile = historyFile;
         this.downloadItems = downloadItems;
         this.downloadOrderSeq = downloadOrderSeq;
         this.uiDelayExec = uiDelayExec;
@@ -199,7 +214,7 @@ public class HistoryService {
 
     private void ensureHistoryDir() {
         try {
-            Path dir = DOWNLOAD_HISTORY_FILE.getParent();
+            Path dir = historyFile.getParent();
             if (dir != null) Files.createDirectories(dir);
         } catch (Exception ignored) {}
     }
@@ -239,90 +254,19 @@ public class HistoryService {
     }
 
     private void saveDownloadHistoryAsync() {
-        Thread saveThread = new Thread(() -> {
-            try {
-                ensureHistoryDir();
-
-                int keepDays = getHistoryDays();
-                long cutoff = System.currentTimeMillis() - (long) keepDays * 24L * 60L * 60L * 1000L;
-
-                // Snapshot on FX thread (prevents empty writes)
-                final List<DownloadRow> snap = new ArrayList<>();
-                final CountDownLatch latch = new CountDownLatch(1);
-
-                Platform.runLater(() -> {
-                    try {
-                        if (downloadItems != null && !downloadItems.isEmpty()) {
-                            snap.addAll(downloadItems);
-                        }
-                    } catch (Exception ignored) {
-                    } finally {
-                        latch.countDown();
-                    }
-                });
-
-                try { latch.await(800, TimeUnit.MILLISECONDS); } catch (Exception ignored) {}
-
-                // IMPORTANT: don't truncate history if snapshot is empty
-                if (snap.isEmpty()) return;
-
-                List<String> lines = new ArrayList<>();
-                for (DownloadRow r : snap) {
-                    if (r == null) continue;
-                    if (r.url == null || r.url.isBlank()) continue;
-
-                    String title = safeGet(r.title);
-
-                    String state = "QUEUED";
-                    try { state = String.valueOf(r.state.get()); } catch (Exception ignored) {}
-
-                    String outPath = "";
-                    try {
-                        Path p = (r.outputFile == null) ? null : r.outputFile.get();
-                        if (p != null) outPath = p.toAbsolutePath().normalize().toString();
-                    } catch (Exception ignored) {}
-
-                    long lastUpdated = (r.completedAt > 0) ? r.completedAt : System.currentTimeMillis();
-                    if (lastUpdated < cutoff) continue;
-
-                    lines.add(
-                            esc(r.url) + "\t" +
-                                    esc(title) + "\t" +
-                                    esc(r.folder) + "\t" +
-                                    esc(r.mode) + "\t" +
-                                    esc(r.quality) + "\t" +
-                                    esc(state) + "\t" +
-                                    esc(outPath) + "\t" +
-                                    lastUpdated + "\t" + esc(r.getReferer()) + "\t" + esc(r.resumeEtag) + "\t" + r.totalBytes.get()
-                    );
-                }
-
-                // IMPORTANT: also don't truncate to empty due to cutoff
-                if (lines.isEmpty()) return;
-
-                Files.write(
-                        DOWNLOAD_HISTORY_FILE,
-                        lines,
-                        StandardCharsets.UTF_8,
-                        StandardOpenOption.CREATE,
-                        StandardOpenOption.TRUNCATE_EXISTING,
-                        StandardOpenOption.WRITE
-                );
-
-            } catch (Exception ignored) {}
-        }, "grabx-save-history");
-        saveThread.setDaemon(true);
-        saveThread.start();
+        // Serialize immutable snapshots and atomic replacements on the FX thread.
+        // A late background snapshot must never overwrite newer shutdown state.
+        Platform.runLater(this::saveNow);
     }
 
     private void loadDownloadHistoryOnce() {
         try {
-            if (!Files.exists(DOWNLOAD_HISTORY_FILE)) return;
+            if (!Files.exists(historyFile)) return;
 
             int keepDays = getHistoryDays();
             long cutoff = System.currentTimeMillis() - (long) keepDays * 24L * 60L * 60L * 1000L;
 
-            List<String> lines = Files.readAllLines(DOWNLOAD_HISTORY_FILE, StandardCharsets.UTF_8);
+            List<String> lines = Files.readAllLines(historyFile, StandardCharsets.UTF_8);
             List<DownloadRow> restored = new ArrayList<>();
 
             for (String line : lines) {
@@ -341,7 +285,8 @@ public class HistoryService {
                 long lastUpdated = 0L;
                 try { lastUpdated = Long.parseLong(c[7].trim()); } catch (Exception ignored) {}
 
-                if (lastUpdated > 0 && lastUpdated < cutoff) continue;
+                if (lastUpdated > 0 && lastUpdated < cutoff
+                        && ("COMPLETED".equals(state) || "MISSING".equals(state) || "CANCELLED".equals(state))) continue;
                 if (url == null || url.isBlank()) continue;
 
                 DownloadRow r = new DownloadRow(
@@ -356,6 +301,8 @@ public class HistoryService {
                 if (c.length > 8) r.setReferer(unesc(c[8]));
                 if (c.length > 9) { String tag = unesc(c[9]); r.resumeEtag = tag == null || tag.isBlank() ? null : tag; }
                 if (c.length > 10) { try { r.totalBytes.set(Long.parseLong(c[10])); } catch (NumberFormatException ignored) {} }
+
+                if (c.length > 11 && !unesc(c[11]).isBlank()) r.originalUrl = unesc(c[11]);
 
                 // Thumb: restore from disk cache only
                 try {
@@ -372,8 +319,8 @@ public class HistoryService {
                     String norm = (state == null) ? "QUEUED" : state.trim().toUpperCase(Locale.ROOT);
                     DownloadRow.State st = DownloadRow.State.valueOf(norm);
 
-                    // never restore DOWNLOADING after restart
-                    if (st == DownloadRow.State.DOWNLOADING) st = DownloadRow.State.PAUSED;
+                    // Startup stays manual, including requests that were waiting when the app closed.
+                    if (st == DownloadRow.State.DOWNLOADING || st == DownloadRow.State.PENDING || st == DownloadRow.State.QUEUED) st = DownloadRow.State.PAUSED;
 
                     // if completed but file missing => missing
                     if (st == DownloadRow.State.COMPLETED) {
@@ -387,12 +334,15 @@ public class HistoryService {
                     }
 
                     r.setState(st);
+                    if (st == DownloadRow.State.PAUSED) r.status.set("Paused");
+                    restoreFailureStatus(r, c.length > 12 ? unesc(c[12]) : "");
 
                     if ((st == DownloadRow.State.COMPLETED || st == DownloadRow.State.MISSING) && lastUpdated > 0) {
                         r.completedAt = lastUpdated;
                     }
                 } catch (Exception ignored) {
-                    r.setState(DownloadRow.State.QUEUED);
+                    r.setState(DownloadRow.State.PAUSED);
+                    r.status.set("Paused");
                 }
 
                 try {
@@ -411,6 +361,23 @@ public class HistoryService {
                     }
                 } catch (Exception ignored) {}
 
+                if ("Direct".equalsIgnoreCase(r.mode) && r.outputFile.get() != null
+                        && r.getState() != DownloadRow.State.COMPLETED && r.getState() != DownloadRow.State.MISSING) {
+                    try {
+                        if (DirectDownloadState.load(r, r.outputFile.get())) r.totalBytes.set(r.resumeTotal);
+                        long saved = DirectDownloadState.downloaded(r.outputFile.get());
+                        r.downloadedBytes.set(saved);
+                        r.progress.set(r.totalBytes.get() > 0 ? (double) saved / r.totalBytes.get() : 0);
+                        r.size.set(com.grabx.app.grabx.util.DownloadRuntimeUtils.formatTransferSize(saved, r.totalBytes.get()));
+                        if (r.getState() == DownloadRow.State.PAUSED) {
+                            r.status.set("PAUSED".equals(state) && c.length > 12 && !unesc(c[12]).isBlank()
+                                    ? unesc(c[12]) : "Paused • saved data ready to resume");
+                        }
+                    } catch (Exception error) {
+                        r.setState(DownloadRow.State.FAILED);
+                        r.status.set("Saved state needs verification • partial files kept");
+                    }
+                }
                 restored.add(r);
             }
 

@@ -1,0 +1,85 @@
+.gx-settings { -fx-background-color: #111c2c; -fx-font-size: 13px; -fx-accent: #487dff; }
+.gx-settings .header-panel { -fx-background-color: #17263a; }
+.gx-settings .label, .gx-settings .check-box { -fx-text-fill: #e0e7f1; }
+.gx-settings .header-panel .label { -fx-font-size: 18px; -fx-font-weight: bold; }
+.gx-settings .button, .gx-settings .combo-box, .gx-settings .text-field {
+    -fx-background-color: #25374f; -fx-text-fill: #e0e7f1;
+    -fx-background-radius: 7; -fx-border-radius: 7; -fx-border-color: #3a4d65;
+}
+.gx-settings .button { -fx-padding: 7 16; }
+.gx-settings .button:hover { -fx-background-color: #314764; }
+.gx-settings .button:default { -fx-background-color: #2858d3; }
+.gx-settings .combo-box .list-cell { -fx-background-color: #25374f; -fx-text-fill: #e0e7f1; }
+.gx-settings .combo-box-popup .list-cell:hover { -fx-background-color: #314764; }
+.gx-settings .check-box .box { -fx-background-color: #25374f; -fx-border-color: #71849f; -fx-border-radius: 3; }
+.gx-settings .check-box:selected .mark { -fx-background-color: #8ab2ff; }
+.gx-settings .slider .track { -fx-background-color: #354b68; }
+.gx-settings .slider .thumb { -fx-background-color: #85acff; }
+.gx-settings .separator .line { -fx-border-color: #35465d; -fx-border-width: 1 0 0 0; }
+
+/* In-window settings workspace; the dialog styles above are shared with leave confirmation. */
+.gx-settings-page { -fx-background-color: transparent; -fx-font-size: 14px; }
+.settings-navigation {
+    -fx-padding: 22 14; -fx-spacing: 8;
+    -fx-background-color: rgba(17,28,44,.88); -fx-background-radius: 18;
+    -fx-border-color: rgba(255,255,255,.09); -fx-border-radius: 18;
+}
+.gx-settings .settings-eyebrow { -fx-text-fill: #7b99c6; -fx-font-size: 10px; -fx-font-weight: bold; -fx-padding: 0 10 0 10; }
+.gx-settings .settings-nav-title { -fx-font-size: 25px; -fx-font-weight: bold; -fx-padding: 0 10 22 10; }
+.gx-settings .settings-nav-item {
+    -fx-background-color: transparent; -fx-border-color: transparent; -fx-border-width: 1;
+    -fx-background-radius: 10; -fx-border-radius: 10; -fx-padding: 12 10; -fx-alignment: center-left;
+    -fx-cursor: hand;
+}
+.gx-settings .settings-nav-item:hover { -fx-background-color: #1a2b42; }
+.gx-settings .settings-nav-item:selected { -fx-background-color: #1e365a; -fx-border-color: #365b8c; }
+.gx-settings .settings-nav-label { -fx-font-size: 14px; -fx-font-weight: bold; }
+.gx-settings .settings-nav-caption { -fx-text-fill: #91a6c3; -fx-font-size: 10px; }
+.gx-settings .settings-heading { -fx-font-size: 28px; -fx-font-weight: bold; }
+.gx-settings .settings-muted { -fx-text-fill: #9badc5; -fx-font-size: 13px; }
+.gx-settings .settings-card-title { -fx-font-size: 15px; -fx-font-weight: bold; }
+.gx-settings .settings-card {
+    -fx-background-color: linear-gradient(to bottom right, #172438, #132237);
+    -fx-background-radius: 14; -fx-border-radius: 14; -fx-border-color: #2c3e57; -fx-padding: 20;
+}
+.gx-settings .settings-note {
+    -fx-text-fill: #99b2d3; -fx-font-size: 12px; -fx-padding: 14 16;
+    -fx-background-color: rgba(54,87,135,.15); -fx-background-radius: 10;
+}
+.gx-settings .settings-scroll, .gx-settings .settings-scroll > .viewport { -fx-background-color: transparent; }
+.gx-settings .settings-scroll { -fx-padding: 0; -fx-border-color: transparent; }
+.gx-settings .settings-scroll .scroll-bar:vertical { -fx-background-color: transparent; -fx-pref-width: 9; }
+.gx-settings .settings-scroll .scroll-bar .thumb { -fx-background-color: #364c67; -fx-background-radius: 6; }
+.gx-settings .settings-actions { -fx-padding: 14 16; -fx-background-color: #111e30; -fx-background-radius: 12; }
+.gx-settings .settings-primary { -fx-background-color: #3262ed; -fx-border-color: #5a80f4; -fx-font-weight: bold; }
+.gx-settings .settings-primary:hover { -fx-background-color: #4373ff; }
+.gx-settings .settings-error { -fx-text-fill: #ffad9e; -fx-padding: 6 14; }
+.gx-settings-page .text-field { -fx-padding: 9 12; }
+.gx-settings-page .text-field:focused, .gx-settings-page .button:focused, .gx-settings-page .toggle-button:focused { -fx-border-color: #81aaff; }
+.gx-settings .settings-nav-scroll, .gx-settings .settings-nav-scroll > .viewport { -fx-background-color: transparent; }
+.gx-settings .settings-nav-scroll { -fx-padding: 0; -fx-border-color: transparent; }
+.gx-settings .settings-nav-scroll .scroll-bar:vertical { -fx-background-color: transparent; -fx-pref-width: 5; }
+.gx-settings .settings-nav-scroll .scroll-bar .thumb { -fx-background-color: #364c67; -fx-background-radius: 6; }
+
+/* Unsaved settings confirmation: one calm surface, with an explicit primary action. */
+.gx-settings.settings-confirm {
+    -fx-background-color: linear-gradient(to bottom right, #17263b, #101c2e);
+    -fx-padding: 24; -fx-font-family: "Inter", "SF Pro Display", "Segoe UI", Arial;
+}
+.gx-settings.settings-confirm > .content { -fx-padding: 0 0 24 0; }
+.gx-settings.settings-confirm > .button-bar > .container {
+    -fx-padding: 18 0 0 0; -fx-border-color: #2e405a; -fx-border-width: 1 0 0 0;
+}
+.gx-settings.settings-confirm .settings-confirm-icon { -fx-background-color: #3b352e; -fx-background-radius: 14; }
+.gx-settings.settings-confirm .settings-confirm-pencil { -fx-fill: #efbe70; }
+.gx-settings.settings-confirm .settings-confirm-eyebrow { -fx-text-fill: #d5ae70; -fx-font-size: 10px; -fx-font-weight: bold; }
+.gx-settings.settings-confirm .settings-confirm-title { -fx-text-fill: #edf3fc; -fx-font-size: 23px; -fx-font-weight: bold; }
+.gx-settings.settings-confirm .settings-confirm-description { -fx-text-fill: #a8bad3; -fx-font-size: 14px; }
+.gx-settings.settings-confirm .button { -fx-padding: 10 16; -fx-background-radius: 9; -fx-border-radius: 9; -fx-cursor: hand; }
+.gx-settings.settings-confirm .settings-confirm-save { -fx-background-color: #3262ed; -fx-border-color: #6589f6; -fx-text-fill: white; -fx-font-weight: bold; }
+.gx-settings.settings-confirm .settings-confirm-save:hover { -fx-background-color: #4273ff; }
+.gx-settings.settings-confirm .settings-confirm-edit { -fx-background-color: #24374f; -fx-border-color: #415876; }
+.gx-settings.settings-confirm .settings-confirm-edit:hover { -fx-background-color: #304763; }
+.gx-settings.settings-confirm .settings-confirm-discard { -fx-background-color: transparent; -fx-border-color: transparent; -fx-text-fill: #c4cede; }
+.gx-settings.settings-confirm .settings-confirm-discard:hover { -fx-background-color: #3a2b35; -fx-text-fill: #ffb8b0; }
+.gx-settings.settings-confirm .button:focused { -fx-border-color: #8db6ff; }

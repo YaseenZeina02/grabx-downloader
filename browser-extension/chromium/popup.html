@@ -9,7 +9,7 @@
 <body>
   <main class="shell">
     <header class="header">
-      <span class="brand-mark">GX</span>
+      <img class="brand-mark" src="icons/grabx-48.png" width="40" height="40" alt="GrabX">
       <span class="heading">
         <strong>GrabX</strong>
         <small>Download Assistant</small>
@@ -26,6 +26,7 @@
       <span class="switch" aria-hidden="true"></span>
     </label>
 
+    <p id="notice" class="notice hidden" role="status" aria-live="polite"></p>
     <section id="loading" class="state">
       <span class="scanner"></span>
       <strong>Scanning this page</strong>
@@ -49,7 +50,6 @@
       <div id="items" class="queue-items"></div>
       <button id="refresh" class="queue-refresh" type="button">Refresh</button>
     </section>
-    <p id="notice" class="notice hidden" role="status"></p>
   </main>
   <script src="popup.js"></script>
   <script src="queue-state.js"></script>

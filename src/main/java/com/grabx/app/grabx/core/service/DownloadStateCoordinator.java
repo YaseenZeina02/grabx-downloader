@@ -31,6 +31,8 @@ public final class DownloadStateCoordinator {
 
     /** callback بسيط لتحديث الـ UI/Sidebar بعد تغييرات الحالة */
     private final Runnable onStateChanged;
+    private java.util.function.Consumer<DownloadRow> withdrawPending = row -> {};
+    public void onWithdrawPending(java.util.function.Consumer<DownloadRow> callback) { withdrawPending = callback; }
 
     public DownloadStateCoordinator(
             ObservableList<DownloadRow> items,
@@ -123,6 +125,7 @@ public final class DownloadStateCoordinator {
                 && st != DownloadRow.State.QUEUED
                 && st != DownloadRow.State.PENDING) return false;
 
+        withdrawPending.accept(row);
         Process current = activeProcesses.get(row);
         if (current instanceof PausableTransfer transfer && current.isAlive()) {
             transfer.pauseTransfer();
@@ -141,18 +144,8 @@ public final class DownloadStateCoordinator {
         DownloadRow.State st = safeState(row);
         if (st != DownloadRow.State.PAUSED) return false;
 
-        try {
-            Process existing = activeProcesses.get(row);
-            if (existing instanceof PausableTransfer transfer && existing.isAlive()) {
-                row.setState(DownloadRow.State.DOWNLOADING);
-                row.status.set("Downloading");
-                transfer.resumeTransfer();
-                return true;
-            }
-            if (existing != null && existing.isAlive()) return false;
-        } catch (Exception ignored) {}
-
-        try { stopReasons.remove(row); } catch (Exception ignored) {}
+        // Admission owns both a fresh process and resuming a live paused direct stream.
+        // Preserve stop reasons until the previous worker has completed cleanup.
         try { row.status.set("Preparing"); } catch (Exception ignored) {}
         try { row.speed.set(""); } catch (Exception ignored) {}
         try { row.eta.set(""); } catch (Exception ignored) {}
@@ -173,6 +166,7 @@ public final class DownloadStateCoordinator {
         DownloadRow.State st = safeState(row);
         if (st == DownloadRow.State.COMPLETED || st == DownloadRow.State.CANCELLED) return false;
 
+        withdrawPending.accept(row);
         stopProcess(row, "CANCEL");
         row.setState(DownloadRow.State.CANCELLED);
         try { row.status.set("Cancelled"); } catch (Exception ignored) {}
@@ -183,9 +177,12 @@ public final class DownloadStateCoordinator {
 
     /** @return true if retried */
     private boolean retryFx(DownloadRow row) {
+        withdrawPending.accept(row);
         stopProcess(row, "RETRY");
 
-        try { row.progress.set(0); } catch (Exception ignored) {}
+        if (!"Direct".equalsIgnoreCase(row.mode)) {
+            try { row.progress.set(0); } catch (Exception ignored) {}
+        }
         try { row.status.set("Queued"); } catch (Exception ignored) {}
 
         row.setState(DownloadRow.State.QUEUED);

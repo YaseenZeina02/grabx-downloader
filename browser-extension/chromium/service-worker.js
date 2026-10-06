@@ -22,7 +22,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const linkUrl = safeHttpUrl(info.linkUrl);
   if (!linkUrl) return;
 
-  const response = await handOffCapture(contextMenuCapture(info, tab));
+  const resolved = await resolveContextMenuCapture(info, tab);
+  const response = resolved.capture ? await handOffCapture(resolved.capture) : resolved.error;
   await chrome.storage.local.set({ lastContextMenuResult: {
     ok: Boolean(response?.ok),
     message: response?.message || (response?.ok ? 'Sent to GrabX' : 'Could not send this link to GrabX'),
@@ -47,6 +48,7 @@ chrome.downloads.onChanged.addListener(delta => {
 
 const interceptingDownloads = new Set();
 const changedWhileIntercepting = new Set();
+const inspectedCaptures = new WeakSet();
 const downloadWatchKey = id => `browser-download-${id}`;
 
 async function watchBrowserDownload(download) {
@@ -88,6 +90,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   // A page/popup request is not evidence that the browser selected a destination.
   capture.browserDestinationResolved = false;
+  capture.userAgent = browserUserAgent();
 
   handOffCapture(capture).then(sendResponse);
   return true;
@@ -151,6 +154,7 @@ async function interceptDownload(id) {
     } else {
       await resumeInterceptedDownload(id);
       pausedByGrabX = false;
+      if (response?.message) await reportDownloadIssue(response.message);
     }
   } catch {
     if (pausedByGrabX) await resumeInterceptedDownload(id);
@@ -207,6 +211,16 @@ async function handOffCapture(capture) {
     await showQueueInExtension();
     return {ok:true, status:'awaiting_confirmation', message:'GrabX is closed. Open the GrabX extension to confirm or cancel.'};
   }
+  if (capture.action === 'file' && !inspectedCaptures.has(capture)) {
+    if (!state.fileInspection) return {ok:false, message:'Update the GrabX native bridge before handing off browser downloads. The browser keeps this download.'};
+    const inspected = await inspectFile(capture.mediaUrl || capture.pageUrl, capture.pageUrl);
+    // A known file/browser download can legitimately omit Content-Type.
+    if (!inspected?.ok || (!inspected.file && inspected.mimeType !== '')) {
+      const result = {ok:false, message:inspected?.message || 'The server did not provide a downloadable file. The browser keeps this download.'};
+      await reportDownloadIssue(result.message);
+      return result;
+    }
+  }
   const result = await sendCaptureNative(capture, false);
   if (result?.status === 'confirmation_required') {
     await chrome.storage.local.set({['pending-' + capture.requestId]:capture});
@@ -260,11 +274,49 @@ function sendCaptureNative(capture, queueApproved = false) {
         return;
       }
       if (response?.ok) {
-        try { await rememberCapture(capture); } catch { /* History is optional; always return the bridge result. */ }
+        try {
+          await rememberCapture(capture);
+          await chrome.storage.local.remove('lastContextMenuResult');
+        } catch { /* History is optional; always return the bridge result. */ }
       }
       resolve(response || { ok: false, message: "No response from GrabX" });
     });
   });
+}
+
+function browserUserAgent() {
+  return typeof navigator !== 'undefined' ? String(navigator.userAgent || '').slice(0, 1024) : '';
+}
+
+async function inspectFile(url, referer) {
+  return nativeControl({type:'inspectFile', url, referer, userAgent:browserUserAgent()});
+}
+
+async function reportDownloadIssue(message) {
+  await chrome.storage.local.set({lastContextMenuResult:{ok:false, message, at:Date.now()}});
+  await chrome.action.setBadgeText({text:'!'});
+  await chrome.action.setBadgeBackgroundColor({color:'#b3261e'});
+  await chrome.action.setTitle({title:message});
+  try { await chrome.action.openPopup(); } catch { /* Result remains visible from the toolbar. */ }
+}
+
+async function resolveContextMenuCapture(info, tab) {
+  const capture = contextMenuCapture(info, tab);
+  if (!capture) return {error:{ok:false, message:'Invalid download link'}};
+  if (capture.action === 'file') return {capture};
+  const host = new URL(capture.pageUrl).hostname;
+  if (host === 'youtu.be' || host === 'youtube.com' || host.endsWith('.youtube.com')) return {capture};
+  const referer = safeHttpUrl(info.frameUrl) || safeHttpUrl(info.pageUrl) || safeHttpUrl(tab?.url) || capture.pageUrl;
+  const inspected = await inspectFile(capture.pageUrl, referer);
+  if (inspected?.ok && inspected.file) {
+    const verified = fileCapture({url:capture.pageUrl, pageUrl:referer,
+      title:inspected.filename || capture.title, suggestedFilename:inspected.filename, mimeType:inspected.mimeType});
+    inspectedCaptures.add(verified);
+    return {capture:verified};
+  }
+  const error = {ok:false, message:inspected?.message || 'Could not verify this link. Open the file download in the browser first.'};
+  await reportDownloadIssue(error.message);
+  return {error};
 }
 
 function contextMenuCapture(info, tab) {
@@ -385,6 +437,7 @@ function sanitizeCapture(value) {
       ? value.qualitySizes.filter(s => s && Number.isInteger(s.quality) && Number.isSafeInteger(s.bytes)
           && s.bytes > 0 && s.bytes <= 10_000_000_000_000)
         .map(s => ({quality: s.quality, bytes: s.bytes})) : [],
+    userAgent: browserUserAgent(),
     createdAt: Number(value.createdAt) || Date.now()
   };
 }

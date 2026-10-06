@@ -42,8 +42,8 @@ public final class PartialRetentionService {
         long cutoff = System.currentTimeMillis() - java.util.concurrent.TimeUnit.DAYS.toMillis(days.getAsInt());
         for (DownloadRow row : java.util.List.copyOf(items)) {
             var state = row.getState();
-            if (state != DownloadRow.State.PAUSED && state != DownloadRow.State.FAILED
-                    && state != DownloadRow.State.CANCELLED) continue;
+            // A network/auth failure must never age out the user's saved bytes.
+            if (state != DownloadRow.State.CANCELLED) continue;
             try {
                 if (!DirectPartialFiles.expired(row.outputFile.get(), cutoff)) continue;
                 Process process = processes.get(row);

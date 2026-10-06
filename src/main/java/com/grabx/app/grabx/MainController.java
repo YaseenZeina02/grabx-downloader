@@ -61,6 +61,14 @@ import javafx.scene.shape.SVGPath;
 import javafx.util.Duration;
 
 public class MainController {
+    private com.grabx.app.grabx.ui.components.SettingsPage settingsPage;
+    private com.grabx.app.grabx.core.service.DownloadScheduler downloadScheduler;
+    private final com.grabx.app.grabx.core.service.TaskPreferences taskPreferences =
+            new com.grabx.app.grabx.core.service.TaskPreferences(Preferences.userNodeForPackage(MainController.class));
+    private Node homeContent;
+    private Node settingsGraphic;
+    private final com.grabx.app.grabx.core.service.TransferPreferences transferPreferences =
+            new com.grabx.app.grabx.core.service.TransferPreferences(Preferences.userNodeForPackage(MainController.class));
     private final DownloadFolderPreferences downloadFolderPreferences = new DownloadFolderPreferences();
     private static final VideoProbeService VIDEO_PROBE_SERVICE = new VideoProbeService();
     private final VideoSizeService videoSizeService = new VideoSizeService();
@@ -127,6 +135,8 @@ public class MainController {
     private DownloadMonitoringService downloadMonitoringService;
     private GlobalSpeedService globalSpeedService;
     private BrowserBridgeService browserBridgeService;
+    private com.grabx.app.grabx.core.service.SoundFeedbackService soundFeedback;
+    private com.grabx.app.grabx.core.service.DownloadSoundObserver downloadSounds;
     private Timeline searchAnimation;
     private boolean searchExpanded;
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
@@ -231,6 +241,8 @@ public class MainController {
         initializeDownloadsList(iconButtons);
         initializeCompactView(iconButtons);
 
+        soundFeedback = new com.grabx.app.grabx.core.service.SoundFeedbackService(PREFS);
+        downloadSounds = new com.grabx.app.grabx.core.service.DownloadSoundObserver(downloadItems, soundFeedback::play);
         historyService.loadOnce();
         initializePlaylistServices();
         initializeAddLink();
@@ -374,6 +386,9 @@ public class MainController {
         );
         downloadStateCoordinator = downloadRuntime.stateCoordinator();
         downloadRunner = downloadRuntime.runner();
+        downloadScheduler = downloadRuntime.scheduler();
+        downloadScheduler.setLimit(taskPreferences.maxActive());
+        downloadRunner.configureTransferLimits(transferPreferences.directRate(), transferPreferences.mediaRate());
         downloadQueueService = downloadRuntime.queue();
         bulkDownloadActionsService = downloadRuntime.bulkActions();
     }
@@ -532,7 +547,8 @@ public class MainController {
                 downloadStateCoordinator::cancel,
                 iconButtons::installTooltip,
                 (node, text) -> hoverTooltipService.install(node, text),
-                mediaOpacity
+                mediaOpacity,
+                this::showCompactVerificationDetails
         ));
 
         Label activeCount = new Label();
@@ -662,6 +678,14 @@ public class MainController {
         VBox.setVgrow(downloadArea, Priority.ALWAYS);
     }
 
+    private void showCompactVerificationDetails() {
+        // A full verification card needs more room than a normal compact row.
+        // Grow only when needed; do not shrink/reposition a user's window afterward.
+        if (compactView && compactStage != null && compactStage.isShowing() && compactStage.getHeight() < 260) {
+            compactStage.setHeight(260);
+        }
+    }
+
     private static boolean isCompactInteractiveTarget(Object target) {
         // SVG paths and labels inside a button can be the actual event target.
         for (Node node = target instanceof Node n ? n : null; node != null; node = node.getParent()) {
@@ -681,7 +705,10 @@ public class MainController {
         compactView = true;
 
         double compactWidth = COMPACT_MIN_WIDTH;
-        double compactHeight = COMPACT_MIN_HEIGHT;
+        boolean checkingSavedData = downloadItems.stream().anyMatch(row ->
+                row.getState() == DownloadRow.State.DOWNLOADING && row.status.get() != null
+                        && row.status.get().startsWith("Verifying saved data"));
+        double compactHeight = checkingSavedData ? 260 : COMPACT_MIN_HEIGHT;
         if (compactStage == null) {
             compactStage = new javafx.stage.Stage(javafx.stage.StageStyle.TRANSPARENT);
             javafx.scene.Scene compactScene = new javafx.scene.Scene(compactRoot, compactWidth, compactHeight);
@@ -783,9 +810,7 @@ public class MainController {
             if (root != null && root.getScene() != null
                     && root.getScene().getWindow() instanceof javafx.stage.Stage stage) {
                 if (compactView) exitCompactView();
-                stage.show();
-                stage.toFront();
-                stage.requestFocus();
+                com.grabx.app.grabx.core.service.WindowActivationService.fromBrowser(stage);
             }
             if (statusText != null) statusText.setText("Received from browser: " + capture.title());
             if ("file".equalsIgnoreCase(capture.action()) && downloadQueueService != null) {
@@ -812,7 +837,7 @@ public class MainController {
                     folder = selected.getAbsolutePath();
                 }
                 downloadFolderPreferences.saveLastFolder(folder);
-                downloadQueueService.enqueueDirect(capture.effectiveUrl(), folder, filename, capture.pageUrl());
+                downloadQueueService.enqueueDirect(capture.effectiveUrl(), folder, filename, capture.pageUrl(), capture.userAgent());
                 if (addLinkFlowService != null) addLinkFlowService.browserDownloadStarted();
                 if (statusText != null) statusText.setText("Browser download started in GrabX");
             } else if (addLinkFlowService != null) {
@@ -845,7 +870,7 @@ public class MainController {
                 try {
                     process.waitFor();
                     Platform.runLater(() -> {
-                        if (downloadItems.contains(row) && row.getState() == DownloadRow.State.PAUSED)
+                        if (downloadItems.contains(row) && canRefreshLink(row))
                             refreshDownloadLink(row, url, referer);
                     });
                 } catch (InterruptedException error) { Thread.currentThread().interrupt(); }
@@ -861,7 +886,8 @@ public class MainController {
         row.status.set("Checking saved data against the new link…");
         Thread verification = new Thread(() -> {
             try {
-                var verified = com.grabx.app.grabx.core.service.DownloadLinkVerifier.verify(url, referer, output, total);
+                var verified = com.grabx.app.grabx.core.service.DownloadLinkVerifier.verify(url, referer, output, total, row.resumeSegments > 0 ? row.resumeSegments
+                        : com.grabx.app.grabx.core.service.DownloadRunner.directSegmentCountForLegacy(total), row.requestUserAgent);
                 Platform.runLater(() -> {
                     if (linkChecks.get(row) != check || !downloadItems.contains(row) || row.getState() != DownloadRow.State.PENDING) return;
                     linkChecks.remove(row);
@@ -869,14 +895,26 @@ public class MainController {
                     row.resumeEtag = verified.etag();
                     row.totalBytes.set(verified.total());
                     row.setReferer(referer);
-                    historyService.scheduleSave();
+                    row.resumeTotal = verified.total();
+                    row.resumeSegments = verified.segments();
+                    row.resumeLastModified = null;
+                    row.finalUrl = null;
+                    row.resumeSupport = "Yes";
+                    try { com.grabx.app.grabx.core.service.DirectDownloadState.save(row, output); }
+                    catch (java.io.IOException e) {
+                        row.setState(DownloadRow.State.FAILED);
+                        row.status.set("Could not save verified link; saved data kept");
+                        historyService.scheduleSave();
+                        return;
+                    }
+                    historyService.saveNow();
                     startDownloadRow(row, true);
                 });
             } catch (Exception error) {
                 Platform.runLater(() -> {
                     if (linkChecks.get(row) != check || !downloadItems.contains(row) || row.getState() != DownloadRow.State.PENDING) return;
                     linkChecks.remove(row);
-                    row.setState(DownloadRow.State.PAUSED);
+                    row.setState(DownloadRow.State.FAILED);
                     row.status.set("Link not updated: " + error.getMessage());
                     historyService.scheduleSave();
                 });
@@ -917,29 +955,47 @@ public class MainController {
 
     @FXML
     public void onSettings(ActionEvent event) {
-        javafx.scene.control.TextInputDialog dialog = new javafx.scene.control.TextInputDialog(
-                Integer.toString(partialRetentionDays()));
-        dialog.initOwner(ownerWindow());
-        dialog.setTitle("Incomplete download cleanup");
-        dialog.setHeaderText("Delete inactive download parts after this many days");
-        dialog.setContentText("Days (1–365):");
-        javafx.scene.control.Label explanation = new javafx.scene.control.Label(
-                "Default: 2 days since the last downloaded data.\n"
-                + "Paused and failed downloads lose their saved progress after this period.\n"
-                + "Active downloads and completed files are kept. Cleanup runs while GrabX is open.");
-        explanation.setWrapText(true);
-        dialog.getDialogPane().setExpandableContent(explanation);
-        dialog.getDialogPane().setExpanded(true);
-        dialog.showAndWait().ifPresent(value -> {
-            try {
-                int days = Integer.parseInt(value.trim());
-                if (days < 1 || days > 365) throw new NumberFormatException();
-                PREFS.putInt("partialRetentionDays", days);
-                if (statusText != null) statusText.setText("Incomplete files are kept for " + days + " days");
-            } catch (NumberFormatException error) {
-                if (statusText != null) statusText.setText("Enter a whole number from 1 to 365; setting unchanged");
-            }
-        });
+        if (settingsPage != null) { leaveSettings(); return; }
+        homeContent = root.getCenter();
+        settingsGraphic = settingsButton.getGraphic();
+        settingsPage = new com.grabx.app.grabx.ui.components.SettingsPage(
+                new com.grabx.app.grabx.ui.components.SettingsPage.Values(
+                        downloadFolderPreferences.configuredFolder(), downloadFolderPreferences.remembersLastFolder(),
+                        transferPreferences.directRate(), transferPreferences.mediaRate(),
+                        soundFeedback.isEnabled(), soundFeedback.volume(), partialRetentionDays(), taskPreferences.maxActive()),
+                soundFeedback, settings -> {
+                    downloadFolderPreferences.configure(settings.folder(), settings.rememberFolder());
+                    transferPreferences.save(settings.directRate(), settings.mediaRate());
+                    taskPreferences.save(settings.maxActive());
+                    downloadScheduler.setLimit(settings.maxActive());
+                    PREFS.putInt("partialRetentionDays", settings.retentionDays());
+                    soundFeedback.configure(settings.sounds(), settings.volume());
+                    downloadRunner.configureTransferLimits(settings.directRate(), settings.mediaRate());
+                });
+        root.setCenter(settingsPage);
+        settingsButton.setGraphic(IconButtonService.createSvgIcon("M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.42-1.41L7.83 13H20v-2z", 34));
+        settingsButton.setAccessibleText("Back to downloads");
+        if (hoverTooltipService != null) hoverTooltipService.install(settingsButton, "Back to downloads");
+        showHomeToolbar(false);
+    }
+
+    private void showHomeToolbar(boolean show) {
+        for (Button button : List.of(addLinkButton, pauseAllButton, resumeAllButton, cancelAllBtn, clearAllButton, compactViewButton)) {
+            button.setVisible(show); button.setManaged(show);
+        }
+    }
+
+    /** Shared by Back and window close, so drafts cannot be lost silently. */
+    public boolean leaveSettings() {
+        if (settingsPage == null) return true;
+        if (!settingsPage.confirmLeave(ownerWindow())) return false;
+        root.setCenter(homeContent);
+        settingsPage = null; homeContent = null;
+        settingsButton.setGraphic(settingsGraphic); settingsGraphic = null;
+        settingsButton.setAccessibleText("Settings");
+        if (hoverTooltipService != null) hoverTooltipService.install(settingsButton, "Settings");
+        showHomeToolbar(true);
+        return true;
     }
 
     @FXML
@@ -969,6 +1025,10 @@ public class MainController {
 
     public void shutdown() {
         if (!shuttingDown.compareAndSet(false, true)) return;
+        if (downloadScheduler != null) downloadScheduler.close();
+        // Stop feedback before pauseAll: closing the app is intentionally silent.
+        if (downloadSounds != null) downloadSounds.close();
+        if (soundFeedback != null) soundFeedback.close();
         try {
             if (downloadStateCoordinator != null) downloadStateCoordinator.pauseAll();
         } catch (Exception ignored) {}
@@ -994,7 +1054,7 @@ public class MainController {
     }
 
     private void startDownloadRow(DownloadRow row, boolean resume) {
-        downloadRunner.start(row, resume);
+        downloadScheduler.request(row, resume);
     }
 
     private void showMissingFileNotice() {

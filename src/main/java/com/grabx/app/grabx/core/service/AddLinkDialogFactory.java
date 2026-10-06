@@ -6,7 +6,6 @@ import javafx.scene.Scene;
 import javafx.scene.control.DialogPane;
 import javafx.scene.control.TextInputControl;
 import javafx.scene.input.MouseEvent;
-import javafx.stage.Stage;
 import javafx.stage.Window;
 
 import java.util.List;
@@ -114,11 +113,7 @@ public final class AddLinkDialogFactory {
     private static void bringWindowToFront(Window window) {
         if (window == null) return;
         try {
-            window.requestFocus();
-            if (window instanceof Stage stage) {
-                stage.toFront();
-                stage.requestFocus();
-            }
+            WindowActivationService.bringToFront(window);
         } catch (Exception ignored) {
         }
     }

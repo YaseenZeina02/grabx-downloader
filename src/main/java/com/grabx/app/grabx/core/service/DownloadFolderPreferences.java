@@ -5,7 +5,7 @@ import com.grabx.app.grabx.MainController;
 import java.nio.file.Path;
 import java.util.prefs.Preferences;
 
-/** Persists the last folder selected by the user for a download. */
+/** Keeps a fixed default separately from the last selected folder. */
 public final class DownloadFolderPreferences {
     private static final String LAST_FOLDER_KEY = "gx_last_download_folder";
 
@@ -13,10 +13,27 @@ public final class DownloadFolderPreferences {
 
     public DownloadFolderPreferences() {
         // Keep the original preference node so existing users retain their saved folder.
-        preferences = Preferences.userNodeForPackage(MainController.class);
+        this(Preferences.userNodeForPackage(MainController.class));
+    }
+
+    public DownloadFolderPreferences(Preferences preferences) { this.preferences = preferences; }
+
+    public boolean remembersLastFolder() { return preferences.getBoolean("grabx.folder.remember", true); }
+    public String configuredFolder() {
+        String folder = preferences.get("grabx.folder.default", "");
+        return folder.isBlank() ? systemDefault() : folder;
+    }
+    public void configure(String folder, boolean remember) {
+        String normalized = Path.of(folder).toAbsolutePath().normalize().toString();
+        preferences.put("grabx.folder.default", normalized);
+        preferences.putBoolean("grabx.folder.remember", remember);
+    }
+    private String systemDefault() {
+        return Path.of(System.getProperty("user.home"), "Downloads").toString();
     }
 
     public String getLastFolderOrDefault() {
+        if (!remembersLastFolder()) return configuredFolder();
         try {
             String savedFolder = preferences.get(LAST_FOLDER_KEY, null);
             if (savedFolder != null && !savedFolder.trim().isEmpty()) {
@@ -27,7 +44,7 @@ public final class DownloadFolderPreferences {
         }
 
         try {
-            return Path.of(System.getProperty("user.home"), "Downloads").toString();
+            return configuredFolder();
         } catch (Exception ignored) {
             return System.getProperty("user.home");
         }

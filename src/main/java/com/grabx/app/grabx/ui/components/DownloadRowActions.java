@@ -67,7 +67,9 @@ public final class DownloadRowActions {
             }
         } catch (Exception ignored) {}
 
-        try { row.progress.set(0); } catch (Exception ignored) {}
+        if (!"Direct".equalsIgnoreCase(row.mode)) {
+            try { row.progress.set(0); } catch (Exception ignored) {}
+        }
         try { row.speed.set("0 KB/s"); } catch (Exception ignored) {}
         try { row.eta.set("--"); } catch (Exception ignored) {}
         try { row.setState(DownloadRow.State.QUEUED); } catch (Exception ignored) {}
@@ -91,6 +93,12 @@ public final class DownloadRowActions {
         if (row == null) return;
 
         try {
+            if (com.grabx.app.grabx.core.service.DownloadService.isActive(row.getState())) {
+                Path folder = activeDownloadFolder(row);
+                if (folder != null && revealInFileManager != null) revealInFileManager.accept(folder);
+                else if (statusText != null) statusText.setText("Download folder is not available.");
+                return;
+            }
             if (row.state == null || row.state.get() != DownloadRow.State.COMPLETED) return;
 
             Path outFile = row.outputFile == null ? null : row.outputFile.get();
@@ -116,6 +124,23 @@ public final class DownloadRowActions {
                 try { refilterDownloads.run(); } catch (Exception ignored) {}
             });
         } catch (Exception ignored) {}
+    }
+
+    /** Unfinished output can be absent, segmented or hidden; open its directory. */
+    static Path activeDownloadFolder(DownloadRow row) {
+        if (row == null || !com.grabx.app.grabx.core.service.DownloadService.isActive(row.getState())) return null;
+        try {
+            Path output = row.outputFile.get();
+            if (output != null) {
+                Path parent = output.toAbsolutePath().normalize().getParent();
+                if (parent != null && Files.isDirectory(parent)) return parent;
+            }
+            if (row.folder != null && !row.folder.isBlank()) {
+                Path folder = Path.of(row.folder).toAbsolutePath().normalize();
+                if (Files.isDirectory(folder)) return folder;
+            }
+        } catch (Exception ignored) { }
+        return null;
     }
 
     public void clearDownloadRow(DownloadRow row) {

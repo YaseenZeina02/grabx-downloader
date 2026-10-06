@@ -6,8 +6,19 @@ const INTERCEPTION_SETTING = 'interceptBrowserDownloads';
 document.addEventListener('DOMContentLoaded', async () => {
   await initializeInterceptionToggle();
   await scanActivePage();
+  await showLastBridgeResult();
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.lastContextMenuResult) showLastBridgeResult();
+  });
 
 });
+
+async function showLastBridgeResult() {
+  const {lastContextMenuResult: result} = await chrome.storage.local.get('lastContextMenuResult');
+  if (result && result.ok === false && result.message && Date.now() - result.at < 300000) {
+    showNotice(result.message, true);
+  }
+}
 
 async function initializeInterceptionToggle() {
   const toggle = document.getElementById('interceptDownloads');
@@ -262,6 +273,10 @@ async function sendCapture(candidate, action) {
     if (response?.status === 'awaiting_confirmation' || response?.status === 'queued') {
       document.getElementById('notice').classList.add('hidden');
       window.dispatchEvent(new Event('grabx-queue-updated'));
+    } else if (response?.ok && response.status === 'delivered') {
+      // Release the browser popup after the running app accepts the handoff.
+      // GrabX activates itself when it consumes the request and opens Add Link.
+      window.close();
     } else {
       showNotice(response?.message || 'Sent to GrabX', !response?.ok);
     }

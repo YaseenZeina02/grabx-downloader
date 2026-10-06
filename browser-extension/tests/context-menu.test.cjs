@@ -63,3 +63,55 @@ test('media appears above queue and removed preference is absent',()=>{
  assert.ok(html.indexOf('id="results"') < html.indexOf('id="manageQueue"'));
  assert.ok(!html.includes('dontAsk'));
 });
+
+test('opaque download links use HTTP metadata and preserve the referring page', async () => {
+ context.inspectFile = async (url, referer) => ({ok:true,file:true,filename:'Movie.mp4',mimeType:'video/mp4'});
+ const result = await context.resolveContextMenuCapture({linkUrl:'https://cdn.example.com/d/opaque?sig=abc',pageUrl:'https://example.com/watch'}, {});
+ assert.equal(result.capture.action,'file');
+ assert.equal(result.capture.mediaUrl,'https://cdn.example.com/d/opaque?sig=abc');
+ assert.equal(result.capture.pageUrl,'https://example.com/watch');
+ assert.equal(result.capture.suggestedFilename,'Movie.mp4');
+});
+
+test('HTML and rejected links explain the problem instead of opening the unsupported video dialog', async () => {
+ let notice;
+ context.reportDownloadIssue = async message => {notice=message;};
+ for (const inspected of [{ok:true,file:false,message:'Open the site download button first'},
+   {ok:false,message:'Download link/session rejected (HTTP 498)'}]) {
+   context.inspectFile = async () => inspected;
+   const result = await context.resolveContextMenuCapture({linkUrl:'https://example.com/download?id=1'}, {});
+   assert.equal(result.capture,undefined); assert.equal(result.error.ok,false); assert.equal(notice,inspected.message);
+ }
+});
+
+test('browser User-Agent is attached from the extension rather than page-provided data', () => {
+ context.navigator = {userAgent:'FixtureBrowser/145'};
+ const result = capture('https://example.com/file.mp4');
+ assert.equal(result.userAgent,'FixtureBrowser/145');
+ assert.equal(context.sanitizeCapture({...result,userAgent:'PageInjectedAgent'}).userAgent,'FixtureBrowser/145');
+});
+
+test('live handoff checks server acceptance before sending a file to GrabX', async () => {
+ const messages=[];
+ context.chrome.runtime.sendNativeMessage=(_host,message,callback)=>{
+   messages.push(message.type);
+   if(message.type==='status') callback({ok:true,running:true,fileInspection:true});
+   else callback({ok:true,status:'accepted'});
+ };
+ context.inspectFile=async()=>({ok:false,file:false,message:'HTTP 498'});
+ let result=await context.handOffCapture(capture('https://example.com/file.mp4'));
+ assert.equal(result.ok,false); assert.deepEqual(messages,['status']);
+ context.inspectFile=async()=>({ok:true,file:true}); messages.length=0;
+ context.chrome.storage.local.get=async()=>({recentCaptures:[]});
+ result=await context.handOffCapture(capture('https://example.com/file.mp4'));
+ assert.equal(result.ok,true); assert.deepEqual(messages,['status','capture']);
+ context.inspectFile=async()=>({ok:true,file:false,mimeType:''}); messages.length=0;
+ result=await context.handOffCapture(capture('https://example.com/file.mp4'));
+ assert.equal(result.ok,true); assert.deepEqual(messages,['status','capture']);
+});
+
+test('a bridge without file inspection cannot silently take over browser downloads', async () => {
+ context.chrome.runtime.sendNativeMessage=(_host,message,callback)=>callback({ok:true,running:true});
+ const result=await context.handOffCapture(capture('https://example.com/file.mp4'));
+ assert.equal(result.ok,false); assert.match(result.message,/Update.*native bridge/);
+});

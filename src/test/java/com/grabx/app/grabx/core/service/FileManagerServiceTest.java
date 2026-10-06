@@ -17,6 +17,17 @@ class FileManagerServiceTest {
     Path tempDir;
 
     @Test
+    void opensTheDirectoryItselfOnEveryPlatformInsteadOfRevealingItsParent() {
+        for (String os : List.of("Mac OS X", "Windows 11", "Linux")) {
+            List<List<String>> commands = new ArrayList<>();
+            AtomicInteger notices = new AtomicInteger();
+            service(os, commands, notices).reveal(tempDir);
+            assertEquals(List.of(FileManagerService.folderCommand(os, tempDir)), commands);
+            assertEquals(0, notices.get());
+        }
+    }
+
+    @Test
     void revealsFileInFinderOnMac() throws Exception {
         Path file = Files.createFile(tempDir.resolve("video.mp4"));
         List<List<String>> commands = new ArrayList<>();

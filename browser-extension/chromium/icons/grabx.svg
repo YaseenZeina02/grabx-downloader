@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#26324a"/>
+      <stop offset="1" stop-color="#101622"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#panel)" stroke="#52668e" stroke-width="2"/>
+  <!-- Custom GX letterforms echo the app's sidebar brand without relying on fonts. -->
+  <path d="M58 44C53 39 49 38 43 38C30 38 23 48 23 64C23 80 30 90 43 90C49 90 54 88 58 84V66H45"
+        fill="none" stroke="#e8ecf3" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M77 42L105 86M105 42L77 86" fill="none" stroke="#9fb6ff" stroke-width="12" stroke-linecap="round"/>
+</svg>

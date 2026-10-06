@@ -30,6 +30,7 @@ public class GrabXApp extends Application {
         stage.setScene(scene);
 
         stage.setOnCloseRequest(e -> {
+            if (controller != null && !controller.leaveSettings()) { e.consume(); return; }
             if (controller != null) controller.shutdown();
             Platform.exit();
         });

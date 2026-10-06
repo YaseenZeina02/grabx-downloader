@@ -11,16 +11,22 @@ final class DirectResumeVerifier {
 
     static void verify(InputStream response, Path partial, long length,
                        Checkpoint checkpoint, LongConsumer progress) throws IOException, InterruptedException {
-        try (InputStream saved = Files.newInputStream(partial)) {
+        try (InputStream saved = new BufferedInputStream(Files.newInputStream(partial), 128 * 1024)) {
+            byte[] local = new byte[128 * 1024];
+            byte[] remote = new byte[local.length];
             long checked = 0;
             while (checked < length) {
                 checkpoint.check();
-                int count = (int) Math.min(64 * 1024, length - checked);
-                byte[] local = saved.readNBytes(count);
-                byte[] remote = response.readNBytes(count);
-                if (local.length != count || remote.length != count || !Arrays.equals(local, remote)) {
-                    throw new IOException("Source changed; saved download kept. Use a new download for this version");
-                }
+                // Reuse bounded buffers and report actual socket reads rather than
+                // waiting for an entire block before updating slow transfers.
+                int count = response.read(remote, 0, (int) Math.min(remote.length, length - checked));
+                checkpoint.check();
+                if (count < 0) throw new EOFException("Connection ended while verifying saved data");
+                if (count == 0) continue;
+                if (saved.readNBytes(local, 0, count) != count)
+                    throw new DirectRemoteProbe.NeedsAction("Saved data changed during verification");
+                if (!Arrays.equals(local, 0, count, remote, 0, count))
+                    throw new DirectRemoteProbe.NeedsAction("Source changed; saved data does not match this file");
                 checked += count;
                 progress.accept(checked);
             }

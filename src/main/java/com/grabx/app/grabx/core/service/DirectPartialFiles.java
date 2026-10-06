@@ -66,5 +66,6 @@ public final class DirectPartialFiles {
                 if (owns(output, entry) && !Files.isDirectory(entry)) Files.deleteIfExists(entry);
             }
         }
+        Files.deleteIfExists(DirectDownloadState.path(output));
     }
 }

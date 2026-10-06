@@ -12,6 +12,12 @@ final class SegmentTransfer {
 
     static void download(Path part, long start, long end, long total, ConnectionFactory factory,
                          Checkpoint checkpoint, LongConsumer progress, Consumer<HttpURLConnection> closed) throws Exception {
+        download(part, start, end, total, factory, checkpoint, progress, closed, UnaryOperator.identity());
+    }
+
+    static void download(Path part, long start, long end, long total, ConnectionFactory factory,
+                         Checkpoint checkpoint, LongConsumer progress, Consumer<HttpURLConnection> closed,
+                         UnaryOperator<InputStream> wrap) throws Exception {
         int interruptions = 0;
         while (true) {
             checkpoint.check();
@@ -25,10 +31,10 @@ final class SegmentTransfer {
                 int status = connection.getResponseCode();
                 if (DownloadRunner.isTemporaryHttpFailure(status))
                     throw new DownloadRunner.SegmentServerBusy(status, connection.getHeaderField("Retry-After"));
-                if (status != 206) throw new IOException("Server rejected range request (HTTP " + status + ")");
+                if (status != 206) throw new DirectRemoteProbe.NeedsAction("Server rejected range request (HTTP " + status + ")");
                 long responseEnd = SegmentResponse.validate(connection.getHeaderField("Content-Range"), start + present, end, total);
                 long remaining = responseEnd - (start + present) + 1;
-                try (InputStream input = connection.getInputStream();
+                try (InputStream input = wrap.apply(connection.getInputStream());
                      OutputStream output = Files.newOutputStream(part, StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
                     byte[] buffer = new byte[64 * 1024];
                     while (remaining > 0) {

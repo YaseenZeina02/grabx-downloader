@@ -47,6 +47,18 @@ public final class DownloadHistoryReconciler {
         DownloadRow.State state = getState(row);
         if (state == DownloadRow.State.COMPLETED) {
             row.setState(DownloadRow.State.MISSING);
+        } else if ("Direct".equalsIgnoreCase(row.mode) && outputFile != null) {
+            try {
+                if (DirectDownloadState.load(row, outputFile)) row.totalBytes.set(row.resumeTotal);
+                long saved = DirectDownloadState.downloaded(outputFile);
+                row.downloadedBytes.set(saved);
+                row.progress.set(row.totalBytes.get() > 0 ? (double) saved / row.totalBytes.get() : 0);
+                row.size.set(DownloadRuntimeUtils.formatTransferSize(saved, row.totalBytes.get()));
+                if (state == DownloadRow.State.DOWNLOADING || state == DownloadRow.State.PENDING) row.setState(DownloadRow.State.PAUSED);
+            } catch (Exception error) {
+                row.setState(DownloadRow.State.FAILED);
+                row.status.set("Saved state needs verification • partial files kept");
+            }
         } else if (state == DownloadRow.State.DOWNLOADING) {
             row.setState(DownloadRow.State.QUEUED);
             setTransferDetails(row, 0, "", "");

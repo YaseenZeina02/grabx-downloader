@@ -2,6 +2,16 @@
 
 This folder contains the first Chromium vertical slice of the GrabX browser bridge.
 
+## Bring GrabX forward (0.2.6)
+
+After Video/Audio or another popup action is delivered to the running app, the
+extension popup closes and GrabX brings its window forward. On macOS, the app
+also requests native application activation through the JDK Desktop API. Minimized
+windows are restored; an existing Add Link dialog is reused and focused. Other
+desktop environments use JavaFX window focus where native activation is unsupported.
+Failed requests and closed-app queue confirmations keep the popup available.
+Restart the app and reload the extension to activate both sides of this change.
+
 ## Current capabilities
 
 - Scans the active tab only after the user clicks the extension.
@@ -26,6 +36,33 @@ This folder contains the first Chromium vertical slice of the GrabX browser brid
   unavailable; these are estimates, not a promise of the final merged/converted file size.
 - Sends versioned, validated JSON through Chrome Native Messaging.
 - Stores only the latest 20 non-sensitive capture summaries. It does not collect cookies or browsing history.
+
+## File links and server errors (0.2.4)
+
+Opaque context-menu links (without a recognizable extension) are inspected through the native
+bridge using HTTP response metadata. File responses use Direct mode; HTML pages and server
+rejections produce a message in the extension instead of the unsupported video dialog. YouTube
+analysis and the existing GitHub link conversions remain available. Version 0.2.5 uses a custom
+GX monogram with the app's navy panels and pale blue accent for the toolbar, popup and browser
+context menu. The letterforms are vector paths, so rendering does not depend on installed fonts.
+
+When GrabX is running, file handoffs first check the server response. A rejected inspection
+returns an intercepted download to the browser instead of cancelling it. This is a preflight,
+not confirmation that the eventual transfer has started or will finish: tokens can expire or
+servers can reject a later request. Closed-app requests retain the explicit queue confirmation.
+The actual browser User-Agent and referring page travel with direct downloads and resume state;
+cookies and authorization headers are not captured. Both the app and native bridge must be updated.
+
+For example, HTTP 498 from a download host indicates a server rejection, not an unsupported URL
+syntax. Its exact meaning depends on the host. If the browser also fails with **Send downloads
+to GrabX** off, obtain a working link/session on the site first. GrabX does not solve site challenges.
+Reload the unpacked extension after updating and restart the running development app.
+
+Icon sources are in `chromium/icons/grabx.svg`; regenerate the PNG sizes with Java 21:
+
+```sh
+java -Djava.awt.headless=true browser-extension/tools/GenerateIcons.java browser-extension/chromium/icons
+```
 
 ## Cross-platform builds
 

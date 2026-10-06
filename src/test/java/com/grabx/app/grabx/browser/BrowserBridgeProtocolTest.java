@@ -16,6 +16,18 @@ class BrowserBridgeProtocolTest {
                 url, "Movie", "video/mp4", "file", "file", "Movie.mp4", folder, resolved, 100));
     }
 
+    @Test void browserUserAgentRoundTripsButHeaderInjectionIsRejected() throws Exception {
+        String json = """
+                {"protocolVersion":1,"type":"capture","requestId":"request-1234",
+                 "pageUrl":"https://example.com/watch","mediaUrl":"https://example.com/file",
+                 "mediaKind":"file","action":"file","userAgent":"FixtureBrowser/145"}
+                """;
+        var capture = protocol.parse(json.getBytes(StandardCharsets.UTF_8));
+        assertEquals("FixtureBrowser/145", protocol.parse(protocol.serialize(capture)).userAgent());
+        String unsafe = json.replace("FixtureBrowser/145", "bad\\r\\nInjected: true");
+        assertThrows(BrowserBridgeProtocol.ProtocolException.class, () -> protocol.parse(unsafe.getBytes(StandardCharsets.UTF_8)));
+    }
+
     @Test
     void acceptsBrowserMovieUrlsWithoutCorruptingSignedParameters() throws Exception {
         String browserUrl = "https://cdn.example.com/Movie[1080p]|part.mp4?token=a%2Fb%3D&x=1&x=2";

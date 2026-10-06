@@ -16,11 +16,19 @@ public record BrowserCapture(
         boolean browserDestinationResolved,
         long createdAt,
         java.util.List<Integer> availableQualities,
-        java.util.List<BrowserVideoSize> qualitySizes
+        java.util.List<BrowserVideoSize> qualitySizes,
+        String userAgent
 ) {
     public BrowserCapture {
         availableQualities = availableQualities == null ? java.util.List.of() : java.util.List.copyOf(availableQualities);
         qualitySizes = qualitySizes == null ? java.util.List.of() : java.util.List.copyOf(qualitySizes);
+    }
+    public BrowserCapture(int protocolVersion, String type, String requestId, String pageUrl, String mediaUrl,
+                          String title, String mimeType, String mediaKind, String action, String suggestedFilename,
+                          String suggestedFolder, boolean browserDestinationResolved, long createdAt,
+                          java.util.List<Integer> availableQualities, java.util.List<BrowserVideoSize> qualitySizes) {
+        this(protocolVersion, type, requestId, pageUrl, mediaUrl, title, mimeType, mediaKind, action,
+                suggestedFilename, suggestedFolder, browserDestinationResolved, createdAt, availableQualities, qualitySizes, null);
     }
     public BrowserCapture(int protocolVersion, String type, String requestId, String pageUrl, String mediaUrl,
                           String title, String mimeType, String mediaKind, String action, String suggestedFilename,

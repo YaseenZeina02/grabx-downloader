@@ -51,6 +51,7 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
     private final Label speed = new Label();
     private final Label etaDot = new Label("·");
     private final Label eta = new Label();
+    private final ResumeVerificationPane verificationPane = new ResumeVerificationPane();
 
     private final ProgressBar bar = new ProgressBar(0);
 
@@ -181,6 +182,12 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
 
         meta.getStyleClass().add("gx-task-meta");
         status.getStyleClass().addAll("gx-task-status", "gx-task-metric");
+        Tooltip statusDetails = new Tooltip();
+        statusDetails.textProperty().bind(status.textProperty());
+        statusDetails.setWrapText(true);
+        statusDetails.setMaxWidth(520);
+        statusDetails.setShowDelay(Duration.millis(300));
+        status.setTooltip(statusDetails);
         speed.getStyleClass().addAll("gx-task-status", "gx-task-metric");
         eta.getStyleClass().addAll("gx-task-status", "gx-task-metric");
         sizeLabel.getStyleClass().addAll("gx-task-status", "gx-task-metric");
@@ -278,12 +285,14 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         eta.setTextOverrun(OverrunStyle.CLIP);
 
         footerRow.getChildren().setAll(status, speedDot, speed, footerSpacer, sizeLabel, eta);
+        footerRow.visibleProperty().bind(verificationPane.visibleProperty().not());
+        footerRow.managedProperty().bind(verificationPane.visibleProperty().not());
 
         card.getStyleClass().add("gx-task-card");
         card.setMinWidth(0);
         card.prefWidthProperty().bind(Bindings.max(0, widthProperty().subtract(2)));
         card.maxWidthProperty().bind(Bindings.max(0, widthProperty().subtract(2)));
-        card.getChildren().addAll(headerRow, bar, footerRow);
+        card.getChildren().addAll(headerRow, bar, footerRow, verificationPane);
 
         sectionDivider.getStyleClass().add("gx-download-section-divider");
         sectionDivider.setMaxWidth(Double.MAX_VALUE);
@@ -384,6 +393,7 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         speed.textProperty().bind(item.speed);
         eta.textProperty().bind(item.eta.map(DownloadEtaFormatter::format));
         sizeLabel.textProperty().bind(item.size);
+        verificationPane.bind(item);
         bindSmoothProgress(item);
         meta.setText(item.mode + " • " + item.quality + " • " + item.folder);
 
@@ -487,7 +497,7 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         showButton(openLinkBtn, false);
         showButton(retryBtn, false);
         showButton(folderBtn, true);
-        folderBtn.setDisable(true);
+        folderBtn.setDisable(DownloadRowActions.activeDownloadFolder(getItem()) == null);
 
         if (isDownloading) {
             showButton(pauseBtn, true);
@@ -899,6 +909,7 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
     }
 
     private void unbindRowProperties() {
+        verificationPane.unbind();
         try {
             title.textProperty().unbind();
         } catch (Exception ignored) {

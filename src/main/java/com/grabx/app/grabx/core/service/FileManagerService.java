@@ -63,6 +63,10 @@ public final class FileManagerService {
         }
 
         try {
+            if (Files.isDirectory(normalized)) {
+                openFolder(normalized);
+                return;
+            }
             if (isMac()) {
                 commandLauncher.launch(List.of("open", "-R", normalized.toString()));
             } else if (isWindows()) {

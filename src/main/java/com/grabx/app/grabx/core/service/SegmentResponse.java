@@ -14,6 +14,6 @@ final class SegmentResponse {
                     && Long.parseLong(match.group(2)) <= end
                     && Long.parseLong(match.group(3)) == total) return Long.parseLong(match.group(2));
         } catch (NumberFormatException ignored) {}
-        throw new IOException("Server returned a different file range; downloaded parts kept");
+        throw new DirectRemoteProbe.NeedsAction("Server returned a different file range");
     }
 }

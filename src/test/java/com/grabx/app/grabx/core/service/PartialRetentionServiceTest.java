@@ -9,10 +9,10 @@ import java.util.HashMap;
 import static org.junit.jupiter.api.Assertions.*;
 class PartialRetentionServiceTest {
     @TempDir Path directory;
-    @Test void expiresPausedPartsButKeepsActiveDownloadsAndCompletedFiles() throws Exception {
+    @Test void preservesPausedPartsAlongsideActiveDownloadsAndCompletedFiles() throws Exception {
         var items = FXCollections.<DownloadRow>observableArrayList();
         for (var state : new DownloadRow.State[]{DownloadRow.State.PAUSED, DownloadRow.State.DOWNLOADING,
-                DownloadRow.State.COMPLETED}) {
+                DownloadRow.State.COMPLETED, DownloadRow.State.FAILED}) {
             var row = new DownloadRow("url", state.name(), 1, directory.toString(), "Direct", "Auto");
             row.outputFile.set(directory.resolve(state.name()));
             row.setState(state);
@@ -24,10 +24,13 @@ class PartialRetentionServiceTest {
         var service = new PartialRetentionService(items, new HashMap<>(), row -> fail("No active process"),
                 () -> 7, () -> {});
         service.sweep();
-        assertFalse(DirectPartialFiles.hasParts(items.get(0).outputFile.get()));
-        assertEquals(DownloadRow.State.CANCELLED, items.get(0).getState());
+        assertTrue(DirectPartialFiles.hasParts(items.get(0).outputFile.get()));
+        assertEquals(DownloadRow.State.PAUSED, items.get(0).getState());
         assertTrue(DirectPartialFiles.hasParts(items.get(1).outputFile.get()));
         assertTrue(DirectPartialFiles.hasParts(items.get(2).outputFile.get()));
-        for (var row : items) assertEquals("final file", Files.readString(row.outputFile.get()));
+        for (var row : items) {
+            assertEquals("final file", Files.readString(row.outputFile.get()));
+            assertTrue(DirectPartialFiles.hasParts(row.outputFile.get()));
+        }
     }
 }

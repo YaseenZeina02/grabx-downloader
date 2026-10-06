@@ -12,6 +12,30 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class PlaylistBatchCoordinatorTest {
     @Test
+    void submitsAllSelectedRowsAndTerminalCallbacksNeverResubmitTheNextItem() {
+        var callbacks = new PlaylistBatchService.Callbacks();
+        var created = new ArrayList<DownloadRow>(); var starts = new ArrayList<DownloadRow>();
+        callbacks.youtubeWatchUrl = id -> "https://example.test/" + id;
+        callbacks.addPendingRow = (url, mode, quality, title) -> {
+            var row = new DownloadRow(url, title, created.size(), "/tmp", mode, quality); created.add(row); return row;
+        };
+        callbacks.startDownloadRow = starts::add;
+        var batches = new PlaylistBatchService(callbacks);
+        var a = new PlaylistEntry(1,"a","First",null,true);
+        var b = new PlaylistEntry(2,"b","Second",null,true);
+        b.setQuality("720p");
+        batches.enqueue(List.of(a,b),"Video","Best");
+        assertEquals(created,starts); assertEquals(2,starts.size());
+        var c = new PlaylistEntry(3,"c","Audio",null,true);
+        c.setQuality("");
+        batches.enqueue(List.of(c),"Audio only","mp3");
+        assertEquals("Video",starts.get(1).mode); assertEquals("720p",starts.get(1).quality);
+        assertEquals("Audio only",starts.get(2).mode); assertEquals("mp3",starts.get(2).quality);
+        starts.get(0).setState(DownloadRow.State.FAILED); starts.get(0).setState(DownloadRow.State.COMPLETED);
+        assertEquals(3,starts.size(), "Terminal callbacks must not restart playlist items");
+    }
+
+    @Test
     void createsPendingRowAndStartsTheSameRow() {
         List<String> events = new ArrayList<>();
         List<DownloadRow> rows = new ArrayList<>();

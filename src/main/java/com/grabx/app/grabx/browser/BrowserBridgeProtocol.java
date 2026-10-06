@@ -61,13 +61,16 @@ public final class BrowserBridgeProtocol {
                 }
             }
         }
+        String userAgent = capture.userAgent();
+        if (userAgent != null && (userAgent.length() > 1024 || userAgent.chars().anyMatch(Character::isISOControl)))
+            throw new ProtocolException("Invalid browser User-Agent");
         return new BrowserCapture(
                 capture.protocolVersion(), "capture", capture.requestId(), pageUrl, mediaUrl,
                 limit(capture.title(), 500), limit(capture.mimeType(), 160), kind, action,
                 limit(capture.suggestedFilename(), 255), limit(capture.suggestedFolder(), 4096),
                 capture.browserDestinationResolved(),
                 capture.createdAt() > 0 ? capture.createdAt() : System.currentTimeMillis(),
-                qualities, java.util.List.copyOf(sizes.values())
+                qualities, java.util.List.copyOf(sizes.values()), userAgent
         );
     }
 

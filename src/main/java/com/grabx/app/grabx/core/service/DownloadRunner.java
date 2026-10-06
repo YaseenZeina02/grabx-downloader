@@ -32,6 +32,8 @@ public final class DownloadRunner {
     private static final int MAX_DIRECT_SEGMENTS = 16;
     private static final long TARGET_SEGMENT_BYTES = 8L * 1024 * 1024;
     private static final long MIN_SEGMENTED_BYTES = 4L * 1024 * 1024;
+    private static final Object DIRECT_OUTPUT_LOCK = new Object();
+    private static final java.util.Set<Path> DIRECT_OUTPUTS = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     @FunctionalInterface
     public interface OutputFilenameProbe {
@@ -65,6 +67,38 @@ public final class DownloadRunner {
     private final Function<String, String> normalizeSpeedUnit;
     private final ProgressApplier applyProgressMonotonic;
     private final Consumer<Process> killProcessTree;
+
+    private final java.util.Set<DownloadRow> workerRows = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private Runnable onWorkerReleased = () -> {};
+
+    public void onWorkerReleased(Runnable callback) { onWorkerReleased = callback; }
+
+    public boolean canStart(DownloadRow row, boolean resume) {
+        Process process = activeProcesses.get(row);
+        if (resume && process instanceof DirectTransferProcess direct && direct.isAlive()
+                && direct.pauseGate.isPaused() && !stopReasons.containsKey(row)) return true;
+        return !workerRows.contains(row);
+    }
+
+    public boolean occupiesSlot(DownloadRow row) {
+        Process process = activeProcesses.get(row);
+        if (process instanceof DirectTransferProcess direct && direct.isAlive() && direct.pauseGate.isPaused()) return false;
+        return workerRows.contains(row);
+    }
+
+    private void releaseWorker(DownloadRow row) {
+        // Post after all completion/stop UI callbacks, preventing a stale callback
+        // from overwriting a newly admitted run of the same row.
+        Platform.runLater(() -> { workerRows.remove(row); onWorkerReleased.run(); });
+    }
+
+    private final BandwidthLimiter bandwidth = new BandwidthLimiter();
+    private volatile long mediaRate;
+
+    public void configureTransferLimits(long directTotal, long mediaPerTask) {
+        bandwidth.setBytesPerSecond(directTotal);
+        mediaRate = mediaPerTask;
+    }
 
     private final String modeAudio;
     private final String qualityBest;
@@ -130,7 +164,15 @@ public final class DownloadRunner {
             return;
         }
 
+        if (!workerRows.add(row)) return;
         stopReasons.remove(row);
+
+        if ("Direct".equalsIgnoreCase(row.mode)) {
+            row.setState(DownloadRow.State.DOWNLOADING);
+            row.status.set("Checking server");
+            startDirect(row, resume);
+            return;
+        }
 
         // UI immediately: preparing (indeterminate)
         Platform.runLater(() -> {
@@ -142,11 +184,6 @@ public final class DownloadRunner {
             row.progress.set(-1); // indeterminate while yt-dlp is preparing
 
         });
-
-        if ("Direct".equalsIgnoreCase(row.mode)) {
-            startDirect(row, resume);
-            return;
-        }
 
         final String url = row.url;
         final String folder = row.folder;
@@ -354,7 +391,7 @@ public final class DownloadRunner {
                 int attemptCode;
                 String attemptReason;
                 while (true) {
-                    ProcessBuilder pb = new ProcessBuilder(cmd);
+                    ProcessBuilder pb = new ProcessBuilder(TransferPreferences.mediaCommand(cmd, mediaRate));
                     pb.redirectErrorStream(true);
                     pb.environment().putIfAbsent("PYTHONIOENCODING", "utf-8");
 
@@ -807,6 +844,7 @@ public final class DownloadRunner {
                 });
             } finally {
                 if (mediaInput != null) mediaInput.close();
+                releaseWorker(row);
             }
         }, "yt-dlp-download");
         downloadThread.setDaemon(true);
@@ -815,257 +853,330 @@ public final class DownloadRunner {
     }
 
     private void startDirect(DownloadRow row, boolean resume) {
-        startDirect(row, resume, 0);
-    }
-
-    private void startDirect(DownloadRow row, boolean resume, int reconnectAttempt) {
         DirectTransferProcess transfer = new DirectTransferProcess();
         activeProcesses.put(row, transfer);
-        Thread downloadThread = new Thread(() -> {
-            HttpURLConnection connection = null;
+        Thread worker = new Thread(() -> {
+            Path output = null;
+            boolean reserved = false;
             try {
                 Path directory = Path.of(row.folder).toAbsolutePath().normalize();
                 Files.createDirectories(directory);
                 boolean continuing = resume || hasDirectPartial(row);
-                Path provisionalOutput = directOutputPath(row, directory, continuing);
-                DirectPartialFiles.hideLegacyParts(provisionalOutput);
-                Path provisionalPartial = DirectPartialFiles.part(provisionalOutput, -1);
-                long existing = continuing && Files.isRegularFile(provisionalPartial)
-                        ? Files.size(provisionalPartial) : 0;
-
-                Platform.runLater(() -> {
-                    row.setState(DownloadRow.State.PENDING);
-                    row.status.set("Connecting");
+                synchronized (DIRECT_OUTPUT_LOCK) {
+                    output = directOutputPath(row, directory, continuing);
+                    if (!DIRECT_OUTPUTS.add(output)) throw new DirectRemoteProbe.NeedsAction("Another task is using this partial file");
+                    reserved = true;
+                }
+                DirectPartialFiles.hideLegacyParts(output);
+                boolean durable = DirectDownloadState.load(row, output);
+                if (!durable && DirectDownloadState.hasSegments(output)) {
+                    row.resumeTotal = row.totalBytes.get();
+                    if (row.resumeTotal <= 0) throw new DirectRemoteProbe.NeedsAction("Original segment layout is unavailable");
+                    row.resumeSegments = directSegmentCount(row.resumeTotal);
+                }
+                final Path chosenOutput = output;
+                final long initialSaved = DirectDownloadState.downloaded(output);
+                directUiAndWait(() -> {
+                    row.outputFile.set(chosenOutput);
+                    if (row.resumeTotal >= 0) row.totalBytes.set(row.resumeTotal);
+                    row.downloadedBytes.set(initialSaved);
+                    row.progress.set(row.totalBytes.get() > 0 ? (double) initialSaved / row.totalBytes.get() : 0);
+                    row.size.set(com.grabx.app.grabx.util.DownloadRuntimeUtils.formatTransferSize(initialSaved, row.totalBytes.get()));
+                    saveHistory();
                 });
-
-                int status;
-                for (int attempt = 0; ; attempt++) {
-                if (stopReasons.get(row) != null) throw new InterruptedException("Transfer stopped");
-                connection = (HttpURLConnection) new URL(row.url).openConnection();
-                HttpURLConnection openingConnection = connection;
-                transfer.attach(openingConnection::disconnect, null);
-                connection.setInstanceFollowRedirects(true);
-                connection.setConnectTimeout(20_000);
-                connection.setReadTimeout(120_000);
-                connection.setRequestProperty("User-Agent",
-                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/121 Safari/537.36");
-                connection.setRequestProperty("Accept", "*/*");
-                connection.setRequestProperty("Accept-Encoding", "identity");
-                com.grabx.app.grabx.util.RequestReferer.apply(connection, row.getReferer());
-                if (existing > 0) connection.setRequestProperty("Range", "bytes=" + existing + "-");
-                if (row.resumeEtag != null) connection.setRequestProperty("If-Match", row.resumeEtag);
-
-                status = connection.getResponseCode();
-                if (status >= 200 && status < 300 && row.resumeEtag != null
-                        && !row.resumeEtag.equals(connection.getHeaderField("ETag")))
-                    throw new java.io.IOException("File version changed; saved parts kept. Update the download link again");
-                if (isTemporaryHttpFailure(status)) {
-                    SegmentServerBusy busy = new SegmentServerBusy(status, connection.getHeaderField("Retry-After"));
-                    connection.disconnect();
-                    connection = null;
-                    if (attempt >= 3) throw busy;
-                    long delay = segmentRetryDelay(status, attempt, busy.retryAfterMillis);
-                    long started = System.nanoTime();
-                    long lastSecond = -1;
-                    while (java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < delay) {
-                        if (stopReasons.get(row) != null) throw new InterruptedException("Transfer stopped");
-                        long remaining = Math.max(1, (delay - java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) + 999) / 1000);
-                        if (remaining != lastSecond) {
-                            lastSecond = remaining;
-                            final int httpStatus = status;
-                            Platform.runLater(() -> {
-                                if (row.getState() == DownloadRow.State.PENDING)
-                                    row.status.set("Server " + httpStatus + " • retry in " + remaining + "s");
-                            });
-                        }
-                        Thread.sleep(100);
-                    }
-                    continue;
-                }
-                if (status < 200 || status >= 300) {
-                    throw new java.io.IOException("HTTP " + status + " " + connection.getResponseMessage());
-                }
-                break;
-                }
-                String responseFilename = selectDirectFilename(
-                        connection.getHeaderField("Content-Disposition"), connection.getContentType(),
-                        provisionalOutput.getFileName().toString(), row.url);
-                Path output = !continuing && !responseFilename.isBlank()
-                        ? uniqueDirectOutput(directory, responseFilename)
-                        : provisionalOutput;
-                Path partial = DirectPartialFiles.part(output, -1);
-                final Path selectedOutput = output;
-                final String selectedFilename = output.getFileName().toString();
-                Platform.runLater(() -> {
-                    row.outputFile.set(selectedOutput);
-                    row.title.set(selectedFilename);
-                    row.titleLocked.set(true);
-                });
-                boolean verifyPrefix = existing > 0 && status == HttpURLConnection.HTTP_OK;
-                if (!verifyPrefix) validateResumeResponse(existing, status, connection.getHeaderField("Content-Range"));
-                boolean append = existing > 0;
-                long responseLength = connection.getContentLengthLong();
-                long detectedTotal = DirectSizeProbe.sizeFromHeaders(status, responseLength,
-                        connection.getHeaderField("Content-Range"));
-                // Never hold an already-open download while another request probes size.
-                var sizeProbe = detectedTotal < 0
-                        ? DirectSizeProbe.probeAsync(connection.getURL(), connection.getHeaderField("ETag"), row.getReferer())
-                        : java.util.concurrent.CompletableFuture.completedFuture(detectedTotal);
-                final long total = detectedTotal;
-                boolean supportsRanges = "bytes".equalsIgnoreCase(
-                        connection.getHeaderField("Accept-Ranges"));
-                if (existing == 0 && total >= MIN_SEGMENTED_BYTES
-                        && (supportsRanges || Files.exists(segmentPart(output, 0)))) {
-                    connection.disconnect();
-                    connection = null;
-                    activeProcesses.put(row, transfer);
-                    int segments = directSegmentCount(total);
-                    Platform.runLater(() -> {
-                        row.setState(DownloadRow.State.DOWNLOADING);
-                        row.status.set("Downloading • " + Math.min(4, segments) + " connections");
-                        row.totalBytes.set(total);
-                    });
-                    long finalSize = downloadSegmented(row, output, total, segments, transfer);
-                    String reason = stopReasons.get(row);
-                    if (reason == null || reason.isBlank()) {
-                        completeDirect(row, output, finalSize);
-                    } else {
-                        if ("CANCEL".equals(reason)) cleanupSegmentParts(output, segments);
-                        finishStoppedDirect(row, reason, null);
-                    }
-                    transfer.complete(0);
-                    return;
-                }
-                InputStream input = connection.getInputStream();
-                transfer.attach(input, downloadThread());
-                activeProcesses.put(row, transfer);
-
-                final long initialBytes = existing;
-                final long totalBytes = total;
-                Platform.runLater(() -> {
-                    row.setState(DownloadRow.State.DOWNLOADING);
-                    row.status.set(totalBytes > 0 ? "Downloading" : "Downloading • total size unknown");
-                    row.downloadedBytes.set(initialBytes);
-                    row.totalBytes.set(totalBytes);
-                    row.progress.set(totalBytes > 0 ? (double) initialBytes / totalBytes : -1);
-                });
-
-                if (verifyPrefix) {
-                    Platform.runLater(() -> {
-                        row.size.set(com.grabx.app.grabx.util.DownloadRuntimeUtils.formatTransferSize(initialBytes, totalBytes));
-                        row.status.set("Verifying saved data before resuming");
-                    });
-                    long[] lastUpdate = {System.nanoTime()};
+                int attempt = 0;
+                boolean refreshed = false;
+                while (true) {
+                    HttpURLConnection connection = null;
                     try {
-                        DirectResumeVerifier.verify(input, partial, existing, transfer::awaitRunning, checked -> {
-                            long now = System.nanoTime();
-                            if (now - lastUpdate[0] < 400_000_000L) return;
-                            lastUpdate[0] = now;
-                            Platform.runLater(() -> {
-                                if (row.getState() == DownloadRow.State.DOWNLOADING)
-                                    row.status.set("Verifying saved data • " + (checked * 100 / initialBytes) + "%");
+                        transfer.awaitRunning();
+                        if (stopReasons.get(row) != null) throw new InterruptedException("Transfer stopped");
+                        directStatus(row, attempt == 0 ? "Checking server" : "Reconnecting • checking download URL");
+                        var remote = DirectRemoteProbe.probe(row.url, row.getReferer(), row.requestUserAgent, c -> transfer.attach(c::disconnect, null));
+                        row.resumeSupport = remote.support();
+                        long saved = DirectDownloadState.downloaded(output);
+                        // Without a saved validator, a single contiguous part can only be
+                        // resumed by comparing its entire prefix within the payload response.
+                        boolean verifyPrefix = saved > 0 && durable && row.resumeSegments == 0
+                                && DirectRemoteProbe.validator(row) == null;
+                        if (!continuing && !durable && saved == 0) {
+                            String name = selectDirectFilename(remote.disposition(), remote.contentType(), output.getFileName().toString(), row.url);
+                            if (!name.equals(output.getFileName().toString())) {
+                                synchronized (DIRECT_OUTPUT_LOCK) {
+                                    Path selected = uniqueDirectOutput(directory, name);
+                                    DIRECT_OUTPUTS.add(selected);
+                                    DIRECT_OUTPUTS.remove(output);
+                                    output = selected;
+                                }
+                            }
+                            final Path selected = output;
+                            directUiAndWait(() -> {
+                                row.outputFile.set(selected); row.title.set(selected.getFileName().toString());
+                                row.titleLocked.set(true); saveHistory();
                             });
-                        });
-                    } catch (Exception error) {
-                        try { input.close(); } catch (Exception ignored) {}
-                        throw error;
-                    }
-                    Platform.runLater(() -> {
-                        if (row.getState() == DownloadRow.State.DOWNLOADING) row.status.set("Downloading");
-                    });
-                }
-
-                long downloaded = existing;
-                long windowStarted = System.nanoTime();
-                TransferSpeedMeter speedMeter = new TransferSpeedMeter(downloaded, windowStarted);
-                byte[] buffer = new byte[128 * 1024];
-                try (InputStream in = input;
-                     OutputStream out = Files.newOutputStream(partial,
-                             StandardOpenOption.CREATE, StandardOpenOption.WRITE,
-                             append ? StandardOpenOption.APPEND : StandardOpenOption.TRUNCATE_EXISTING)) {
-                    int read;
-                    while (true) {
-                        transfer.awaitRunning();
-                        read = in.read(buffer);
-                        if (read < 0) break;
-                        transfer.awaitRunning();
-                        String reason = stopReasons.get(row);
-                        if ("PAUSE".equals(reason) || "CANCEL".equals(reason) || "RETRY".equals(reason)) break;
-                        if (read == 0) continue;
-                        out.write(buffer, 0, read);
-                        downloaded += read;
-
-                        long now = System.nanoTime();
-                        if (now - windowStarted >= 400_000_000L) {
-                            long bytesPerSecond = speedMeter.sample(downloaded, now);
-                            long discoveredTotal = total > 0 ? total : sizeProbe.getNow(-1L);
-                            // A fallback probe is advisory; never show an impossible percentage.
-                            if (discoveredTotal < downloaded) discoveredTotal = -1;
-                            updateDirectProgress(row, downloaded, discoveredTotal, bytesPerSecond);
-                            windowStarted = now;
                         }
+                        if (saved > 0) {
+                            directStatus(row, "Verifying remote file");
+                            if (!durable) {
+                                // Legacy parts have no trustworthy saved identity. Compare them once before adopting metadata.
+                                var verified = DownloadLinkVerifier.verify(row.url, row.getReferer(), output,
+                                        row.resumeTotal > 0 ? row.resumeTotal : row.totalBytes.get(),
+                                        row.resumeSegments, row.requestUserAgent);
+                                row.resumeEtag = verified.etag();
+                                row.resumeTotal = verified.total();
+                            }
+                            if (verifyPrefix) {
+                                if (row.resumeTotal >= 0 && remote.total() >= 0 && row.resumeTotal != remote.total())
+                                    throw new DirectRemoteProbe.NeedsAction("Remote file size changed");
+                            } else {
+                                DirectRemoteProbe.verify(row, remote);
+                            }
+                        } else if (!durable) {
+                            row.resumeEtag = remote.etag();
+                            row.resumeLastModified = remote.modified();
+                            row.resumeTotal = remote.total();
+                            // Parallel transfers require a stable validator and a successful actual range probe.
+                            row.resumeSegments = remote.total() >= MIN_SEGMENTED_BYTES
+                                    && "Yes".equals(remote.support()) && DirectRemoteProbe.strong(remote.etag())
+                                    ? directSegmentCount(remote.total()) : 0;
+                        } else {
+                            // Layout and identity cannot change under previously created segment files.
+                            if (row.resumeSegments > 0) DirectRemoteProbe.verify(row, remote);
+                            else if (saved == 0) {
+                                row.resumeEtag = remote.etag(); row.resumeLastModified = remote.modified();
+                                row.resumeTotal = remote.total();
+                            }
+                        }
+                        row.finalUrl = remote.finalUrl();
+                        row.resumeSupport = remote.support();
+                        final long total = row.resumeTotal;
+                        DirectDownloadState.save(row, output); // Must succeed before any payload is written.
+                        durable = true;
+                        directUiAndWait(() -> {
+                            if (row.getState() != DownloadRow.State.PAUSED) row.setState(DownloadRow.State.DOWNLOADING);
+                            row.totalBytes.set(total);
+                            row.downloadedBytes.set(saved);
+                            row.progress.set(total > 0 ? (double) saved / total : -1);
+                            row.size.set(com.grabx.app.grabx.util.DownloadRuntimeUtils.formatTransferSize(saved, total));
+                            if (row.getState() != DownloadRow.State.PAUSED)
+                                row.status.set((saved > 0 ? "Resuming" : "Downloading") + " • Resume support: " + row.resumeSupport);
+                            saveHistory();
+                        });
+                        transfer.awaitRunning();
+                        if (row.resumeSegments > 0) {
+                            long size = downloadSegmented(row, output, total, row.resumeSegments, transfer);
+                            if (stopReasons.get(row) != null) throw new InterruptedException("Transfer stopped");
+                            completeDirect(row, output, size);
+                            break;
+                        }
+                        Path partial = DirectPartialFiles.part(output, -1);
+                        long existing = Files.isRegularFile(partial) ? Files.size(partial) : 0;
+                        if (total >= 0 && existing > total) throw new DirectRemoteProbe.NeedsAction("Saved data exceeds remote size");
+                        // A verified complete local prefix needs no further range request (including the 416 boundary).
+                        if (!verifyPrefix && existing == total && (existing > 0 || total == 0)) {
+                            if (!Files.exists(partial)) Files.createFile(partial);
+                            Files.move(partial, output); // Never overwrite an unrelated completed file.
+                            completeDirect(row, output, total);
+                            break;
+                        }
+                        boolean requestRange = !verifyPrefix && "Yes".equals(row.resumeSupport) && total >= 0;
+                        connection = openRangeConnection(row.finalUrl == null ? row.url : row.finalUrl,
+                                requestRange ? existing : -1, Math.max(existing, total - 1), row.getReferer());
+                        if (row.requestUserAgent != null && !row.requestUserAgent.isBlank()) connection.setRequestProperty("User-Agent", row.requestUserAgent);
+                        DirectRemoteProbe.conditional(connection, row, requestRange);
+                        HttpURLConnection opened = connection;
+                        transfer.attach(opened::disconnect, null);
+                        DirectRemoteProbe.validateIdentity(connection, row);
+                        int status = connection.getResponseCode();
+                        if (verifyPrefix && status != 200)
+                            throw new DirectRemoteProbe.NeedsAction("Expected a full response to verify saved data");
+                        if (!verifyPrefix && existing > 0 && status != 206) {
+                            row.resumeSupport = "No";
+                            DirectDownloadState.save(row, output);
+                            throw new DirectRemoteProbe.NeedsAction("Server does not support resume or the file changed (HTTP " + status + ")");
+                        }
+                        long expected = connection.getContentLengthLong();
+                        if (status == 206) {
+                            long last = SegmentResponse.validate(connection.getHeaderField("Content-Range"), existing, total - 1, total);
+                            long length = last - existing + 1;
+                            if (expected >= 0 && expected != length) throw new DirectRemoteProbe.NeedsAction("Invalid range response length");
+                            expected = length;
+                        } else if (total >= 0 && expected >= 0 && expected != total) {
+                            throw new DirectRemoteProbe.NeedsAction("Remote file size changed");
+                        }
+                        if (expected < 0 && total >= 0) expected = verifyPrefix ? total : total - existing;
+                        if (verifyPrefix && expected >= 0 && expected < existing)
+                            throw new DirectRemoteProbe.NeedsAction("Remote file is shorter than saved data");
+                        long downloaded = existing;
+                        long received = 0;
+                        long updated = System.nanoTime();
+                        TransferSpeedMeter meter = new TransferSpeedMeter(downloaded, updated);
+                        try (InputStream in = bandwidth.wrap(connection.getInputStream(), () -> {
+                            transfer.awaitRunning();
+                            if (stopReasons.get(row) != null) throw new InterruptedException("Transfer stopped");
+                        })) {
+                            if (verifyPrefix) {
+                                long verificationStarted = System.nanoTime();
+                                LOG.info("Direct resume verification started: savedBytes=" + existing);
+                                updateVerificationProgress(row, 0, existing, 0);
+                                TransferSpeedMeter verificationSpeed = new TransferSpeedMeter(0, verificationStarted);
+                                long[] lastUpdate = {verificationStarted};
+                                long[] resumeRevision = {transfer.resumeRevision};
+                                DirectResumeVerifier.verify(in, partial, existing, () -> {
+                                    transfer.awaitRunning();
+                                    if (stopReasons.get(row) != null) throw new InterruptedException("Transfer stopped");
+                                }, checked -> {
+                                    long now = System.nanoTime();
+                                    if (resumeRevision[0] != transfer.resumeRevision) {
+                                        verificationSpeed.reset(checked, now);
+                                        resumeRevision[0] = transfer.resumeRevision;
+                                        lastUpdate[0] = 0;
+                                    }
+                                    if (now - lastUpdate[0] >= 400_000_000L) {
+                                        updateVerificationProgress(row, checked, existing, verificationSpeed.sample(checked, now));
+                                        lastUpdate[0] = now;
+                                    }
+                                });
+                                if (expected >= 0) expected -= existing;
+                                LOG.info("Direct resume verification completed: verifiedBytes=" + existing
+                                        + ", elapsedMs=" + (System.nanoTime() - verificationStarted) / 1_000_000);
+                                directUiAndWait(() -> {
+                                    if (row.getState() != DownloadRow.State.DOWNLOADING) return;
+                                    row.status.set("Resuming • saved data verified");
+                                    row.speed.set(""); row.eta.set("");
+                                });
+                                updated = System.nanoTime();
+                                meter = new TransferSpeedMeter(downloaded, updated);
+                            }
+                            // Open for append only after verification; keep consuming the same
+                            // response, so a later unvalidated request cannot switch file versions.
+                            try (OutputStream out = Files.newOutputStream(partial, StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
+                                byte[] buffer = new byte[128 * 1024];
+                                while (expected < 0 || received < expected) {
+                                    transfer.awaitRunning();
+                                    if (stopReasons.get(row) != null) throw new InterruptedException("Transfer stopped");
+                                    int count = in.read(buffer, 0, expected < 0 ? buffer.length : (int) Math.min(buffer.length, expected - received));
+                                    if (count < 0) break;
+                                    transfer.awaitRunning();
+                                    out.write(buffer, 0, count);
+                                    downloaded += count; received += count;
+                                    long now = System.nanoTime();
+                                    if (now - updated >= 400_000_000L) {
+                                        updateDirectProgress(row, downloaded, total, meter.sample(downloaded, now));
+                                        updated = now;
+                                    }
+                                }
+                            }
+                        }
+                        if (stopReasons.get(row) != null) throw new InterruptedException("Transfer stopped");
+                        if ((expected >= 0 && received < expected) || (total >= 0 && downloaded < total))
+                            throw new java.io.EOFException("Connection ended before the file completed");
+                        if (total >= 0 && downloaded != total) throw new DirectRemoteProbe.NeedsAction("Unexpected file length");
+                        Files.move(partial, output);
+                        completeDirect(row, output, downloaded);
+                        break;
+                    } catch (Exception error) {
+                        Throwable cause = rootCause(error);
+                        if (stopReasons.get(row) != null || cause instanceof InterruptedException) throw error;
+                        if (cause instanceof DirectRemoteProbe.HttpFailure http
+                                && (http.status == 401 || http.status == 403 || http.status == 404 || http.status == 410)
+                                && !refreshed && linkResolvers.hasResolver(row.originalUrl)) {
+                            refreshed = true;
+                            directStatus(row, "Refreshing download link");
+                            try { linkResolvers.refresh(row, output); }
+                            catch (Exception refreshError) {
+                                throw new DirectRemoteProbe.NeedsAction("Download link could not be refreshed or verified; update it manually");
+                            }
+                            durable = true;
+                            continue;
+                        }
+                        if (!(isNetworkInterruption(cause) || cause instanceof SegmentServerBusy)) throw error;
+                        long saved = DirectDownloadState.downloaded(output);
+                        int status = cause instanceof SegmentServerBusy busy ? busy.status : 0;
+                        long requested = cause instanceof SegmentServerBusy busy ? busy.retryAfterMillis : 0;
+                        long delay = Math.max(Math.min(60_000, (status == 429 ? 30_000L : 2_000L) << Math.min(attempt++, 5)), requested);
+                        LOG.info("Direct recovery: " + cause.getClass().getSimpleName() + ", HTTP=" + status
+                                + ", savedBytes=" + saved + ", retryMs=" + delay);
+                        final long savedBytes = saved;
+                        directUiAndWait(() -> {
+                            row.downloadedBytes.set(savedBytes);
+                            if (row.resumeTotal > 0) row.progress.set((double) savedBytes / row.resumeTotal);
+                            row.size.set(com.grabx.app.grabx.util.DownloadRuntimeUtils.formatTransferSize(savedBytes, row.resumeTotal));
+                            row.speed.set(""); row.eta.set(""); saveHistory();
+                        });
+                        // Keep the same process registered during backoff: pause/resume/cancel cannot race a detached retry.
+                        if (connection != null) { connection.disconnect(); connection = null; }
+                        transfer.closeConnections();
+                        long remaining = delay;
+                        while (remaining > 0) {
+                            transfer.awaitRunning();
+                            if (stopReasons.get(row) != null) throw new InterruptedException("Transfer stopped");
+                            directStatus(row, (status == 0 ? "Waiting for network" : "Retrying • server " + status)
+                                    + " • retry in " + ((remaining + 999) / 1000) + "s");
+                            long slice = Math.min(1000, remaining);
+                            Thread.sleep(slice); remaining -= slice;
+                        }
+                    } finally {
+                        if (connection != null) connection.disconnect();
+                        transfer.closeConnections();
                     }
-                }
-
-                String reason = stopReasons.get(row);
-                if (reason == null || reason.isBlank()) {
-                    if (total > 0 && downloaded < total) {
-                        throw new java.io.EOFException(
-                                "Connection closed after " + downloaded + " of " + total + " bytes");
-                    }
-                    Files.move(partial, output, StandardCopyOption.REPLACE_EXISTING);
-                    long finalSize = Files.size(output);
-                    completeDirect(row, output, finalSize);
-                } else {
-                    finishStoppedDirect(row, reason, partial);
                 }
                 transfer.complete(0);
-            } catch (Exception exception) {
+            } catch (Exception error) {
+                if (output != null) {
+                    try {
+                        long saved = DirectDownloadState.downloaded(output);
+                        Platform.runLater(() -> {
+                            row.downloadedBytes.set(saved);
+                            if (row.resumeTotal > 0) row.progress.set((double) saved / row.resumeTotal);
+                            row.size.set(com.grabx.app.grabx.util.DownloadRuntimeUtils.formatTransferSize(saved, row.resumeTotal));
+                        });
+                    } catch (java.io.IOException ignored) { /* Preserve the last known checkpoint. */ }
+                }
                 String reason = stopReasons.get(row);
-                if (reason == null && transfer.pauseGate.isPaused()) reason = "PAUSE";
-                if (reason != null && !reason.isBlank()) {
-                    finishStoppedDirect(row, reason, null);
-                } else if (isNetworkInterruption(rootCause(exception)) && reconnectAttempt < 3) {
-                    int nextAttempt = reconnectAttempt + 1;
-                    Platform.runLater(() -> {
-                        row.setState(DownloadRow.State.PENDING);
-                        row.status.set("Reconnecting (" + nextAttempt + "/3)");
-                        row.speed.set("");
-                        row.eta.set("");
-                    });
-                    Thread reconnect = new Thread(() -> {
-                        try { Thread.sleep(750L * nextAttempt); } catch (InterruptedException ignored) {
-                            Thread.currentThread().interrupt();
-                            return;
-                        }
-                        if (stopReasons.get(row) == null) startDirect(row, true, nextAttempt);
-                    }, "http-download-reconnect");
-                    reconnect.setDaemon(true);
-                    reconnect.start();
+                if (reason != null || error instanceof InterruptedException) {
+                    finishStoppedDirect(row, reason == null ? "PAUSE" : reason, null);
                 } else {
-                    Throwable cause = rootCause(exception);
-                    boolean rateLimited = cause instanceof SegmentServerBusy busy && busy.status == 429;
-                    boolean offline = isNetworkInterruption(cause);
-                    String message = cause.getMessage();
+                    Throwable cause = rootCause(error);
+                    LOG.warning("Direct download stopped: " + cause.getClass().getSimpleName()
+                            + (cause instanceof DirectRemoteProbe.HttpFailure http ? ", HTTP=" + http.status : ""));
                     Platform.runLater(() -> {
-                        row.setState(rateLimited || offline ? DownloadRow.State.PAUSED : DownloadRow.State.FAILED);
-                        row.status.set(rateLimited ? "Server rate limit • paused, progress saved; resume later"
-                                : offline ? "Connection lost • progress saved; resume when online"
-                                : "Failed: " + shortError(message));
-                        row.speed.set("");
-                        row.eta.set("");
-                        saveHistory();
-                        refreshFilters();
+                        // A rejected link/unsafe resume needs user action, not an ordinary pause.
+                        // FAILED appears in Cancelled without expiring the retained partial files.
+                        row.setState(DownloadRow.State.FAILED);
+                        row.status.set(shortError(cause.getMessage()));
+                        row.speed.set(""); row.eta.set(""); saveHistory(); refreshFilters();
                     });
                 }
                 transfer.complete(1);
             } finally {
-                if (connection != null) connection.disconnect();
+                transfer.closeConnections();
+                if (reserved) DIRECT_OUTPUTS.remove(output);
                 activeProcesses.remove(row, transfer);
+                releaseWorker(row);
             }
         }, "http-download");
-        downloadThread.setDaemon(true);
-        downloadThread.start();
+        transfer.attach(null, worker);
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    private final DownloadLinkResolvers linkResolvers = new DownloadLinkResolvers();
+    public DownloadLinkResolvers linkResolvers() { return linkResolvers; }
+
+    private static void directStatus(DownloadRow row, String text) {
+        Platform.runLater(() -> {
+            if (row.getState() != DownloadRow.State.PAUSED && row.getState() != DownloadRow.State.CANCELLED) {
+                row.status.set(text);
+            }
+        });
+    }
+
+    private static void directUiAndWait(Runnable action) throws InterruptedException {
+        if (Platform.isFxApplicationThread()) { action.run(); return; }
+        var latch = new java.util.concurrent.CountDownLatch(1);
+        Platform.runLater(() -> { try { action.run(); } finally { latch.countDown(); } });
+        latch.await();
     }
 
     private long downloadSegmented(DownloadRow row, Path output, long total, int segmentCount,
@@ -1135,22 +1246,23 @@ public final class DownloadRunner {
             pool.execute(() -> {
                 try {
                     SegmentTransfer.download(part, start, end, total, (offset, last) -> {
-                        HttpURLConnection opened = openRangeConnection(row.url, offset, last, row.getReferer());
-                        if (row.resumeEtag != null) opened.setRequestProperty("If-Match", row.resumeEtag);
+                        HttpURLConnection opened = openRangeConnection(row.finalUrl == null ? row.url : row.finalUrl, offset, last, row.getReferer());
+                        if (row.requestUserAgent != null && !row.requestUserAgent.isBlank()) opened.setRequestProperty("User-Agent", row.requestUserAgent);
+                        DirectRemoteProbe.conditional(opened, row, true);
                         roundConnections.add(opened);
                         transfer.attach(opened::disconnect, Thread.currentThread());
-                        if (row.resumeEtag != null) {
-                            try {
-                                if (opened.getResponseCode() == 206 && !row.resumeEtag.equals(opened.getHeaderField("ETag")))
-                                    throw new java.io.IOException("File version changed; saved parts kept");
-                            } catch (Exception error) { opened.disconnect(); throw error; }
-                        }
+                        try { DirectRemoteProbe.validateIdentity(opened, row); }
+                        catch (Exception error) { opened.disconnect(); throw error; }
                         return opened;
                     }, () -> {
                         transfer.awaitRunning();
                         if (stopReasons.get(row) != null || failure.get() != null)
                             throw new InterruptedException("Transfer stopped");
-                    }, downloaded::addAndGet, roundConnections::remove);
+                    }, downloaded::addAndGet, roundConnections::remove, input -> bandwidth.wrap(input, () -> {
+                        transfer.awaitRunning();
+                        if (stopReasons.get(row) != null || failure.get() != null)
+                            throw new InterruptedException("Transfer stopped");
+                    }));
                 } catch (Throwable throwable) {
                     if (stopReasons.get(row) == null) failure.compareAndSet(null, throwable);
                 } finally {
@@ -1189,11 +1301,19 @@ public final class DownloadRunner {
                 }
             }
             if (Files.size(combined) != total) throw new java.io.EOFException("Combined file is incomplete");
-            Files.move(combined, output, StandardCopyOption.REPLACE_EXISTING);
+            Files.move(combined, output);
             cleanupSegmentParts(output, segmentCount);
             return Files.size(output);
         } finally {
+            roundConnections.forEach(HttpURLConnection::disconnect);
             pool.shutdownNow();
+            // No next attempt may open parts until every writer from this round has stopped.
+            boolean interrupted = Thread.interrupted();
+            while (!pool.isTerminated()) {
+                try { pool.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS); }
+                catch (InterruptedException e) { interrupted = true; }
+            }
+            if (interrupted) Thread.currentThread().interrupt();
         }
     }
 
@@ -1219,7 +1339,7 @@ public final class DownloadRunner {
     }
 
     static boolean isTemporaryHttpFailure(int status) {
-        return status == 429 || status == 502 || status == 503 || status == 504;
+        return status == 408 || status == 429 || (status >= 500 && status <= 599);
     }
 
     static long segmentRetryDelay(int status, int attempt, long retryAfterMillis) {
@@ -1257,13 +1377,12 @@ public final class DownloadRunner {
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         connection.setInstanceFollowRedirects(true);
         connection.setConnectTimeout(20_000);
-        connection.setReadTimeout(30_000);
-        connection.setRequestProperty("User-Agent",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/121 Safari/537.36");
+        connection.setReadTimeout(15_000);
+        connection.setRequestProperty("User-Agent", DirectRemoteProbe.USER_AGENT);
         connection.setRequestProperty("Accept", "*/*");
                 connection.setRequestProperty("Accept-Encoding", "identity");
         com.grabx.app.grabx.util.RequestReferer.apply(connection, referer);
-        connection.setRequestProperty("Range", "bytes=" + start + "-" + end);
+        if (start >= 0) connection.setRequestProperty("Range", "bytes=" + start + "-" + end);
         return connection;
     }
 
@@ -1281,6 +1400,8 @@ public final class DownloadRunner {
             refreshFilters();
         });
     }
+
+    public static int directSegmentCountForLegacy(long total) { return total > 0 ? directSegmentCount(total) : 0; }
 
     static int directSegmentCount(long total) {
         long desired = Math.max(2, (total + TARGET_SEGMENT_BYTES - 1) / TARGET_SEGMENT_BYTES);
@@ -1303,6 +1424,18 @@ public final class DownloadRunner {
         return current;
     }
 
+    private void updateVerificationProgress(DownloadRow row, long checked, long saved, long bytesPerSecond) {
+        String speedText = bytesPerSecond > 0 ? formatBytesDecimal.apply(bytesPerSecond) + "/s" : "";
+        long remaining = Math.max(0, saved - checked);
+        String etaText = bytesPerSecond > 0 ? formatEta((long) Math.ceil((double) remaining / bytesPerSecond)) : "";
+        Platform.runLater(() -> {
+            if (row.getState() != DownloadRow.State.DOWNLOADING) return;
+            row.status.set("Verifying saved data • " + (checked * 100 / saved) + "% • re-reading from server");
+            row.speed.set(speedText);
+            row.eta.set(etaText); // ETA for verification only; saved-byte progress stays unchanged.
+        });
+    }
+
     private void updateDirectProgress(DownloadRow row, long downloaded, long total, long bytesPerSecond) {
         String sizeText = com.grabx.app.grabx.util.DownloadRuntimeUtils.formatTransferSize(downloaded, total);
         String speedText = formatBytesDecimal.apply(bytesPerSecond) + "/s";
@@ -1315,8 +1448,9 @@ public final class DownloadRunner {
             row.size.set(sizeText == null ? "" : sizeText);
             row.speed.set(speedText);
             row.eta.set(etaText);
-            row.status.set(bytesPerSecond <= 0 ? "Waiting for server data"
-                    : total > 0 ? "Downloading" : "Downloading • total size unknown");
+            row.status.set(bytesPerSecond <= 0 ? "Waiting for server • reconnecting if stalled"
+                    : (total > 0 ? "Downloading" : "Downloading • total size unknown")
+                        + " • Resume support: " + row.resumeSupport);
             // Keep unknown-length transfers visibly active until a size is discovered.
             row.progress.set(total > 0 ? Math.min(1, (double) downloaded / total) : -1);
         });
@@ -1373,7 +1507,8 @@ public final class DownloadRunner {
     }
 
     private static boolean directOutputOccupied(Path output) {
-        if (Files.exists(output) || DirectPartialFiles.hasParts(output)) return true;
+        if (DIRECT_OUTPUTS.contains(output) || Files.exists(output) || Files.exists(DirectDownloadState.path(output))
+                || DirectPartialFiles.hasParts(output)) return true;
         String prefix = output.getFileName() + ".grabx.part.";
         try (var entries = Files.newDirectoryStream(output.getParent())) {
             for (Path entry : entries) {
@@ -1470,17 +1605,14 @@ public final class DownloadRunner {
 
     private static String shortError(String value) {
         String text = value == null || value.isBlank() ? "Download failed" : value.strip();
-        return text.length() > 90 ? text.substring(0, 90) + "…" : text;
-    }
-
-    private static Thread downloadThread() {
-        return Thread.currentThread();
+        return text.length() > 1024 ? text.substring(0, 1024) + "…" : text;
     }
 
     private static final class DirectTransferProcess extends Process implements PausableTransfer {
         private final TransferPauseGate pauseGate = new TransferPauseGate();
+        private volatile long resumeRevision;
         @Override public void pauseTransfer() { pauseGate.pause(); }
-        @Override public void resumeTransfer() { pauseGate.resume(); }
+        @Override public void resumeTransfer() { resumeRevision++; pauseGate.resume(); }
         void awaitRunning() throws InterruptedException { pauseGate.awaitRunning(); }
         private final java.util.concurrent.CountDownLatch finished = new java.util.concurrent.CountDownLatch(1);
         private final java.util.concurrent.ConcurrentLinkedQueue<Closeable> streams =
@@ -1492,6 +1624,12 @@ public final class DownloadRunner {
         void attach(Closeable stream, Thread thread) {
             if (stream != null) streams.add(stream);
             if (thread != null) threads.add(thread);
+        }
+
+        void closeConnections() {
+            threads.removeIf(thread -> !thread.isAlive());
+            Closeable stream;
+            while ((stream = streams.poll()) != null) { try { stream.close(); } catch (Exception ignored) {} }
         }
 
         void complete(int code) {

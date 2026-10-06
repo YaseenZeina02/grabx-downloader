@@ -41,6 +41,13 @@ public class DownloadRow {
 
     public volatile String url;
     public volatile String resumeEtag;
+    public volatile String requestUserAgent;
+    public String originalUrl;
+    public volatile String finalUrl;
+    public volatile String resumeLastModified;
+    public volatile String resumeSupport = "Unknown";
+    public volatile int resumeSegments;
+    public volatile long resumeTotal = -1;
     public final String folder;
     public final String mode;
     public final String quality;
@@ -69,6 +76,7 @@ public class DownloadRow {
 
     public DownloadRow(String url, String initialTitle, long orderIndex, String folder, String mode, String quality) {
         this.url = url;
+        this.originalUrl = url;
         this.orderIndex = orderIndex;
         this.folder = folder;
         this.mode = mode;

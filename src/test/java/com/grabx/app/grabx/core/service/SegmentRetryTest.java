@@ -5,7 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class SegmentRetryTest {
     @Test void initialAndSegmentRequestsRecognizeTheSameTemporaryFailures() {
-        for (int status : new int[]{429, 502, 503, 504}) assertTrue(DownloadRunner.isTemporaryHttpFailure(status));
+        for (int status : new int[]{408, 429, 500, 501, 502, 503, 504, 599}) assertTrue(DownloadRunner.isTemporaryHttpFailure(status));
         for (int status : new int[]{200, 206, 401, 403, 404, 416}) assertFalse(DownloadRunner.isTemporaryHttpFailure(status));
     }
 
