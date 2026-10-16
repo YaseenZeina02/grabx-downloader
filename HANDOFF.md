@@ -1,6 +1,29 @@
 # GrabX handoff
 
-Updated: 2026-10-16 after in-app notifications and connection monitoring.
+Updated: 2026-10-16 after fixing audio artwork retry following disk exhaustion.
+
+## Latest outcome: audio retry after disk-full failure (2026-10-16)
+
+- User's audio MP3 first failed with Errno 28, then with Postprocessing: Error
+  opening output files: Invalid argument after freeing space. Read-only inspection
+  found a zero-byte WEBP sidecar beside a 12,323,000-byte MP3, valid JPEG and WEBM.
+  About 2.39 GB was free at inspection. The log did not retain the subprocess error.
+- Reproduced the exact postprocessing error locally with copied media and an empty
+  cover, then with a one-second generated fixture. yt-dlp's --no-overwrites reuses
+  even an empty thumbnail. A valid cover makes the same processing succeed.
+- Audio formats with embedded artwork now use --no-force-overwrites: refresh
+  sidecars but retain existing media and continuation. Other audio/video and direct
+  paths keep their previous behavior. No broad deletion or forced media overwrite.
+- Added AudioArtworkRetryTest: native offline fixture first fails with the old
+  option, then succeeds with the new option, reuses the existing audio and embeds
+  a fresh cover. Source bytes stay unchanged. All 25 focused tests passed (artwork,
+  output naming/cleanup, extractor options and metadata cache), Java 21 installDist
+  succeeded. Full suite not rerun for this narrow option change; no Windows live test.
+- User Desktop/history/preferences untouched; actual application not restarted.
+  User next step: Stop/Run updated GrabX, then Retry. Do not claim their existing
+  task has already been repaired or completed. Native test is entirely local/offline.
+- Proposed next improvements: available-space checks with conversion headroom;
+  clearer messages separating artwork/conversion failure from transfer failure.
 
 ## Latest outcome: notifications (2026-10-16)
 

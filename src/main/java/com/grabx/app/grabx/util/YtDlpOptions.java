@@ -47,6 +47,12 @@ public final class YtDlpOptions {
         return List.of("--format-sort", "res,vcodec:h264,acodec:aac");
     }
 
+    public static String overwriteArgument(boolean embedsAudioArtwork) {
+        // yt-dlp's no-force-overwrites refreshes sidecars, while keeping media and --continue.
+        // no-overwrites would reuse even an empty thumbnail left by a full disk.
+        return embedsAudioArtwork ? "--no-force-overwrites" : "--no-overwrites";
+    }
+
     public static List<String> selectionArguments(String selector) {
         return selector == null || selector.startsWith("bestaudio") || selector.startsWith("ba/")
                 ? List.of() : videoFormatArguments();

@@ -251,8 +251,9 @@ public final class DownloadRunner {
 
                 // Use the same extractor defaults as the format-analysis step.
 
-                // Do NOT overwrite existing files (we will decide the naming strategy below)
-                cmd.add("--no-overwrites");
+                // Keep downloaded media, but refresh audio artwork after interrupted/disk-full attempts.
+                cmd.add(com.grabx.app.grabx.util.YtDlpOptions.overwriteArgument(
+                        audioOnly && supportsAudioThumbnailEmbedding.test(resolvedAudioFormat)));
 
                 // UTF-8 output
                 cmd.add("--encoding");
