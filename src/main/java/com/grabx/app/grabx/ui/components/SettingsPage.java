@@ -3,6 +3,7 @@ package com.grabx.app.grabx.ui.components;
 import com.grabx.app.grabx.core.service.SoundFeedbackService;
 import com.grabx.app.grabx.core.service.TransferPreferences;
 import com.grabx.app.grabx.core.service.TaskPreferences;
+import com.grabx.app.grabx.core.service.NotificationPreferences;
 import javafx.beans.InvalidationListener;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -20,7 +21,13 @@ import java.util.function.Consumer;
 /** A draft-based settings workspace. Navigation never silently commits edits. */
 public final class SettingsPage extends BorderPane {
     public record Values(String folder, boolean rememberFolder, long directRate, long mediaRate,
-                         boolean sounds, double volume, int retentionDays, int maxActive, boolean autoResume) {
+                         boolean sounds, double volume, int retentionDays, int maxActive, boolean autoResume,
+                         NotificationPreferences.Values notifications) {
+        public Values(String folder, boolean rememberFolder, long directRate, long mediaRate,
+                      boolean sounds, double volume, int retentionDays, int maxActive, boolean autoResume) {
+            this(folder, rememberFolder, directRate, mediaRate, sounds, volume, retentionDays, maxActive, autoResume,
+                    NotificationPreferences.Values.defaults());
+        }
         public Values(String folder, boolean rememberFolder, long directRate, long mediaRate,
                       boolean sounds, double volume, int retentionDays, int maxActive) {
             this(folder, rememberFolder, directRate, mediaRate, sounds, volume, retentionDays, maxActive, false);
@@ -41,6 +48,11 @@ public final class SettingsPage extends BorderPane {
     private final TextField days = new TextField();
     private final ComboBox<Integer> maxActive = new ComboBox<>();
     private final CheckBox autoResume = new CheckBox("Resume interrupted downloads when GrabX opens");
+    private final CheckBox notificationsEnabled = new CheckBox("Enable notifications");
+    private final CheckBox notifyCompleted = new CheckBox("Download completed");
+    private final CheckBox notifyFailed = new CheckBox("Download failed or needs attention");
+    private final CheckBox notifyConnection = new CheckBox("Connection lost, restored or retrying");
+    private final CheckBox notificationBanners = new CheckBox("Show banners while GrabX is in front");
     private final Label notice = new Label();
     private final Label dirtyStatus = new Label();
     private final Button save = new Button("Save changes");
@@ -62,6 +74,7 @@ public final class SettingsPage extends BorderPane {
                 navigation("Downloads", "Folders & destinations", downloads(), true),
                 navigation("Tasks", "Queue & startup", tasks(), false),
                 navigation("Network", "Download speed limits", network(), false),
+                navigation("Notifications", "Events & connection", notifications(), false),
                 navigation("Sounds", "Volume & event previews", audio(), false),
                 navigation("Storage", "Incomplete file cleanup", storage(), false));
         Region spacer = new Region(); VBox.setVgrow(spacer, Priority.ALWAYS);
@@ -88,6 +101,8 @@ public final class SettingsPage extends BorderPane {
         volume.valueProperty().addListener(edited); days.textProperty().addListener(edited);
         maxActive.valueProperty().addListener(edited);
         autoResume.selectedProperty().addListener(edited);
+        for (CheckBox toggle : new CheckBox[]{notificationsEnabled, notifyCompleted, notifyFailed, notifyConnection, notificationBanners})
+            toggle.selectedProperty().addListener(edited);
         load(initial);
         reset.disableProperty().bind(save.disableProperty());
     }
@@ -129,6 +144,22 @@ public final class SettingsPage extends BorderPane {
                 card("Direct downloads · combined limit", "Shared across all direct downloads and their connections. Includes checking saved data before resume. Changes apply to running transfers.", direct),
                 card("Video & audio · per-download limit", "Each video or audio task gets this limit. Changes apply when a task starts or restarts after Pause. Multiple tasks can use more in total.", media),
                 note("Leave Limit speed off for unlimited speed. These are separate limits, not one app-wide ceiling. Some live streams may not support a limit. Short speed fluctuations are normal."));
+    }
+    private Node notifications() {
+        notificationsEnabled.setId("settings-notifications-enabled");
+        notifyCompleted.setId("settings-notifications-completed");
+        notifyFailed.setId("settings-notifications-failed");
+        notifyConnection.setId("settings-notifications-connection");
+        notificationBanners.setId("settings-notifications-banners");
+        for (CheckBox toggle : new CheckBox[]{notifyCompleted, notifyFailed, notifyConnection, notificationBanners}) {
+            toggle.setWrapText(true); toggle.disableProperty().bind(notificationsEnabled.selectedProperty().not());
+        }
+        return section("Notifications", "Useful updates, without the interruption.",
+                card("Notification center", "The bell keeps up to 50 recent events for this session, in full and compact view. Pausing or cancelling a task does not add noise.", notificationsEnabled),
+                card("Notify me about", "Connection alerts use small periodic checks while enabled. A server retry is reported separately from internet availability.",
+                        new VBox(12, notifyCompleted, notifyFailed, notifyConnection)),
+                card("Quiet banners", "Brief banners appear without stealing focus. When GrabX is in the background, events wait in the notification center.", notificationBanners),
+                note("These are in-app notifications. Sounds are controlled separately in Sounds. Similar download outcomes are grouped; notification history clears when GrabX closes."));
     }
     private Node audio() {
         sounds.setId("settings-sounds"); volume.setId("settings-volume"); volume.setAccessibleText("Sound volume percent"); volume.setBlockIncrement(5);
@@ -188,7 +219,9 @@ public final class SettingsPage extends BorderPane {
         if (maximum == null || maximum < 1 || maximum > TaskPreferences.MAX_LIMIT)
             throw new IllegalArgumentException("Tasks: choose between 1 and 16 active downloads.");
         return new Values(Path.of(text).normalize().toString(), remember.isSelected(), direct.rate(), media.rate(),
-                sounds.isSelected(), volume.getValue() / 100.0, retention, maximum, autoResume.isSelected());
+                sounds.isSelected(), volume.getValue() / 100.0, retention, maximum, autoResume.isSelected(),
+                new NotificationPreferences.Values(notificationsEnabled.isSelected(), notifyCompleted.isSelected(),
+                        notifyFailed.isSelected(), notifyConnection.isSelected(), notificationBanners.isSelected()));
     }
     public boolean isDirty() {
         try {
@@ -197,7 +230,7 @@ public final class SettingsPage extends BorderPane {
             // fractional volume as dirty due to floating-point roundoff.
             if (Math.abs(current.volume() - saved.volume()) < 1e-9)
                 current = new Values(current.folder(), current.rememberFolder(), current.directRate(), current.mediaRate(),
-                        current.sounds(), saved.volume(), current.retentionDays(), current.maxActive(), current.autoResume());
+                        current.sounds(), saved.volume(), current.retentionDays(), current.maxActive(), current.autoResume(), current.notifications());
             return !saved.equals(current);
         } catch (RuntimeException e) { return true; }
     }
@@ -212,6 +245,10 @@ public final class SettingsPage extends BorderPane {
         folder.setText(value.folder()); remember.setSelected(value.rememberFolder());
         direct.load(value.directRate()); media.load(value.mediaRate()); maxActive.setValue(value.maxActive());
         autoResume.setSelected(value.autoResume());
+        NotificationPreferences.Values notices = value.notifications();
+        notificationsEnabled.setSelected(notices.enabled()); notifyCompleted.setSelected(notices.completed());
+        notifyFailed.setSelected(notices.failed()); notifyConnection.setSelected(notices.connection());
+        notificationBanners.setSelected(notices.banners());
         sounds.setSelected(value.sounds()); volume.setValue(value.volume() * 100); days.setText(Integer.toString(value.retentionDays()));
         loading = false; changed(); sound.silence();
     }

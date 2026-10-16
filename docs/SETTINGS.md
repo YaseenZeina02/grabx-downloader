@@ -3,7 +3,7 @@
 Implemented 2026-10-06. Settings replaces the main library content inside the same
 window. The gear becomes Back; the original library node (filters, selection and
 scroll state) is retained. Download services and the global speed footer keep running.
-Other toolbar actions are hidden while Settings is open. Five independent sections
+Download toolbar actions are hidden while Settings is open; the notification bell stays accessible. Six independent sections
 leave room for future supported preferences without presenting nonfunctional options.
 
 ## Available preferences
@@ -28,6 +28,10 @@ leave room for future supported preferences without presenting nonfunctional opt
 - **Network:** optional direct-download combined limit and independent video/audio
   per-task limit, decimal KB/s and MB/s. Default is unlimited. Values range from
   1 KB/s to 1,000 MB/s. These are **not one total application-wide ceiling**.
+- **Notifications:** independent enable, completion/failure/connection events and
+  foreground banners. A shared bell inbox in full/compact view keeps up to 50 events
+  for the session. Disabling connection events also disables periodic checks; sounds
+  remain independent. See [notification behavior and checks](NOTIFICATIONS.md).
 - **Sounds:** existing enabled preference, volume and previews for all six original
   cues. Preview uses draft volume; regular download feedback changes only on Save.
 - **Storage:** existing 1–365 day retention for cancelled partial downloads. Paused

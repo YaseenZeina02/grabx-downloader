@@ -1,6 +1,46 @@
 # GrabX handoff
 
-Updated: 2026-10-06 after optional startup resume.
+Updated: 2026-10-16 after in-app notifications and connection monitoring.
+
+## Latest outcome: notifications (2026-10-16)
+
+- Reviewed current checkout: clean before this work; latest startup-resume feature
+  already committed. No unfinished implementation found. Delete confirmations and
+  window preferences were proposals, not partially implemented features. User now
+  explicitly requested failure, internet loss/recovery and other useful notifications.
+- Added an in-app notification center and brief non-modal banners styled with GrabX's
+  navy palette and green/red/amber event accents. Bells in full toolbar and compact
+  footer share 50 session entries, unread count and Clear all. Outcome bursts group;
+  reconnect countdowns do not chatter. Background events stay in the inbox; banners
+  do not activate the app or replace native OS notifications.
+- Settings now has six sections, including Notifications with master/category/banner
+  toggles, draft Save/Discard/Keep editing and persistence. Existing sounds unchanged.
+- ConnectivityMonitor checks two independent fixed HTTPS 204 endpoints on a daemon,
+  two samples per transition, no initial online alert, bounded connect/read timeouts,
+  no redirects, no user download data. Disabled notifications/connection category
+  stops subsequent checks. Server retry alerts are separate from global offline.
+  Existing transfer/retry/resume logic is unchanged. Shutdown detaches observers,
+  stops probes and closes popups before download shutdown.
+- Tests: full Java 21 + GRABX_TEST_RESUME=true test/installDist passed (278 discovered,
+  268 passed, 10 optional skips; all 34 native resume tests). After small endpoint/UI
+  refinements, final 12 notification/connectivity tests passed and installDist built.
+  Tests cover grouping/bounds, categories, stale outcomes/history/manual actions,
+  safe error messages, connectivity transitions/disabling, and local HTTP portal,
+  redirect and failure responses. Both final HTTPS endpoints passed using Java.
+- Visual preview caught/fixed compact-banner shadow overflow. Isolated harness passed
+  settings drafts/save/discard, both views' inbox/banners, badges/clear, background
+  suppression, and footer bounds at 900x500. macOS did not foreground the test stage;
+  harness simulated JavaFX focus for rendering/gating checks, so actual OS focus
+  behavior remains for user smoke testing. No user downloads/preferences/history
+  changed, no real app restart or internet disconnection, no Windows live check.
+- Docs: docs/NOTIFICATIONS.md. Preview /private/tmp/GrabXNotificationPreview.java;
+  snapshots /private/tmp/grabx-notifications-*.png. Persistent copies are in the chat's
+  visualization directory. Next user check: Stop/Run the updated build, inspect the
+  bell and Settings > Notifications. Extension reload is unnecessary.
+- Proposed next batch: explicit remove-task versus delete-file confirmation;
+  remember window geometry/startup view; optional native OS notifications when GrabX
+  is in the background. Torrent and Safari remain deferred. User wants several next
+  steps presented together; do not treat proposals as already authorized.
 
 ## Latest outcome: optional startup resume (2026-10-06)
 

@@ -65,6 +65,12 @@ public class MainController {
     private com.grabx.app.grabx.core.service.DownloadScheduler downloadScheduler;
     private final com.grabx.app.grabx.core.service.TaskPreferences taskPreferences =
             new com.grabx.app.grabx.core.service.TaskPreferences(Preferences.userNodeForPackage(MainController.class));
+    private final com.grabx.app.grabx.core.service.NotificationPreferences notificationPreferences =
+            new com.grabx.app.grabx.core.service.NotificationPreferences(Preferences.userNodeForPackage(MainController.class));
+    private com.grabx.app.grabx.core.service.NotificationCenter notificationCenter;
+    private com.grabx.app.grabx.core.service.DownloadNotificationObserver downloadNotifications;
+    private com.grabx.app.grabx.core.service.ConnectivityMonitor connectivityMonitor;
+    private com.grabx.app.grabx.ui.components.NotificationView notificationView;
     private Node homeContent;
     private Node settingsGraphic;
     private final com.grabx.app.grabx.core.service.TransferPreferences transferPreferences =
@@ -239,6 +245,7 @@ public class MainController {
         initializeGlobalSpeed();
         initializeDownloadServices();
         initializeDownloadsList(iconButtons);
+        initializeNotifications();
         initializeCompactView(iconButtons);
 
         soundFeedback = new com.grabx.app.grabx.core.service.SoundFeedbackService(PREFS);
@@ -272,6 +279,19 @@ public class MainController {
                 cancelAllBtn, clearAllButton, settingsButton, compactViewButton
         );
         return iconButtons;
+    }
+
+    private void initializeNotifications() {
+        notificationCenter = new com.grabx.app.grabx.core.service.NotificationCenter(notificationPreferences.load());
+        notificationView = new com.grabx.app.grabx.ui.components.NotificationView(notificationCenter,
+                () -> compactView && compactStage != null ? compactStage : ownerWindow());
+        if (settingsButton.getParent() instanceof HBox toolbar)
+            toolbar.getChildren().add(toolbar.getChildren().indexOf(settingsButton), notificationView.createButton(false));
+        downloadNotifications = new com.grabx.app.grabx.core.service.DownloadNotificationObserver(
+                downloadItems, notificationCenter, Platform::runLater);
+        connectivityMonitor = new com.grabx.app.grabx.core.service.ConnectivityMonitor(
+                notificationCenter::monitorsConnection, notificationCenter::connectionChanged, Platform::runLater);
+        connectivityMonitor.start();
     }
 
     private void initializeHistoryFilter() {
@@ -561,7 +581,7 @@ public class MainController {
         compactSpeed.getStyleClass().add("gx-compact-footer-text");
         Region footerSpacer = new Region();
         HBox.setHgrow(footerSpacer, Priority.ALWAYS);
-        HBox compactFooter = new HBox(8, activeCount, footerSpacer, compactSpeed);
+        HBox compactFooter = new HBox(8, activeCount, footerSpacer, compactSpeed, notificationView.createButton(true));
         compactFooter.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         compactFooter.getStyleClass().add("gx-compact-footer");
 
@@ -700,6 +720,7 @@ public class MainController {
                 || compactRoot == null || root.getScene() == null) return;
         javafx.stage.Window window = root.getScene().getWindow();
         if (!(window instanceof javafx.stage.Stage stage)) return;
+        notificationView.hidePopups();
         fullStage = stage;
 
         fullWindowState = com.grabx.app.grabx.ui.components.CompactWindowState.capture(stage);
@@ -741,6 +762,7 @@ public class MainController {
     private void exitCompactView() {
         if (!compactView || compactTransitioning || fullStage == null || fullWindowState == null) return;
         compactTransitioning = true;
+        notificationView.hidePopups();
         if (compactStage != null) compactStage.hide();
         fullWindowState.restore(fullStage, () -> {
             compactView = false;
@@ -963,11 +985,14 @@ public class MainController {
                 new com.grabx.app.grabx.ui.components.SettingsPage.Values(
                         downloadFolderPreferences.configuredFolder(), downloadFolderPreferences.remembersLastFolder(),
                         transferPreferences.directRate(), transferPreferences.mediaRate(),
-                        soundFeedback.isEnabled(), soundFeedback.volume(), partialRetentionDays(), taskPreferences.maxActive(), taskPreferences.autoResume()),
+                        soundFeedback.isEnabled(), soundFeedback.volume(), partialRetentionDays(), taskPreferences.maxActive(), taskPreferences.autoResume(), notificationPreferences.load()),
                 soundFeedback, settings -> {
                     downloadFolderPreferences.configure(settings.folder(), settings.rememberFolder());
                     transferPreferences.save(settings.directRate(), settings.mediaRate());
                     taskPreferences.save(settings.maxActive(), settings.autoResume());
+                    notificationPreferences.save(settings.notifications());
+                    notificationCenter.configure(settings.notifications());
+                    notificationView.hidePopups();
                     downloadScheduler.setLimit(settings.maxActive());
                     PREFS.putInt("partialRetentionDays", settings.retentionDays());
                     soundFeedback.configure(settings.sounds(), settings.volume());
@@ -1026,6 +1051,10 @@ public class MainController {
 
     public void shutdown() {
         if (!shuttingDown.compareAndSet(false, true)) return;
+        if (connectivityMonitor != null) connectivityMonitor.close();
+        if (downloadNotifications != null) downloadNotifications.close();
+        if (notificationView != null) notificationView.close();
+        if (notificationCenter != null) notificationCenter.close();
         historyService.prepareForShutdown();
         if (downloadScheduler != null) downloadScheduler.close();
         // Stop feedback before pauseAll: closing the app is intentionally silent.

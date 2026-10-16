@@ -1,0 +1,36 @@
+.notification-surface {
+    -fx-font-family: "System";
+    -fx-font-size: 13px;
+    -fx-background-color: #102034;
+    -fx-background-radius: 16;
+    -fx-border-color: #33465e;
+    -fx-border-radius: 16;
+    -fx-border-width: 1;
+    -fx-padding: 17;
+    -fx-effect: dropshadow(gaussian, rgba(0,0,0,0.32), 18, 0.1, 0, 5);
+}
+.notification-heading { -fx-text-fill: #eef4ff; -fx-font-size: 21px; -fx-font-weight: bold; }
+.notification-title { -fx-text-fill: #edf3ff; -fx-font-size: 14px; -fx-font-weight: bold; }
+.notification-body { -fx-text-fill: #c3d1e3; -fx-font-size: 12px; -fx-line-spacing: 3; }
+.notification-caption { -fx-text-fill: #90a5bf; -fx-font-size: 11px; }
+.notification-card { -fx-background-color: #182a40; -fx-background-radius: 12; -fx-border-radius: 12; -fx-border-width: 1; -fx-padding: 14; }
+.notification-success { -fx-border-color: #3d766c; }
+.notification-warning { -fx-border-color: #8b7044; }
+.notification-error { -fx-border-color: #8f5260; }
+.notification-icon { -fx-fill: #bed2ef; }
+.notification-success .notification-mark .notification-icon { -fx-fill: #7ae0bd; }
+.notification-warning .notification-mark .notification-icon { -fx-fill: #f5c66f; }
+.notification-error .notification-mark .notification-icon { -fx-fill: #ff9aa5; }
+.notification-mark { -fx-min-width: 26; -fx-pref-width: 26; -fx-min-height: 26; }
+.notification-bell { -fx-background-color: #1c3048; -fx-background-radius: 13; -fx-border-color: #344961; -fx-border-radius: 13; -fx-padding: 10 14; -fx-cursor: hand; }
+.notification-bell:hover { -fx-background-color: #2b4260; }
+.notification-bell:focused { -fx-border-color: #78a8ff; }
+.notification-bell-compact { -fx-padding: 3 8; -fx-background-radius: 8; -fx-border-radius: 8; }
+.notification-bell-compact .notification-icon { -fx-scale-x: 0.7; -fx-scale-y: 0.7; }
+.notification-badge { -fx-background-color: #3f70f5; -fx-background-radius: 9; -fx-text-fill: white; -fx-font-weight: bold; -fx-font-size: 9px; -fx-padding: 1 4; }
+.notification-link, .notification-dismiss { -fx-background-color: transparent; -fx-text-fill: #a9c7ff; -fx-cursor: hand; -fx-padding: 5 7; }
+.notification-link:hover, .notification-dismiss:hover { -fx-background-color: #304661; -fx-background-radius: 7; }
+.notification-dismiss { -fx-font-size: 20px; }
+.notification-scroll, .notification-scroll > .viewport { -fx-background-color: transparent; -fx-padding: 0; }
+.notification-scroll .scroll-bar { -fx-background-color: transparent; -fx-pref-width: 8; }
+.notification-scroll .scroll-bar .thumb { -fx-background-color: #47607e; -fx-background-radius: 5; }
