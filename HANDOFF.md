@@ -1,29 +1,52 @@
 # GrabX handoff
 
-## In progress: Windows x64 friend installer (2026-10-24)
+## Latest outcome: Windows x64 friend installer (2026-10-24)
 
-- User explicitly requests a complete Windows x64 package to send to a friend.
-  Native Windows build will run on GitHub Actions Windows 2022 in separate
-  codex/windows-x64-installer branch; no public release/tag planned. Existing
-  GitHub repository and SSH access verified. Local host is Mac ARM64.
-- Automatic approval review rejected the combined local commit/public push command:
-  building Windows did not explicitly authorize publishing all setup source changes
-  to the public repository. No branch, commit or push occurred. Asked human approval
-  via async choice; remote work must wait. This rejection must not be bypassed.
-  Local VMware inventory shows no running VMs; existing VM is Windows ARM, not an
-  already-ready native x64 build host. GitHub authentication/SSH are working.
-- Added pinned/hash-verified Node 22.23.4 and BtbN FFmpeg 8.1 LGPL static x64
-  preparation (FFprobe and upstream license notices included). App/Setup ICOs
-  derived from existing branded PNGs, Windows launcher icon configuration and
-  properties paths fixed. Preference tests use platform-native temp paths.
-- Dedicated workflow builds app, EXE/MSI with WiX 3, installs MSI, checks fresh
-  relocated packaged Java/media/extension/browser registration + GUI stays open,
-  then uninstalls. Outcome pending actual runner, not yet a Windows artifact.
-- Added reusable smoke-packaged-app.py/PackagedAppSmoke.java, two passing Python
-  hash-cache/PE architecture tests, and passing 18 focused Java setup/folder/bundle
-  tests plus installDist. Workflow YAML parses, Python scripts compile and diff
-  whitespace passes. No Windows installer has been generated yet. No local
-  installed app, real preferences, or browser changed.
+- User requested a complete Windows x64 copy for a friend, then explicitly approved
+  public source upload to a separate branch for remote Windows builds. Earlier
+  approval-review rejection was superseded by this direct human authorization.
+  Branch: codex/windows-x64-installer. Executable source commit: 5d6130623e09a26b75892b4b3dc7c9dc40a9723f.
+  No master merge, PR, GitHub release or tag created.
+- Native Windows x64 build succeeded on Windows Server 2022:
+  https://github.com/YaseenZeina02/grabx-downloader/actions/runs/40128550264
+  Workflow creates branded EXE + MSI 1.0.3, bundled Java 21.0.12.1, Node 22.23.4,
+  FFmpeg/FFprobe BtbN LGPL 8.1.3 and existing pinned yt-dlp 2026.08.19, plus embedded
+  extension. Upstream archives/hash/PE x64 checked, licenses/provenance preserved.
+  Source ICOs are generated from the existing main/setup PNGs. Windows launcher
+  properties paths use forward slashes to prevent Java Properties escaping issues.
+- Fixed Windows-only build-test problems found by real CI: setup snapshots now
+  use java.io.tmpdir; failed-hash download closes the file before deleting it.
+  Preference fixtures now use platform-native temp paths instead of /tmp strings.
+- Verification: Java 331 discovered / 273 passed / 58 optional skipped, zero errors;
+  all 45 extension Node tests and two Python integrity/architecture tests passed.
+  Actual EN/AR Windows Setup popup/defaults/browser/error snapshots reviewed.
+  MSI installed and uninstalled successfully; installed application relocated to
+  a path with spaces and empty home/data directories, developer tools removed from
+  PATH. Packaged Java, FFmpeg, Node, yt-dlp extraction/version, complete extension
+  export/stable location, all four browser native registrations, clean native
+  protocol and real packaged Setup remaining open passed. Registry test keys were
+  removed; all registration/install tests used the disposable Windows runner.
+- EXE and MSI are generated from the same application image. Automated install/
+  uninstall used MSI; EXE interactive UI was not clicked through. Actual end-user
+  Chrome/Edge handoff and external video/MP3 downloads still need friend validation.
+  SmartResume opt-in Windows integration suite was not enabled (58 optional skips).
+  Windows ARM native and 32-bit are not targets; target current Windows 10/11 x64.
+- Retained verified EXE at local-releases/windows-x64-1.0.3/ (393.5 MiB), with Arabic
+  friend guide, build-info, checksums, Windows previews and VERIFICATION.txt.
+  Entire CI artifact is ~784 MiB because it includes EXE+MSI. Standard download
+  was too slow, so only EXE is fetched from authenticated artifact storage using
+  bounded parallel byte ranges and ZIP CRC/SHA-256 validation. No credentials or
+  signed storage URL were printed or saved. One failed range resumed using 49
+  completed parts; final ZIP CRC and original build SHA-256 matched exactly.
+- Ready friend handoff: local-releases/GrabX-1.0.3-windows-x64.zip, containing EXE,
+  Arabic guide, checksum and build-info. ZIP CRC and contained EXE SHA verified.
+  Binary SHA: eb78828410f44739745c7e8ff5a60f08eae528700487c15023fec27939c82915.
+  Root SHA256SUMS includes ZIP and executable; BUILD-PROVENANCE.json preserves run
+  and source. EXE/MSI source artifact remains on GitHub (14-day retention), while
+  local EXE/friend ZIP are durable outside Gradle clean. Local MSI not downloaded.
+  Installer is unsigned personal beta; no real local app/history/browser settings
+  modified. Next: send friend ZIP, extract/run EXE, confirm live browser and media
+  download on their current Windows 10/11 x64 machine.
 
 
 ## Latest outcome: setup icon and self-contained friend install (2026-10-24)

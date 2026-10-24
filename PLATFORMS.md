@@ -6,8 +6,11 @@ The Gradle zip distribution is portable application files, not a signed installe
 or a bundled JRE. Native local installers with a bundled Java runtime and first-run
 setup are now available through `scripts/package-app.py`; see
 [local installer instructions](packaging/README.md). Build each on its destination
-OS/CPU. The local macOS package is unsigned; Windows/Linux native packages still
-require builds and installation checks on those systems.
+OS/CPU. Local macOS and Windows packages are unsigned. Windows x64 EXE/MSI
+installers have now been built on Windows Server 2022, with automated MSI
+installation/uninstallation, packaged Setup startup, bundled tool execution and
+native-host registration checks. Recipient browser/video-download confirmation
+is still needed. Linux native installer builds and installation checks remain.
 
 ## Requirements
 
