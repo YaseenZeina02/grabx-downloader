@@ -30,8 +30,9 @@ def download(spec, cache):
         with urllib.request.urlopen(request, timeout=120) as response, temporary.open('wb') as output:
             shutil.copyfileobj(response, output)
         with temporary.open('rb') as data:
-            if hashlib.file_digest(data, 'sha256').hexdigest() != spec['sha256']:
-                temporary.unlink(); raise ValueError('Tool archive checksum mismatch')
+            digest = hashlib.file_digest(data, 'sha256').hexdigest()
+        if digest != spec['sha256']:
+            temporary.unlink(); raise ValueError('Tool archive checksum mismatch')
         temporary.replace(path)
     return path
 
