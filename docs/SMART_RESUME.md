@@ -184,3 +184,23 @@ to 260px height for this phase when necessary, retaining a taller user-selected
 height. Both views prioritize running downloads over queued/preparing and paused
 rows, then terminal history; date ordering applies within each group. This is
 presentation only and does not alter resume validation or transfer progress.
+
+## Optional quick checks (2026-10-24)
+
+Settings → Network → Resume checks → Use quick resume checks is OFF by default.
+Save applies it to the next connection attempt; an in-flight full check is not replaced.
+The setting persists separately from speed and connection limits.
+
+For contiguous saved parts without a strong ETag or Last-Modified validator, with
+known unchanged size and working byte ranges, quick checks compare five evenly
+spaced 64 KiB samples (beginning through end of the saved prefix). At most 320 KiB
+is reread; smaller prefixes are compared entirely. Then the remainder is requested
+at the saved offset. This is deliberately less comprehensive than the default
+full-prefix comparison: changes between samples or between requests can be missed.
+It does not authenticate the whole file or enable parallel downloading.
+
+Mismatch, wrong range/total, unexpected encoding or truncated sample never append
+unverified data. Ignored sample ranges fall back to the original full-prefix check.
+Pause/cancel checkpoints and the shared direct bandwidth limit apply to samples.
+Existing strong-validator checks, legacy migration and saved split layouts retain
+their existing behavior. No real saved task is migrated by saving this preference.

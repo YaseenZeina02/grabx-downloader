@@ -1,0 +1,10 @@
+Display name: GrabX | Download Manager
+
+Bio:
+Your downloads. Under control.
+Files, video & audio in one place.
+🚀 Coming soon • Follow the build
+
+Image tool: built-in image_gen
+Final prompt:
+Use case: logo-brand. Create one finished square Instagram profile picture for GrabX, a desktop download manager. Premium minimal app brand avatar matching its existing visual language: near-black midnight navy background (#081626), large bold crisp custom geometric GX monogram centered, cool white G and luminous periwinkle / electric blue X, subtle restrained blue edge lighting and very subtle navy radial depth. The GX letters should read immediately at tiny profile sizes. Keep the entire mark within the central 65% of the square for a circular Instagram crop. Flat front-facing logo artwork, sharp clean professional edges, balanced negative space, polished contemporary software identity. Text verbatim: GX. Only these two letters. No wordmark, no taglines, no mockup, no phone, no surrounding UI, no tiny details, no watermark, no extra decorative icons. Opaque full-bleed square background.

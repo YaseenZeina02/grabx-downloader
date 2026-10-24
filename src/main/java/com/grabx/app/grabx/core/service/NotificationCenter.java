@@ -73,6 +73,7 @@ public final class NotificationCenter implements AutoCloseable {
         }
         recount();
     }
+    public void remove(Entry entry) { entries.remove(entry); recount(); }
     public void clear() { entries.clear(); recount(); }
     private void recount() { unread.set((int) entries.stream().filter(e -> !e.read()).count()); }
     @Override public void close() { closed = true; banner = entry -> {}; }

@@ -25,7 +25,12 @@ leave room for future supported preferences without presenting nonfunctional opt
   running, preparing or queued at exit, through the same limit and verification.
   Manually paused, failed, cancelled, completed and missing tasks stay stopped.
   Saving this option takes effect at the next launch, not immediately.
-- **Network:** optional direct-download combined limit and independent video/audio
+- **Network:** Automatic or 1–64 connections per direct file, saved with the other
+  drafts. New installations default to Automatic; saved manual choices are preserved. New supported downloads split into up to the requested count, with at
+  least 256 KiB per piece. Existing transfers keep running; saved splits remain
+  immutable on resume, with active workers capped by the current preference.
+  Server throttling can reduce workers automatically. Parallel downloads require
+  verified byte ranges and a strong ETag. Also includes optional direct-download combined limit and independent video/audio
   per-task limit, decimal KB/s and MB/s. Default is unlimited. Values range from
   1 KB/s to 1,000 MB/s. These are **not one total application-wide ceiling**.
 - **Notifications:** independent enable, completion/failure/connection events and
@@ -118,3 +123,21 @@ Restored rows receive autosave listeners so later state changes are persisted.
   no real history, downloads or preferences changed. Native screenshots are under
   /private/tmp/grabx-settings-*.png.
 - installDist and git diff --check passed. No browser-extension reload is needed.
+
+## Automatic direct connections (2026-10-23)
+
+Automatic reserves up to 64 immutable pieces for a new supported file, starts with
+up to four workers, and samples aggregate payload throughput in four-second windows.
+It doubles the worker target while each experiment improves throughput by at least
+10%. Unhelpful increases roll back and wait 30 seconds before another probe. Two
+windows below 70% of the previous baseline halve the target. Retiring workers finish
+their current piece; no partial file is rewritten or reopened concurrently.
+
+Adaptation pauses while downloads are paused, any shared direct speed limit is set,
+or only the final pieces remain. Old saved layouts cap available parallelism. Busy
+server retries reduce the ceiling (one for 429, half for other recoverable errors),
+then restart adaptation within that lower ceiling. The UI marks automatic transfers
+with Auto and shows the current worker cap, including workers finishing retirement.
+This is a throughput heuristic, not a guarantee of maximum speed. Manual mode keeps
+its requested cap and existing server-error backoff. Setting changes apply on the
+next transfer launch; existing live responses continue with their captured mode.

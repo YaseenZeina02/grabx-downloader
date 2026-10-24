@@ -35,7 +35,8 @@ final class SegmentTransfer {
                 long responseEnd = SegmentResponse.validate(connection.getHeaderField("Content-Range"), start + present, end, total);
                 long remaining = responseEnd - (start + present) + 1;
                 try (InputStream input = wrap.apply(connection.getInputStream());
-                     OutputStream output = Files.newOutputStream(part, StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
+                     OutputStream output = new BufferedOutputStream(
+                             Files.newOutputStream(part, StandardOpenOption.CREATE, StandardOpenOption.APPEND), 128 * 1024)) {
                     byte[] buffer = new byte[64 * 1024];
                     while (remaining > 0) {
                         checkpoint.check();

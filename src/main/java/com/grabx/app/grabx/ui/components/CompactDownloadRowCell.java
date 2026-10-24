@@ -163,7 +163,7 @@ public final class CompactDownloadRowCell extends ListCell<DownloadRow> {
         row.title.addListener(titleListener);
         row.thumbUrl.addListener(thumbnailListener);
         updateMedia(row.title.get(), row.thumbUrl.get());
-        status.textProperty().bind(row.status);
+        status.textProperty().bind(com.grabx.app.grabx.util.I18n.binding(row.status));
         verificationPane.bind(row);
         progress.progressProperty().bind(row.progress);
         stateListener = (observable, oldState, newState) -> updateActions(newState);

@@ -12,6 +12,24 @@ import static org.junit.jupiter.api.Assertions.*;
 class BandwidthLimiterTest {
     @TempDir Path directory;
 
+    @Test void unlimitedPassesFullReadRequestsWithoutSleeping() throws Exception {
+        AtomicLong time = new AtomicLong();
+        var limiter = new BandwidthLimiter(time::get, nanos -> fail("Unlimited transfer must never sleep"));
+        byte[] data = new byte[128 * 1024];
+        new Random(17).nextBytes(data);
+        for (long previous : new long[]{0, 600_000, 2_000_000}) {
+            limiter.setBytesPerSecond(previous);
+            limiter.setBytesPerSecond(0);
+            var source = new ByteArrayInputStream(data);
+            var input = limiter.wrap(source, () -> {});
+            byte[] buffer = new byte[data.length];
+            assertEquals(data.length, input.read(buffer));
+            assertArrayEquals(data, buffer);
+            assertEquals(-1, input.read(buffer));
+        }
+        assertEquals(0, time.get());
+    }
+
     @Test void savedPrefixAndNewBytesUseOneBudgetWithoutChangingContent() throws Exception {
         AtomicLong time = new AtomicLong();
         var limiter = new BandwidthLimiter(time::get, time::addAndGet);

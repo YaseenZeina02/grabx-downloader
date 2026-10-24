@@ -24,6 +24,7 @@ public final class BandwidthLimiter {
         if (rate == value) return;
         rate = value; tokens = 0; last = clock.getAsLong();
     }
+    public synchronized long bytesPerSecond() { return rate; }
     private double capacity() { return Math.max(1, Math.min(16 * 1024, rate / 10.0)); }
     private int acquire(int requested, Checkpoint checkpoint) throws InterruptedException {
         while (true) {

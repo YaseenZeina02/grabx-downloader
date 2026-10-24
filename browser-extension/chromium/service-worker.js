@@ -46,17 +46,20 @@ chrome.downloads.onChanged.addListener(delta => {
   void browserDownloadChanged(delta).catch(() => {});
 });
 
-const interceptingDownloads = new Set();
-const changedWhileIntercepting = new Set();
+// Hold filename determination until the running app accepts or declines the handoff.
+// This covers redirects, new tabs and script-started downloads without page buttons.
+chrome.downloads.onDeterminingFilename?.addListener((download, suggest) => {
+  interceptDownload(download.id, { created: download, determining: true })
+    .catch(() => {}).finally(() => suggest());
+  return true;
+});
+
+const downloadOperations = new Map();
 const inspectedCaptures = new WeakSet();
 const downloadWatchKey = id => `browser-download-${id}`;
 
 async function watchBrowserDownload(download) {
-  if (!safeHttpUrl(download.finalUrl) && !safeHttpUrl(download.url)) return;
-  const settings = await chrome.storage.local.get(INTERCEPTION_SETTING);
-  if (settings[INTERCEPTION_SETTING] === false) return;
-  await chrome.storage.session.set({ [downloadWatchKey(download.id)]: true });
-  await interceptDownload(download.id);
+  await interceptDownload(download.id, { created: download });
 }
 
 async function browserDownloadChanged(delta) {
@@ -64,7 +67,7 @@ async function browserDownloadChanged(delta) {
     await chrome.storage.session.remove(downloadWatchKey(delta.id));
     return;
   }
-  if (delta.filename?.current) await interceptDownload(delta.id);
+  if (delta.filename?.current || delta.state?.current === 'in_progress') await interceptDownload(delta.id);
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -106,61 +109,75 @@ async function ensureContextMenu() {
   });
 }
 
-async function interceptDownload(id) {
-  if (interceptingDownloads.has(id)) {
-    changedWhileIntercepting.add(id);
-    return;
-  }
-  interceptingDownloads.add(id);
+function interceptDownload(id, options = {}) {
+  // All browser events for this ID share one serialized decision, including events
+  // arriving while native delivery is still pending. Different downloads stay independent.
+  const previous = downloadOperations.get(id) || Promise.resolve();
+  const operation = previous.catch(() => {}).then(() => performDownloadInterception(id, options));
+  downloadOperations.set(id, operation);
+  return operation.finally(() => {
+    if (downloadOperations.get(id) === operation) downloadOperations.delete(id);
+  });
+}
+
+async function performDownloadInterception(id, { created, determining = false } = {}) {
   let pausedByGrabX = false;
   try {
     const key = downloadWatchKey(id);
     const watched = await chrome.storage.session.get(key);
-    if (!watched[key]) return;
+    if (watched[key] === 'handled') return;
+    if (created) {
+      if (!safeHttpUrl(created.finalUrl) && !safeHttpUrl(created.url)) return;
+      const settings = await chrome.storage.local.get(INTERCEPTION_SETTING);
+      if (settings[INTERCEPTION_SETTING] === false) return;
+      await chrome.storage.session.set({ [key]: true });
+    } else if (!watched[key]) return;
     const [download] = await chrome.downloads.search({ id });
     if (!download || download.state !== 'in_progress' || download.paused) {
       await chrome.storage.session.remove(key);
       return;
     }
-    // onCreated may precede Save As. Wait for the final filename, however long
-    // the user needs; otherwise GrabX's chooser races the browser's chooser.
-    if (!hasBrowserDestination(download.filename)) return;
-    await chrome.storage.session.remove(key);
+    // The fallback path still respects a browser Save As selection. The earlier
+    // determining event uses GrabX's chooser because no browser destination is final yet.
+    if (!determining && !hasBrowserDestination(download.filename)) return;
     const settings = await chrome.storage.local.get(INTERCEPTION_SETTING);
     if (settings[INTERCEPTION_SETTING] === false) return;
-    const url = safeHttpUrl(download.finalUrl) || safeHttpUrl(download.url);
+    const url = safeHttpUrl(download.finalUrl) || safeHttpUrl(download.url)
+      || safeHttpUrl(created?.finalUrl) || safeHttpUrl(created?.url);
     if (!url) return;
+    await chrome.storage.session.set({ [key]: 'handled' });
 
     await chrome.downloads.pause(id);
     pausedByGrabX = true;
     const [current] = await chrome.downloads.search({ id });
     if (!current || current.state !== 'in_progress' || !current.paused) return;
-    const suggested = fileName(current.filename);
-    const response = await handOffCapture(fileCapture({
+    const suggested = fileName(current.filename || created?.filename) || fileNameFromUrl(url);
+    const capture = fileCapture({
       url: safeHttpUrl(current.finalUrl) || safeHttpUrl(current.url) || url,
-      pageUrl: safeHttpUrl(current.referrer) || url,
+      pageUrl: safeHttpUrl(current.referrer) || safeHttpUrl(created?.referrer) || url,
       title: suggested,
-      mimeType: current.mime || '',
+      mimeType: current.mime || created?.mime || '',
       suggestedFilename: suggested,
-      suggestedFolder: parentFolder(current.filename),
-      browserDestinationResolved: hasBrowserDestination(current.filename)
-    }));
+      suggestedFolder: determining ? '' : parentFolder(current.filename),
+      browserDestinationResolved: !determining && hasBrowserDestination(current.filename)
+    });
+    // The browser received the file response already; do not consume a single-use
+    // link again in a redundant inspection request.
+    inspectedCaptures.add(capture);
+    const response = await handOffCapture(capture, { requireRunning: true });
 
     if (response?.ok) {
-      // Once accepted, a cancellation failure must not start a second transfer.
       pausedByGrabX = false;
       await chrome.downloads.cancel(id);
       await ignoreDownloadError(chrome.downloads.erase({ id }));
     } else {
       await resumeInterceptedDownload(id);
       pausedByGrabX = false;
-      if (response?.message) await reportDownloadIssue(response.message);
+      if (response?.message && response.status !== 'app_closed') await reportDownloadIssue(response.message);
     }
-  } catch {
+  } catch (error) {
     if (pausedByGrabX) await resumeInterceptedDownload(id);
-  } finally {
-    interceptingDownloads.delete(id);
-    if (changedWhileIntercepting.delete(id)) await interceptDownload(id);
+    await reportDownloadIssue(error?.message || 'GrabX could not receive this download. It remains in the browser.');
   }
 }
 
@@ -203,10 +220,11 @@ async function showQueueInExtension() {
   try { await chrome.action.openPopup(); } catch { /* The badge directs the user to the toolbar popup. */ }
 }
 
-async function handOffCapture(capture) {
+async function handOffCapture(capture, { requireRunning = false } = {}) {
   const state = await nativeControl({type:'status'});
   if (!state.ok) return {ok:false, message:state.message || 'Update the GrabX browser bridge to use download confirmation.'};
   if (!state.running) {
+    if (requireRunning) return {ok:false,status:'app_closed',message:'GrabX is closed. The download stays in your browser.'};
     await chrome.storage.local.set({['pending-' + capture.requestId]: capture});
     await showQueueInExtension();
     return {ok:true, status:'awaiting_confirmation', message:'GrabX is closed. Open the GrabX extension to confirm or cancel.'};
@@ -223,9 +241,13 @@ async function handOffCapture(capture) {
   }
   const result = await sendCaptureNative(capture, false);
   if (result?.status === 'confirmation_required') {
+    if (requireRunning) return {ok:false,status:'app_closed',message:'GrabX closed before accepting this download. It stays in your browser.'};
     await chrome.storage.local.set({['pending-' + capture.requestId]:capture});
     await showQueueInExtension();
     return {ok:true,status:'awaiting_confirmation',message:'GrabX closed before receiving the link. Open the GrabX extension to confirm it.'};
+  }
+  if (result?.ok) {
+    await chrome.storage.local.set({lastContextMenuResult:{ok:true,message:'Sent to GrabX',at:Date.now()}});
   }
   if (result?.status === 'queued') {
     await chrome.action.setBadgeText({text:'Q'});
@@ -468,3 +490,20 @@ function chooseDownloadName(browserName, url, pageTitle, mime) {
   }
   return browserName || fileNameFromUrl(url);
 }
+
+// Content scripts report counts only; no browsing history or media URLs are persisted here.
+chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  if (message?.type !== 'GRABX_DETECTED' || sender.id !== chrome.runtime.id || !sender.tab?.id || sender.frameId !== 0) return false;
+  const count = Math.min(99, Math.max(0, Math.floor(Number(message.count) || 0)));
+  Promise.all([
+    chrome.action.setBadgeText({tabId: sender.tab.id, text: count ? String(count) : ''}),
+    chrome.action.setBadgeBackgroundColor({tabId: sender.tab.id, color: '#367fe8'}),
+    chrome.action.setTitle({tabId: sender.tab.id, title: count ? `GrabX · ${count} downloadable item(s) found` : 'Download with GrabX'})
+  ]).then(() => respond({ok:true})).catch(() => respond({ok:false}));
+  return true;
+});
+
+// Tab-specific detection counts must not follow a tab to another document.
+chrome.tabs?.onUpdated?.addListener((tabId, change) => {
+  if (change.status === 'loading') void chrome.action.setBadgeText({tabId,text:''}).catch(() => {});
+});

@@ -1,5 +1,61 @@
 # GrabX browser extension
 
+## Automatic downloads before filename completion (0.3.2)
+
+When **Send downloads to GrabX** is enabled, the download filename-determination
+event holds browser completion while the running app accepts or rejects the file.
+This covers script-started downloads, redirect chains and new-tab download pages
+without clicking a GX button. GrabX receives the final HTTP(S) URL and referring
+page; no second preflight consumes the link. The tentative browser name is a
+filename hint, not proof of a selected folder, so GrabX uses its folder chooser.
+
+The browser transfer is paused and cancelled only after acceptance. A closed app,
+failed bridge or app closing during handoff leaves the download in the browser
+and releases filename determination. Automatic downloads do not create closed-app
+confirmation requests; explicit page/popup/context-menu actions retain that workflow.
+Per-download event serialization and a session marker prevent duplicate delivery.
+The existing filename-ready / Save As route remains as a fallback when the early
+event is unavailable. Non-HTTP(S) blob/data downloads remain unsupported.
+
+Reload the unpacked extension (0.3.2). No new permissions or app rebuild required.
+Earlier notes below about always waiting for browser Save As describe the fallback
+path; the early path deliberately delegates folder selection to GrabX.
+
+## Consistent media link actions (0.3.1)
+
+GX buttons beside MP4/WebM/MOV/MKV links now use the same Video action as the
+popup, and MP3/M4A/WAV/FLAC links use Audio. Documents, archives and opaque links
+retain file inspection. Link buttons keep their compact appearance. Successful
+handoffs clear stale saved bridge errors. Reload the extension and refresh the page.
+
+## Page assistant and automatic handoff (0.3.0)
+
+New page buttons use GrabX's navy panels, blue GX mark and green detection dot:
+**Download with GrabX** over video/audio and a compact **GX Download** beside file
+links. The toolbar badge counts up to 99 detected items per tab. Detection observes
+changing pages, lazy-loaded media and YouTube navigation. Clicks show delivery,
+waiting-confirmation or failure messages. Automatic link interception respects
+**Send downloads to GrabX**; **Show download buttons on pages** independently hides
+the in-page shortcuts. Modifier clicks and new-tab links keep browser behavior.
+
+Confirmed browser downloads no longer require a redundant native preflight, which
+could reject short-lived links after the browser already received the file response.
+The browser is paused, handed off and cancelled only after GrabX accepts it; native
+failure resumes only a transfer GrabX paused. Save As cancellation remains respected.
+Direct recognizable links are intercepted earlier on ordinary clicks; failed early
+handoffs replay the original click so the browser can continue. Unknown links are
+left to the browser's download events. Small downloads can finish before those
+events are interceptable. Page buttons never automatically start downloading.
+
+Content scripts now run on HTTP(S) pages, rather than requiring an extension click
+for each page. Reload the extension and refresh existing pages; the browser may ask
+to approve updated website access. No cookies, authorization headers, page forms,
+or browsing history are collected. Detection sends a count to the worker; URLs are
+sent to the existing native handoff only after a download action. Protected browser
+pages, cross-origin frames, DRM and some site-managed blob downloads are unsupported;
+blob media buttons fall back to page analysis rather than exporting protected streams.
+
+
 This folder contains the first Chromium vertical slice of the GrabX browser bridge.
 
 ## Bring GrabX forward (0.2.6)
@@ -14,14 +70,16 @@ Restart the app and reload the extension to activate both sides of this change.
 
 ## Current capabilities
 
-- Scans the active tab only after the user clicks the extension.
+- Automatically detects HTML5 media and recognizable file links in the top-level HTTP(S) page.
+  A per-tab number on the extension icon shows the detected count; the popup still provides
+  its deeper on-demand scan. Page shortcuts can be hidden independently in the popup.
 - Adds **Download with GrabX** to the context menu of HTTP(S) links.
 - Can automatically intercept new browser downloads. The switch in the popup controls this behavior;
   it is enabled after installation. GrabX accepts the handoff before the browser download is cancelled,
   and a failed handoff resumes in the browser.
-- Waits for the browser's final download filename (including time spent in **Save As**) and uses
-  that destination in GrabX. Cancelling Save As leaves no GrabX request. Popup/context-menu requests
-  without a resolved destination open a single folder chooser in GrabX.
+- Intercepts before filename completion where supported; folder selection happens in GrabX.
+  The filename-ready fallback waits for browser **Save As** and uses its selected destination.
+  Cancelling that fallback picker leaves no GrabX request.
 - Chrome exposes the final path, not whether a Save As dialog was shown. Its default download folder
   is therefore also treated as a resolved destination. Enable **Ask where to save each file before
   downloading** in browser settings if every intercepted download should ask for a destination.

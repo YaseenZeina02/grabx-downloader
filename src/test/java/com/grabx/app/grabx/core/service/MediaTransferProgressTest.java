@@ -15,7 +15,7 @@ class MediaTransferProgressTest {
         assertTrue(progress.combined());
         var video = progress.update("401", 31_400_000, 97_616_302, false);
         assertEquals(101_454_889, video.total());
-        assertEquals("31.4 MB / ≈ 101.5 MB", video.sizeText());
+        assertEquals("31.4 MB / 101.5 MB", video.sizeText());
         var completeVideo = progress.update("401", 97_616_302, 97_616_302, true);
         assertTrue(completeVideo.fraction() < 1);
         var audio = progress.update("251", 1024, 3_838_587, false);
@@ -61,11 +61,11 @@ class MediaTransferProgressTest {
         }
     }
 
-    @Test void fragmentedVideoUsesBitrateEstimateInsteadOfTheFirstTinyFragment() {
+    @Test void fragmentedVideoWaitsForActualSizeInsteadOfInventingATotal() {
         var progress = new MediaTransferProgress();
         progress.select("[{\"format_id\":\"v\",\"tbr\":800},{\"format_id\":\"a\",\"filesize\":1000000}]", 60);
-        assertEquals(7_000_000, progress.snapshot().total());
-        assertEquals(7_000_000, progress.update("v", 712, -1, 712, false).total());
+        assertEquals(-1, progress.snapshot().total());
+        assertEquals(-1, progress.update("v", 712, -1, 712, false).total());
         assertEquals(6_000_000, progress.update("v", 5_000_000, -1, -1, true).total());
     }
 }

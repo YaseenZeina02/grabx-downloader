@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "GrabX Download Assistant",
-  "version": "0.2.6",
+  "version": "0.3.2",
   "description": "Detect media and files on the current page and send them securely to GrabX.",
   "permissions": [
     "activeTab",
@@ -29,5 +29,18 @@
     "32": "icons/grabx-32.png",
     "48": "icons/grabx-48.png",
     "128": "icons/grabx-128.png"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "page-assistant.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
 }

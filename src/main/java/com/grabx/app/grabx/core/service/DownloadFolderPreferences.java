@@ -25,6 +25,9 @@ public final class DownloadFolderPreferences {
     }
     public void configure(String folder, boolean remember) {
         String normalized = Path.of(folder).toAbsolutePath().normalize().toString();
+        // An explicit default change must take effect even when remembering folders.
+        // Saving unrelated settings must not reset the last one-off destination.
+        if (!normalized.equals(configuredFolder())) saveLastFolder(normalized);
         preferences.put("grabx.folder.default", normalized);
         preferences.putBoolean("grabx.folder.remember", remember);
     }

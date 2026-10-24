@@ -89,6 +89,10 @@ public final class BrowserBridgeProtocol {
                 .distinct().sorted(java.util.Comparator.reverseOrder()).toList();
     }
 
+    public static String normalizeHttpUrl(String value) throws ProtocolException {
+        return requireHttpUrl(value, "download URL");
+    }
+
     private static String requireHttpUrl(String value, String label) throws ProtocolException {
         String normalized = optionalHttpUrl(value, label);
         if (normalized == null) throw new ProtocolException("Missing " + label);

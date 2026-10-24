@@ -3,6 +3,7 @@ package com.grabx.app.grabx.ui.components;
 import com.grabx.app.grabx.core.service.SoundFeedbackService;
 import com.grabx.app.grabx.core.service.TransferPreferences;
 import com.grabx.app.grabx.core.service.TaskPreferences;
+import com.grabx.app.grabx.core.service.LanguagePreferences;
 import com.grabx.app.grabx.core.service.NotificationPreferences;
 import javafx.beans.InvalidationListener;
 import javafx.geometry.Insets;
@@ -22,7 +23,25 @@ import java.util.function.Consumer;
 public final class SettingsPage extends BorderPane {
     public record Values(String folder, boolean rememberFolder, long directRate, long mediaRate,
                          boolean sounds, double volume, int retentionDays, int maxActive, boolean autoResume,
-                         NotificationPreferences.Values notifications) {
+                         NotificationPreferences.Values notifications, int directConnections, String language, boolean quickResumeChecks) {
+        public Values(String folder, boolean rememberFolder, long directRate, long mediaRate,
+                      boolean sounds, double volume, int retentionDays, int maxActive, boolean autoResume,
+                      NotificationPreferences.Values notifications, int directConnections, String language) {
+            this(folder, rememberFolder, directRate, mediaRate, sounds, volume, retentionDays, maxActive, autoResume,
+                    notifications, directConnections, language, false);
+        }
+        public Values(String folder, boolean rememberFolder, long directRate, long mediaRate,
+                      boolean sounds, double volume, int retentionDays, int maxActive, boolean autoResume,
+                      NotificationPreferences.Values notifications, int directConnections) {
+            this(folder, rememberFolder, directRate, mediaRate, sounds, volume, retentionDays, maxActive, autoResume,
+                    notifications, directConnections, "en");
+        }
+        public Values(String folder, boolean rememberFolder, long directRate, long mediaRate,
+                      boolean sounds, double volume, int retentionDays, int maxActive, boolean autoResume,
+                      NotificationPreferences.Values notifications) {
+            this(folder, rememberFolder, directRate, mediaRate, sounds, volume, retentionDays, maxActive, autoResume,
+                    notifications, TransferPreferences.DEFAULT_CONNECTIONS);
+        }
         public Values(String folder, boolean rememberFolder, long directRate, long mediaRate,
                       boolean sounds, double volume, int retentionDays, int maxActive, boolean autoResume) {
             this(folder, rememberFolder, directRate, mediaRate, sounds, volume, retentionDays, maxActive, autoResume,
@@ -40,12 +59,15 @@ public final class SettingsPage extends BorderPane {
     private Values saved;
     private final Consumer<Values> apply;
     private final SoundFeedbackService sound;
+    private final ComboBox<LanguagePreferences.Language> language = new ComboBox<>();
     private final TextField folder = new TextField();
     private final CheckBox remember = new CheckBox("Use the last folder I selected");
     private final RateEditor direct = new RateEditor("direct"), media = new RateEditor("media");
     private final CheckBox sounds = new CheckBox("Play download event sounds");
     private final Slider volume = new Slider(0, 100, 30);
     private final TextField days = new TextField();
+    private final CheckBox quickResumeChecks = new CheckBox("Use quick resume checks");
+    private final ComboBox<Integer> directConnections = new ComboBox<>();
     private final ComboBox<Integer> maxActive = new ComboBox<>();
     private final CheckBox autoResume = new CheckBox("Resume interrupted downloads when GrabX opens");
     private final CheckBox notificationsEnabled = new CheckBox("Enable notifications");
@@ -71,9 +93,10 @@ public final class SettingsPage extends BorderPane {
         nav.getStyleClass().add("settings-navigation");
         nav.setMinWidth(0); nav.setPrefWidth(190);
         nav.getChildren().addAll(
+                navigation("Language", "Interface language", languages(), false),
                 navigation("Downloads", "Folders & destinations", downloads(), true),
                 navigation("Tasks", "Queue & startup", tasks(), false),
-                navigation("Network", "Download speed limits", network(), false),
+                navigation("Network", "Speed & connections", network(), false),
                 navigation("Notifications", "Events & connection", notifications(), false),
                 navigation("Sounds", "Volume & event previews", audio(), false),
                 navigation("Storage", "Incomplete file cleanup", storage(), false));
@@ -100,6 +123,9 @@ public final class SettingsPage extends BorderPane {
         direct.listen(edited); media.listen(edited); sounds.selectedProperty().addListener(edited);
         volume.valueProperty().addListener(edited); days.textProperty().addListener(edited);
         maxActive.valueProperty().addListener(edited);
+        language.valueProperty().addListener(edited);
+        directConnections.valueProperty().addListener(edited);
+        quickResumeChecks.selectedProperty().addListener(edited);
         autoResume.selectedProperty().addListener(edited);
         for (CheckBox toggle : new CheckBox[]{notificationsEnabled, notifyCompleted, notifyFailed, notifyConnection, notificationBanners})
             toggle.selectedProperty().addListener(edited);
@@ -139,8 +165,27 @@ public final class SettingsPage extends BorderPane {
                 card("On startup", "Continue tasks that were running or waiting when GrabX closed. Manually paused, failed and cancelled tasks stay stopped. Saved data is checked as usual before resuming.", autoResume),
                 note("Startup resume is off by default and uses the same task limit. Changes apply the next time GrabX opens. Increasing the limit can start waiting tasks after Save; lowering it leaves current tasks running."));
     }
+    private Node languages() {
+        language.setId("settings-language"); language.setAccessibleText("Interface language");
+        language.getItems().setAll(LanguagePreferences.LANGUAGES); language.setPrefWidth(230);
+        return section("Language", "Make GrabX feel at home.",
+                card("Interface language", "Choose the language used throughout GrabX.", language),
+                note("Save your choice to change the interface immediately. Your current downloads keep running."));
+    }
     private Node network() {
+        quickResumeChecks.setId("settings-quick-resume-checks");
+        directConnections.setId("settings-direct-connections");
+        directConnections.setAccessibleText("Maximum connections per direct download");
+        directConnections.getItems().add(TransferPreferences.AUTO_CONNECTIONS);
+        directConnections.setConverter(new javafx.util.StringConverter<>() {
+            @Override public String toString(Integer value) { return value == null ? "" : value == 0 ? com.grabx.app.grabx.util.I18n.text("Automatic") : value.toString(); }
+            @Override public Integer fromString(String value) { return "Automatic".equals(value) ? 0 : Integer.valueOf(value); }
+        });
+        for (int count = 1; count <= TransferPreferences.MAX_CONNECTIONS; count++) directConnections.getItems().add(count);
+        directConnections.setPrefWidth(160);
         return section("Network", "Leave room for browsing, calls and everything else.",
+                card("Connections per direct download", "Automatic adjusts connections to server performance. Or choose 1–64 yourself. Applies to new transfers; saved downloads keep their existing split.", directConnections),
+                card("Resume checks", "For servers without file version information. Quick checks compare samples, up to 320 KiB, and can miss changes between samples. Leave off to compare all saved bytes. Applies on the next connection attempt.", quickResumeChecks),
                 card("Direct downloads · combined limit", "Shared across all direct downloads and their connections. Includes checking saved data before resume. Changes apply to running transfers.", direct),
                 card("Video & audio · per-download limit", "Each video or audio task gets this limit. Changes apply when a task starts or restarts after Pause. Multiple tasks can use more in total.", media),
                 note("Leave Limit speed off for unlimited speed. These are separate limits, not one app-wide ceiling. Some live streams may not support a limit. Short speed fluctuations are normal."));
@@ -202,7 +247,7 @@ public final class SettingsPage extends BorderPane {
     private static Label label(String value, String style) { Label label = new Label(value); label.getStyleClass().add(style); return label; }
     private static Node note(String text) { Label label = label(text, "settings-note"); label.setWrapText(true); label.setMaxWidth(Double.MAX_VALUE); return label; }
     private void chooseFolder() {
-        DirectoryChooser chooser = new DirectoryChooser(); chooser.setTitle("Default download folder");
+        DirectoryChooser chooser = new DirectoryChooser(); chooser.setTitle(com.grabx.app.grabx.util.I18n.text("Default download folder"));
         try { Path path = Path.of(folder.getText()); if (Files.isDirectory(path)) chooser.setInitialDirectory(path.toFile()); }
         catch (RuntimeException ignored) { }
         var selected = chooser.showDialog(getScene().getWindow());
@@ -218,10 +263,13 @@ public final class SettingsPage extends BorderPane {
         Integer maximum = maxActive.getValue();
         if (maximum == null || maximum < 1 || maximum > TaskPreferences.MAX_LIMIT)
             throw new IllegalArgumentException("Tasks: choose between 1 and 16 active downloads.");
+        if (directConnections.getValue() == null || directConnections.getValue() < 0 || directConnections.getValue() > 64)
+            throw new IllegalArgumentException("Network: choose Automatic or 1 to 64 connections.");
+        if (language.getValue() == null) throw new IllegalArgumentException("Choose a supported language.");
         return new Values(Path.of(text).normalize().toString(), remember.isSelected(), direct.rate(), media.rate(),
                 sounds.isSelected(), volume.getValue() / 100.0, retention, maximum, autoResume.isSelected(),
                 new NotificationPreferences.Values(notificationsEnabled.isSelected(), notifyCompleted.isSelected(),
-                        notifyFailed.isSelected(), notifyConnection.isSelected(), notificationBanners.isSelected()));
+                        notifyFailed.isSelected(), notifyConnection.isSelected(), notificationBanners.isSelected()), directConnections.getValue(), language.getValue().code(), quickResumeChecks.isSelected());
     }
     public boolean isDirty() {
         try {
@@ -230,7 +278,7 @@ public final class SettingsPage extends BorderPane {
             // fractional volume as dirty due to floating-point roundoff.
             if (Math.abs(current.volume() - saved.volume()) < 1e-9)
                 current = new Values(current.folder(), current.rememberFolder(), current.directRate(), current.mediaRate(),
-                        current.sounds(), saved.volume(), current.retentionDays(), current.maxActive(), current.autoResume(), current.notifications());
+                        current.sounds(), saved.volume(), current.retentionDays(), current.maxActive(), current.autoResume(), current.notifications(), current.directConnections(), current.language(), current.quickResumeChecks());
             return !saved.equals(current);
         } catch (RuntimeException e) { return true; }
     }
@@ -245,6 +293,9 @@ public final class SettingsPage extends BorderPane {
         folder.setText(value.folder()); remember.setSelected(value.rememberFolder());
         direct.load(value.directRate()); media.load(value.mediaRate()); maxActive.setValue(value.maxActive());
         autoResume.setSelected(value.autoResume());
+        language.setValue(LanguagePreferences.LANGUAGES.stream().filter(item -> item.code().equals(value.language())).findFirst().orElse(LanguagePreferences.LANGUAGES.get(0)));
+        directConnections.setValue(value.directConnections());
+        quickResumeChecks.setSelected(value.quickResumeChecks());
         NotificationPreferences.Values notices = value.notifications();
         notificationsEnabled.setSelected(notices.enabled()); notifyCompleted.setSelected(notices.completed());
         notifyFailed.setSelected(notices.failed()); notifyConnection.setSelected(notices.connection());
@@ -262,7 +313,7 @@ public final class SettingsPage extends BorderPane {
                 if (!Files.isDirectory(target) || !Files.isWritable(target))
                     throw new IllegalArgumentException("Downloads: choose an existing writable folder.");
             }
-            apply.accept(value); saved = value; changed(); return true;
+            apply.accept(value); saved = value; com.grabx.app.grabx.util.I18n.install(value.language()); changed(); return true;
         } catch (RuntimeException e) {
             notice.setText(e instanceof IllegalArgumentException ? e.getMessage() : "Could not save settings. Please try again.");
             notice.setVisible(true); return false;

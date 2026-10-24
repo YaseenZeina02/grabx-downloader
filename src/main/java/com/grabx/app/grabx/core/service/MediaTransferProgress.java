@@ -9,7 +9,7 @@ import java.util.Map;
 /** Tracks the selected streams by ID, including already-downloaded streams on resume. */
 final class MediaTransferProgress {
     static final String SELECTION_TEMPLATE =
-            "before_dl:gxmeta:%(duration)s|%(requested_formats.:.{format_id,filesize,filesize_approx,tbr,vcodec,acodec})j";
+            "before_dl:gxmeta:%(duration)s|%(requested_formats.:.{format_id,filesize,url,protocol,http_headers,vcodec,acodec})j";
     private final Map<String, Stream> streams = new LinkedHashMap<>();
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -33,12 +33,6 @@ final class MediaTransferProgress {
                 if (id.isBlank()) continue;
                 Stream stream = new Stream();
                 stream.size = format.path("filesize").asLong(-1);
-                if (stream.size <= 0) stream.size = format.path("filesize_approx").asLong(-1);
-                double bitrate = format.path("tbr").asDouble(0);
-                if (stream.size <= 0 && duration > 0 && Double.isFinite(duration)
-                        && bitrate > 0 && Double.isFinite(bitrate)) {
-                    stream.size = Math.round(bitrate * 1000 * duration / 8);
-                }
                 stream.audio = "none".equals(format.path("vcodec").asText());
                 streams.put(id, stream);
             }
@@ -62,9 +56,7 @@ final class MediaTransferProgress {
         }
         stream.downloaded = Math.max(stream.downloaded, Math.max(0, downloaded));
         if (total > 0) stream.size = total;
-        // Early fragment estimates can describe only a tiny first segment. Keep
-        // the larger metadata estimate until the actual stream length is known.
-        else if (estimatedTotal > 0) stream.size = Math.max(stream.size, estimatedTotal);
+        // Fragment/bitrate estimates are not exact source lengths.
         if (finished && downloaded >= 0) stream.size = downloaded;
         if (stream.size > 0) stream.size = Math.max(stream.size, stream.downloaded);
         return snapshot();
@@ -90,7 +82,7 @@ final class MediaTransferProgress {
         double fraction() { return total > 0 ? Math.min(1.0, (double) downloaded / total) : -1; }
         String sizeText() {
             String current = DownloadRuntimeUtils.formatBytesDecimal(downloaded);
-            return total > 0 ? current + " / ≈ " + DownloadRuntimeUtils.formatBytesDecimal(total) : current;
+            return total > 0 ? current + " / " + DownloadRuntimeUtils.formatBytesDecimal(total) : current;
         }
         String eta(String bytesPerSecond) {
             try {

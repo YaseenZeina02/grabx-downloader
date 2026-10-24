@@ -19,6 +19,37 @@ class DownloadPreferencesTest {
         folders.configure("/tmp/fixed", true);
         assertEquals("/tmp/one-off", folders.getLastFolderOrDefault());
     }
+    @Test void changingDefaultOverridesRememberedFolderButUnrelatedSavesPreserveIt() {
+        var store = new SoundFeedbackServiceTest.MemoryPreferences();
+        var folders = new DownloadFolderPreferences(store);
+        folders.saveLastFolder("/tmp/old");
+        folders.configure("/tmp/new-default", true);
+        assertEquals("/tmp/new-default", folders.getLastFolderOrDefault());
+        folders.saveLastFolder("/tmp/next-selection");
+        folders.configure("/tmp/new-default", true);
+        assertEquals("/tmp/next-selection", new DownloadFolderPreferences(store).getLastFolderOrDefault());
+    }
+    @Test void connectionCountPersistsAndRejectsInvalidValues() {
+        var store = new SoundFeedbackServiceTest.MemoryPreferences();
+        var preferences = new TransferPreferences(store);
+        assertEquals(0, preferences.directConnections());
+        for (int value : new int[]{0, 1, 16, 64}) {
+            preferences.saveDirectConnections(value);
+            assertEquals(value, new TransferPreferences(store).directConnections());
+        }
+        assertThrows(IllegalArgumentException.class, () -> preferences.saveDirectConnections(-1));
+        assertThrows(IllegalArgumentException.class, () -> preferences.saveDirectConnections(65));
+        store.putInt("grabx.direct.connections", 99);
+        assertEquals(0, preferences.directConnections());
+    }
+    @Test void newSegmentLayoutsAllow64WhileLegacyLayoutsStayUnchanged() {
+        long total = 1024L * 1024 * 1024;
+        assertEquals(64, DownloadRunner.directSegmentCount(total, 64));
+        assertEquals(64, DownloadRunner.directSegmentCount(total, 0));
+        assertEquals(1, DownloadRunner.directSegmentCount(total, 1));
+        assertEquals(16, DownloadRunner.directSegmentCountForLegacy(total));
+        assertEquals(16, DownloadRunner.directSegmentCount(4L * 1024 * 1024, 64));
+    }
     @Test void limitsPersistIndependentlyAndBadSavedValuesFallBackToUnlimited() {
         var store = new SoundFeedbackServiceTest.MemoryPreferences();
         var limits = new TransferPreferences(store);

@@ -45,6 +45,20 @@ class NotificationCenterTest {
         assertFalse(center.monitorsConnection());
         center.publish(NotificationCenter.Kind.COMPLETED, "Complete", "file"); assertEquals(2, center.entries().size());
     }
+    @Test void removesOnlySelectedEntryAndRecountsUnread() {
+        var clock = new MutableClock();
+        var center = new NotificationCenter(NotificationPreferences.Values.defaults(), clock);
+        center.publish(NotificationCenter.Kind.FAILED, "Failed", "one");
+        var first = center.entries().getFirst();
+        clock.advance(5); center.publish(NotificationCenter.Kind.COMPLETED, "Done", "two");
+        var second = center.entries().getFirst();
+        center.remove(first);
+        assertEquals(java.util.List.of(second), center.entries());
+        assertEquals(1, center.unreadProperty().get());
+        center.remove(first); assertEquals(1, center.entries().size());
+        center.markRead(); center.remove(center.entries().getFirst());
+        assertTrue(center.entries().isEmpty()); assertEquals(0, center.unreadProperty().get());
+    }
     @Test void preferencesRoundTripAndDoNotTouchSoundSettings() {
         var prefs = new SoundFeedbackServiceTest.MemoryPreferences();
         prefs.putBoolean("grabx.sounds.enabled", false);

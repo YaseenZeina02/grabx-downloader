@@ -48,13 +48,12 @@ final class ResumeVerificationPane extends VBox {
                 && row.status.get() != null && row.status.get().startsWith("Verifying saved data"), row.state, row.status);
         visibleProperty().bind(active);
         managedProperty().bind(active);
-        heading.textProperty().bind(row.status.map(value -> value == null ? "Checking before resume"
-                : value.replace("Verifying saved data", "Checking before resume")
-                       .replace(" • re-reading from server", "")));
-        speed.textProperty().bind(row.speed.map(value -> "Verification speed: " + available(value)));
-        remaining.textProperty().bind(row.eta.map(value -> "Check time left: "
-                + (value == null || value.isBlank() ? "Estimating…" : "~" + DownloadEtaFormatter.format(value))));
-        saved.textProperty().bind(row.size.map(value -> "Saved: " + (value == null ? "" : value)));
+        heading.textProperty().bind(com.grabx.app.grabx.util.I18n.binding(row.status.map(value -> value == null ? "Checking before resume"
+                : value.replace("Verifying saved data", "Checking before resume").replace(" • re-reading from server", ""))));
+        speed.textProperty().bind(com.grabx.app.grabx.util.I18n.binding(row.speed.map(value -> "Verification speed: " + available(value))));
+        remaining.textProperty().bind(com.grabx.app.grabx.util.I18n.binding(row.eta.map(value -> "Check time left: "
+                + (value == null || value.isBlank() ? "Estimating…" : "~" + DownloadEtaFormatter.format(value)))));
+        saved.textProperty().bind(com.grabx.app.grabx.util.I18n.binding(row.size.map(value -> "Saved: " + (value == null ? "" : value))));
     }
 
     void unbind() {

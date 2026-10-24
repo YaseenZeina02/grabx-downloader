@@ -93,10 +93,10 @@ public final class VideoSizeService {
                     "--no-playlist",
                     "--skip-download",
                     "-f", selector,
-                    "--print", "%(filesize,filesize_approx)s",
+                    "--dump-single-json",
                     url.trim()
             ));
-            Long bytes = parseFirstPositiveBytes(output);
+            Long bytes = ExactMediaSize.selectedTotal(output);
             if (bytes != null && bytes > 0) {
                 if (cache.size() >= MAX_CACHE_ENTRIES && !cache.containsKey(key)) {
                     String oldestAvailable = cache.keys().hasMoreElements() ? cache.keys().nextElement() : null;

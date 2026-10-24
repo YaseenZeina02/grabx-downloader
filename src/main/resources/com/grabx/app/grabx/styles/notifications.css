@@ -24,7 +24,6 @@
 .notification-mark { -fx-min-width: 26; -fx-pref-width: 26; -fx-min-height: 26; }
 .notification-bell { -fx-background-color: #1c3048; -fx-background-radius: 13; -fx-border-color: #344961; -fx-border-radius: 13; -fx-padding: 10 14; -fx-cursor: hand; }
 .notification-bell:hover { -fx-background-color: #2b4260; }
-.notification-bell:focused { -fx-border-color: #78a8ff; }
 .notification-bell-compact { -fx-padding: 3 8; -fx-background-radius: 8; -fx-border-radius: 8; }
 .notification-bell-compact .notification-icon { -fx-scale-x: 0.7; -fx-scale-y: 0.7; }
 .notification-badge { -fx-background-color: #3f70f5; -fx-background-radius: 9; -fx-text-fill: white; -fx-font-weight: bold; -fx-font-size: 9px; -fx-padding: 1 4; }

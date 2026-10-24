@@ -410,6 +410,8 @@ public class MainController {
         downloadScheduler = downloadRuntime.scheduler();
         downloadScheduler.setLimit(taskPreferences.maxActive());
         downloadRunner.configureTransferLimits(transferPreferences.directRate(), transferPreferences.mediaRate());
+        downloadRunner.configureDirectConnections(transferPreferences.directConnections());
+        downloadRunner.configureQuickResumeChecks(transferPreferences.quickResumeChecks());
         downloadQueueService = downloadRuntime.queue();
         bulkDownloadActionsService = downloadRuntime.bulkActions();
     }
@@ -573,15 +575,14 @@ public class MainController {
         ));
 
         Label activeCount = new Label();
-        activeCount.textProperty().bind(javafx.beans.binding.Bindings.size(downloadService.activeView())
-                .asString("%d active"));
+        activeCount.textProperty().bind(com.grabx.app.grabx.util.I18n.binding(javafx.beans.binding.Bindings.size(downloadService.activeView()).asString("%d active")));
         activeCount.getStyleClass().add("gx-compact-footer-text");
         Label compactSpeed = new Label();
         if (globalSpeed != null) compactSpeed.textProperty().bind(globalSpeed.textProperty());
         compactSpeed.getStyleClass().add("gx-compact-footer-text");
         Region footerSpacer = new Region();
         HBox.setHgrow(footerSpacer, Priority.ALWAYS);
-        HBox compactFooter = new HBox(8, activeCount, footerSpacer, compactSpeed, notificationView.createButton(true));
+        HBox compactFooter = new HBox(8, activeCount, footerSpacer, compactSpeed);
         compactFooter.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
         compactFooter.getStyleClass().add("gx-compact-footer");
 
@@ -985,10 +986,15 @@ public class MainController {
                 new com.grabx.app.grabx.ui.components.SettingsPage.Values(
                         downloadFolderPreferences.configuredFolder(), downloadFolderPreferences.remembersLastFolder(),
                         transferPreferences.directRate(), transferPreferences.mediaRate(),
-                        soundFeedback.isEnabled(), soundFeedback.volume(), partialRetentionDays(), taskPreferences.maxActive(), taskPreferences.autoResume(), notificationPreferences.load()),
+                        soundFeedback.isEnabled(), soundFeedback.volume(), partialRetentionDays(), taskPreferences.maxActive(), taskPreferences.autoResume(), notificationPreferences.load(), transferPreferences.directConnections(), new com.grabx.app.grabx.core.service.LanguagePreferences(PREFS).code(), transferPreferences.quickResumeChecks()),
                 soundFeedback, settings -> {
                     downloadFolderPreferences.configure(settings.folder(), settings.rememberFolder());
                     transferPreferences.save(settings.directRate(), settings.mediaRate());
+                    transferPreferences.saveDirectConnections(settings.directConnections());
+                    transferPreferences.saveQuickResumeChecks(settings.quickResumeChecks());
+                    downloadRunner.configureQuickResumeChecks(settings.quickResumeChecks());
+                    new com.grabx.app.grabx.core.service.LanguagePreferences(PREFS).save(settings.language());
+                    downloadRunner.configureDirectConnections(settings.directConnections());
                     taskPreferences.save(settings.maxActive(), settings.autoResume());
                     notificationPreferences.save(settings.notifications());
                     notificationCenter.configure(settings.notifications());

@@ -5,6 +5,7 @@ const INTERCEPTION_SETTING = 'interceptBrowserDownloads';
 
 document.addEventListener('DOMContentLoaded', async () => {
   await initializeInterceptionToggle();
+  await initializePageButtonsToggle();
   await scanActivePage();
   await showLastBridgeResult();
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -17,6 +18,8 @@ async function showLastBridgeResult() {
   const {lastContextMenuResult: result} = await chrome.storage.local.get('lastContextMenuResult');
   if (result && result.ok === false && result.message && Date.now() - result.at < 300000) {
     showNotice(result.message, true);
+  } else if (result?.ok) {
+    document.getElementById?.('notice')?.classList.add('hidden');
   }
 }
 
@@ -27,6 +30,13 @@ async function initializeInterceptionToggle() {
   toggle.addEventListener('change', () => {
     chrome.storage.local.set({ [INTERCEPTION_SETTING]: toggle.checked });
   });
+}
+
+async function initializePageButtonsToggle() {
+  const toggle = document.getElementById('pageButtons');
+  const settings = await chrome.storage.local.get('showPageButtons');
+  toggle.checked = settings.showPageButtons !== false;
+  toggle.addEventListener('change', () => chrome.storage.local.set({showPageButtons:toggle.checked}));
 }
 
 async function scanActivePage() {

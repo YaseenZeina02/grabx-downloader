@@ -392,7 +392,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
         browseBtn.setMaxWidth(130);
         browseBtn.setOnAction(e -> {
             DirectoryChooser chooser = new DirectoryChooser();
-            chooser.setTitle("Select Download Folder");
+            chooser.setTitle(com.grabx.app.grabx.util.I18n.text("Select Download Folder"));
             File selected = chooser.showDialog(pane.getScene().getWindow());
             if (selected != null) {
                 folderField.setText(selected.getAbsolutePath());
@@ -428,7 +428,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
         info.setGraphicTextGap(8);
         info.setGraphic(null);
 
-        Label sizeInfo = new Label("Estimated size: —");
+        Label sizeInfo = new Label("Download size: —");
         sizeInfo.getStyleClass().add("gx-text-muted");
         sizeInfo.setWrapText(true);
         sizeInfo.setTextFill(Color.web("#9aa4b2"));
@@ -512,7 +512,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
             if (!dialogAlive[0]) return;
             if (mySession != sessionId.get()) return;
             String u = urlField.getText() == null ? "" : urlField.getText().trim();
-            if (u.isBlank()) { setSizeText.accept("Estimated size: —"); return; }
+            if (u.isBlank()) { setSizeText.accept("Download size: —"); return; }
 
             String modeV = modeCombo.getValue() == null ? "" : modeCombo.getValue();
             String qV = qualityCombo.getValue() == null ? "" : qualityCombo.getValue();
@@ -520,11 +520,11 @@ private static javafx.scene.Node buildSuccessGraphic() {
 
             Long cached = SIZE_CACHE.get(key);
             if (cached != null && cached > 0) {
-                setSizeText.accept("Estimated size: " + formatBytesDecimal(cached));
+                setSizeText.accept("Download size: " + formatBytesDecimal(cached));
                 return;
             }
 
-            setSizeText.accept("Estimated size: — ");
+            setSizeText.accept("Download size: — ");
             final long rid = ++sizeReqId[0];
 
             if (lastType[0] == ContentType.DIRECT_FILE) {
@@ -542,23 +542,30 @@ private static javafx.scene.Node buildSuccessGraphic() {
                         if (!dialogAlive[0]) return;
                         if (mySession != sessionId.get()) return;
                         if (rid != sizeReqId[0]) return;
-                        if (bytes != null && bytes > 0) setSizeText.accept("Estimated size: " + formatBytesDecimal(bytes));
-                        else setSizeText.accept("Estimated size: — ");
+                        if (bytes != null && bytes > 0) setSizeText.accept("Download size: " + formatBytesDecimal(bytes));
+                        else setSizeText.accept("Download size: — ");
                     });
                 }, "probe-size-head").start();
                 return;
             }
 
             if (lastType[0] == ContentType.VIDEO) {
-                Long bytes = cfg.MODE_AUDIO.equals(modeV) ? null
-                        : videoProbeCache.estimatedBytes(u, VideoQualityUtils.parseHeight(qV));
-                setSizeText.accept(cfg.MODE_AUDIO.equals(modeV) ? "" : bytes != null
-                        ? "Estimated download: ≈ " + formatBytesDecimal(bytes) + " (video + audio)"
-                        : "Estimated download: unavailable before download");
+                setSizeText.accept("Checking download size…");
+                try { VIDEO_SIZE_EXEC.execute(() -> {
+                    if (!dialogAlive[0] || mySession != sessionId.get() || rid != sizeReqId[0]) return;
+                    Long bytes = fetchSizeWithYtDlp(u, modeV, qV);
+                    Platform.runLater(() -> {
+                        if (!dialogAlive[0] || mySession != sessionId.get() || rid != sizeReqId[0]) return;
+                        setSizeText.accept(bytes != null ? "Download size: " + formatBytesDecimal(bytes)
+                                + " (source streams)" : "Exact download size unavailable");
+                    });
+                }); } catch (RejectedExecutionException busy) {
+                    setSizeText.accept("Exact download size unavailable · try again shortly");
+                }
                 return;
             }
 
-            setSizeText.accept("Estimated size: —");
+            setSizeText.accept("Download size: —");
         };
 
         modeCombo.valueProperty().addListener((obsM, oldM, newM) -> {
@@ -634,7 +641,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
                 info.setText("Paste a link then click Get.");
                 info.setTextFill(Color.web("#ff4d4d"));
                 if (okBtn != null) okBtn.setDisable(true);
-                setSizeText.accept("Estimated size: —");
+                setSizeText.accept("Download size: —");
                 return;
             }
 
@@ -713,7 +720,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
 
             info.setText("Paste a link then click Get.");
             info.setTextFill(Color.web("#9aa4b2"));
-            setSizeText.accept("Estimated size: — ");
+            setSizeText.accept("Download size: — ");
         });
 
         pane.setContent(grid);
@@ -866,32 +873,21 @@ private static javafx.scene.Node buildSuccessGraphic() {
             args.add("--no-playlist");
             args.add("--skip-download");
             args.add("-f"); args.add(selector);
-            args.add("--print"); args.add("%(filesize,filesize_approx)s");
+            args.add("--dump-single-json");
             args.add(url.trim());
 
             String out = YtDlpManager.run(args);
-            if (out == null) return null;
-
-            for (String line : out.split("\\R")) {
-                if (line == null) continue;
-                String t = line.trim();
-                if (t.isEmpty()) continue;
-                boolean allDigits = t.chars().allMatch(Character::isDigit);
-                if (!allDigits) continue;
-                long v = Long.parseLong(t);
-                if (v > 0) return v;
-            }
-            return null;
+            return ExactMediaSize.selectedTotal(out);
         } catch (Exception ignored) {
             return null;
         }
     }
 
     private static Long fetchSizeWithYtDlp(String url, String mode, String quality) {
-        // keep existing behavior minimal: just reuse print approach for safety
+        // Use the same stream selector as the transfer; do not estimate converted output.
         try {
             if (url == null || url.isBlank()) return null;
-            String selector = "bv*+ba/b";
+            String selector = "bv*+ba/best";
             if (mode != null && mode.toLowerCase().contains("audio")) selector = "bestaudio/best";
 
             if (quality != null && !quality.isBlank() && !quality.toLowerCase().contains("best")) {
@@ -909,7 +905,7 @@ private static javafx.scene.Node buildSuccessGraphic() {
         if (url == null || url.isBlank()) return null;
         HttpURLConnection conn = null;
         try {
-            conn = (HttpURLConnection) new URL(url.trim()).openConnection();
+            conn = com.grabx.app.grabx.util.VerifiedConnections.open(new URL(url.trim()));
             conn.setInstanceFollowRedirects(true);
             conn.setConnectTimeout(6500);
             conn.setReadTimeout(6500);

@@ -1,5 +1,472 @@
 # GrabX handoff
 
+## Git checkpoint requested (2026-10-24)
+
+- User requested commit and push of accumulated work before the next feature.
+  Target master / origin (YaseenZeina02/grabx-downloader). Fetch showed no remote
+  divergence, with three existing local commits awaiting push. New checkpoint includes
+  download recovery/connections, extension 0.3.2, exact sizes, TLS chain repair,
+  live localization/RTL, notification dismissal, quick checks, docs and Instagram assets.
+- Pre-commit checks: git diff --check passed and all 45 Node extension tests rerun
+  successfully. Latest full Java verification remains 318 discovered / 307 passed /
+  11 optional skipped, followed by three passing final wording/draft tests. No new
+  application changes since those Java runs. TLS key-store fixture documented as
+  disposable test-only data with deliberately public password.
+
+## Latest outcome: automatic browser downloads before filename completion (2026-10-24)
+
+- User wants browser/script/new-tab downloads routed to running GrabX without GX
+  button clicks. Existing onCreated path waited for an absolute final filename and
+  could miss early automatic transfers. Extension 0.3.2 adds onDeterminingFilename,
+  holds suggest callback until the transfer is accepted/declined, and always releases
+  it exactly once. No new permissions or native/app changes.
+- Early browser downloads use actual final HTTP(S) URL and referrer, skip redundant
+  preflight because browser already received a file response, and use GrabX's chooser
+  (tentative browser name is only a hint). Browser pauses before native delivery and
+  is cancelled/erased only after acceptance. Failure resumes only a transfer GrabX
+  paused. Closed app / app closing during handoff leaves automatic downloads in
+  browser without pending confirmation. Explicit GX/popup/context-menu confirmation
+  flows remain. Filename-ready Save As fallback retained.
+- Serialized per-ID operations plus session handled marker prevent duplicate delivery
+  from creation / determining / filename events. Adjusted existing race test to await
+  both serialized operations after releasing its mocked search.
+- Verified 45 Node extension tests passed, including six new scenarios for early
+  redirect handoff, event races, disabled/blob pass-through, app closed/racing close,
+  and failure fallback; git diff --check passed. Browser API behavior reviewed against
+  official Chrome downloads docs. No real user downloads or browser settings touched;
+  actual browser reload/live-site confirmation pending. No app build required.
+- Next user step: Reload extension from extensions page, leave Send downloads to
+  GrabX ON, keep app open, and try the automatic download page again.
+
+## Latest outcome: Instagram starter profile (2026-10-24)
+
+- User is starting a GrabX Instagram page before release. Generated a navy/white/blue
+  GX profile avatar using built-in image_gen, saved marketing/instagram/grabx-profile-v1.png.
+  English bio explicitly says Coming soon; copy and exact generation prompt saved in
+  marketing/instagram/profile-copy-v1.txt. No social account accessed or content posted.
+- User can upload avatar and paste bio; no implementation pending for this request.
+
+## Latest outcome: per-notification dismissal, live RTL, optional quick resume (2026-10-24)
+
+- Inbox cards now have × buttons that remove only their selected entry and update
+  unread count. Banner × continues to hide only the banner. Clear all remains.
+- Live RTL failure came from HoverTooltipService replacing Scene.root after initial
+  localization. I18n now observes Scene.rootProperty and localizes current roots even
+  for already watched windows. Regression wraps an already localized scene, switches
+  Arabic/English, and checks both effective direction and actual child positions.
+- User explicitly chose optional sampled resume checks after being told they can miss
+  changes between samples. Settings > Network > Resume checks adds a draft-persisted
+  checkbox, default OFF (full check). MainController loads/saves/configures runner;
+  applies on next resume/retry, not mid-response. All five translation catalogs updated.
+- QuickResumeVerifier compares five distributed 64 KiB samples (max 320 KiB); small
+  prefixes up to 320 KiB are compared entirely. Only contiguous, validator-less parts
+  with known size and working ranges qualify. Exact size/range/content-length checks,
+  byte comparison, pause/cancel checkpoints and shared bandwidth limit retained.
+  Any mismatch stops without appending; ignored ranges fall back to original full
+  same-response comparison. Strong validators and segmented layouts unchanged.
+- Quick checking is explicitly less comprehensive: differences outside samples or
+  source changes between unvalidated requests can escape detection. No claim of full
+  identity verification. Full checks remain default and existing tests retain them.
+- Local tests added: successful sampled resume and exact final bytes; changed last
+  sample preserves all saved bytes; ignored-range fallback; truncated sample; cancel;
+  draft save/discard; actual inbox button click removes just one item; live root change.
+- Verification: full Java 21 + GRABX_TEST_RESUME=true suite: 318 discovered,
+  307 passed, 11 optional skipped, zero failures. installDist succeeded. Final
+  help wording clarified that Save applies on the next connection attempt; an
+  already paused in-flight response retains its current verification strategy.
+- Final help wording: three focused draft/localization tests passed; installDist
+  rebuilt and existing native-host distribution refreshed. git diff --check passed.
+- Next user check: restart once to load new code, Settings > Network > Resume
+  checks, enable quick checks and Save, then start/resume saved transfer. Verify
+  live Arabic/English direction and per-entry × in inbox. No implementation pending.
+- No real user downloads/history/preferences modified and app not restarted.
+
+## Latest outcome: FileCR repeated resume verification (2026-10-23)
+
+- Real local logs show SocketTimeoutException followed by full prefix verification:
+  27,377,664 bytes verified once, then repeated attempts at 140,918,784 saved bytes
+  with no new progress. Saved metadata has range support Yes, no ETag/Last-Modified,
+  segments=0, total=5,229,289,042. Do not attribute this to general internet speed.
+- Direct payload HTTP read-idle timeout increased from 15 seconds to a bounded
+  120 seconds. A brief server stall no longer immediately discards the response
+  and forces validator-less prefix verification from zero. Existing identity and
+  full-prefix byte comparisons remain required; no blind 64-way split added.
+- Added real loopback HTTP regression: stall for 16.5 seconds during prefix
+  verification, then verify and append using the same response, byte-exact output.
+- Verification: eight focused Java tests passed (stall, prefix safety, interrupted
+  segmented transfers); installDist and git diff --check passed. Existing native-host
+  distribution refreshed; user app was not restarted.
+- Next: user restart GrabX once, then resume existing download and observe whether
+  verification completes rather than repeating. Server throughput remains unverified.
+- Public FileCR page could not be retrieved through web tool. No saved signed URL,
+  referrer or user tokens sent externally; no actual user download modified/restarted.
+- Remaining limitation: disconnects or idle periods over two minutes still require
+  safe verification when the server supplies no validators. This change addresses
+  premature retry overhead, not a guaranteed increase in server bandwidth.
+
+## Latest outcome: apply language immediately on Save (2026-10-23)
+
+- User reported Arabic selection persists while application stays English after Save.
+  Previous implementation explicitly required restart; now Save activates chosen
+  locale immediately without interrupting transfers. Settings help updated in all
+  five catalogs. Persisted startup language remains supported; no toolbar selector.
+- I18n now weakly tracks canonical source text so EN→AR→EN can restore labels,
+  prompts, titles, menus, existing/hidden library controls and tooltip text. Root
+  orientation/font styles change live and restore original styles when nodes are
+  reparented. URLs/path fields and numeric metrics retain LTR. Translations do not
+  overwrite bound models; status and verification bindings depend on observable locale.
+  Fixed observable invalidation by reading locale property's value during binding
+  evaluation, so repeated switches refresh even if task status itself does not change.
+- Same-window regression clicks real Settings Save: Arabic applies before restart,
+  bound Downloading label updates with unchanged English source, URL token string
+  preserved, detached library label refreshes on return, switching back restores
+  English text and LTR, saved preference stays correct. Existing discard/layout tests
+  retained. Full Java 21 + GRABX_TEST_RESUME=true suite passed: 308 discovered,
+  297 passed, 11 optional skipped. Final root-reparent direction refinement: five
+  focused language/FX tests and installDist passed. git diff --check passed.
+- docs/LANGUAGES.md updated (211 catalog messages per non-English language). Existing
+  staged native-host distribution refreshed so app launched via extension matches.
+  No real user preferences/history/downloads changed or live app restart performed.
+- Next: user Stop/Run ONCE to load this new code, then language selection + Save
+  changes interface immediately (no restart needed for later language changes).
+  Prior restart-only handoff entries are superseded by this entry. No unfinished
+  implementation for this report; user live visual confirmation pending.
+
+
+## Latest outcome: desktop language settings (2026-10-23)
+
+- User requested language selector inside Settings, explicitly not on main toolbar.
+  Added Language section with native-name choices English, العربية, Español, Français,
+  Deutsch, Türkçe. Default en; invalid saved codes fall back to en. MainController
+  persists grabx.language in same prefs node through existing draft save/discard.
+  Changing locale does not interrupt transfers; requires next app launch to apply.
+- LanguagePreferences plus I18n presentation layer and shared messages.json (210
+  entries per translated language). Startup installs window/child observers covering
+  new controls/dialogs/menu/tooltips and ComboBox display cells. Underlying model
+  IDs/modes/quality/statuses/user input remain English/original; bound statuses map
+  through I18n explicitly in both row views and verification panel. No unbinding or
+  overwriting model properties. Missing catalog/external messages retain original text.
+- Arabic root RTL with bundled Cairo fonts. URL/path inputs and numeric size/speed/ETA
+  displays stay LTR. Language choice is Settings only; no toolbar/compact bell added.
+  Existing saved language is applied also to new dialogs/windows. No Java default
+  locale change or extraction/filename/download behavior changes. Browser extension
+  UI independent (not localized by desktop setting).
+- Full Java 21 + GRABX_TEST_RESUME=true suite passed: 307 discovered, 296 passed,
+  11 optional skipped. Final numeric-direction refinement: five focused language,
+  draft and FX-layout tests passed; installDist succeeded. All six locales tested
+  at 900x500 action-bar bounds; Arabic 1000x750 render visually inspected. User paths
+  unchanged and still LTR, internal model stays English, save/discard/no-dirty tested.
+- Preview: /Users/yaseenhasan/.codex/visualizations/2026/10/22/01a16589-cc3f-7992-9d6d-2031dac16098/grabx-language-ar.png.
+  docs/LANGUAGES.md records behavior and fallback limits. git diff --check passed.
+- Refreshed existing staged Application Support/native-host distribution so app
+  launches from extension include this feature. No bridge registration/permissions,
+  live app restart, real user language preferences/history/downloads changed.
+- Next user steps: Stop/Run to load updated build, Settings > Language, choose
+  العربية (or another language), Save changes, then restart GrabX to apply. No
+  extension Reload needed solely for desktop language. Changes remain uncommitted;
+  all earlier unrelated app/extension work preserved.
+
+
+## Latest outcome: remove compact notification button (2026-10-23)
+
+- User requested notification bell stay out of Compact View. Removed compact bell
+  creation from footer HBox; active count, spacer and global speed remain. Full-view
+  bell and notification system retained. No transfer or notification-event changes.
+- Java 21 installDist succeeded; git diff --check passed. No new tests/full suite
+  for this single layout removal; app not restarted or live UI previewed.
+- Next user step: Stop/Run to see the simpler compact footer. Nothing else pending
+  for this request. All unrelated local changes preserved.
+
+
+## Latest outcome: verified recovery for missing TLS intermediates (2026-10-23)
+
+- Supersedes pending approval below: user explicitly answered YES to supplement
+  intermediates while retaining signatures/validity/hostname checks and JVM roots.
+  Approved implementation and build completed after the initial auto-review block.
+- New util.VerifiedConnections configures an app-scoped SSLContext / PKIX manager
+  with existing configured JVM trust anchors and bundled public SSL2BUY EMEA / R46
+  issuer chain as CertStore candidates only. Self-signed bundled entries excluded.
+  No roots installed, trust-all, hostname bypass, HTTP downgrade or automatic AIA.
+  Initialization failure uses normal validated Java TLS. Main direct range path,
+  browser file probe (through range helper), exact media and Add Link HEAD sizes use it.
+- docs/TLS.md and resource README record behavior/provenance. Certs are from public
+  AIA issuer endpoints, cryptographic path must still build to JVM trust store.
+  User approved this exact scope, no new OS/browser trust or permissions granted.
+- Four security regressions passed: leaf-only chain fails without intermediate and
+  passes with it; roots remain identical to default; untrusted, expired, tampered
+  and arbitrary candidate roots rejected; real local HTTPS wrong-host handshake
+  rejected. Disposable synthetic test certs/key store live under src/test/resources/tls
+  (fixture-password, NOT real credentials; not in production distribution).
+- Java 21 full suite with GRABX_TEST_RESUME=true passed; installDist succeeded before
+  final suite. Actual helper on s201d1.downet.net verified TLS and reached HTTP 401
+  on server root; staged native bridge was refreshed with ditto and passed the same
+  framed inspectFile TLS check. HTTP 401 here is expected for bare server root, not
+  proof the movie link succeeds/fails. No full film or actual user task started.
+- Auto-review separately rejected an OPTIONAL probe reading saved history then sending
+  its potentially signed file URL+referer externally, citing sensitive egress without
+  specific approval. Entire command did not execute; do not bypass. Told user no
+  private saved URL was sent. Safe checks used host root without movie tokens instead.
+  No approval requested/needed to finish host TLS fix; actual movie check left to Retry.
+- Next user step: Stop/Run app to load new TLS helper, Retry failed task. Fresh URL
+  may be needed if site token expired. No extension change/reload required for TLS.
+  Earlier extension 0.3.1 still requires Reload/refresh if not already done. Changes
+  uncommitted; unrelated app/extension work preserved. No remaining implementation
+  block for TLS fix, only user-side real file verification pending.
+
+
+## Pending approval: incomplete TLS chain on downet (2026-10-23)
+
+- User GX now reaches app but Direct row fails unable to find valid certification
+  path to requested target, host s201d1.downet.net. Live certificate-only diagnosis:
+  server sends one leaf (*.downet.net), issuer SSL2BUY EMEA RSA Domain Validation
+  Secure Server CA, validity Nov 2025–Dec 2026. Missing issuer chain, not evidence
+  of rate-limiting. System curl verifies TLS and returns HTTP 401 on bare host.
+- Fresh Java 21 with standard enableAIAcaIssuers=true verifies TLS and returns HTTP
+  401, proving completing intermediates can fix TLS. Ephemeral check only; no app
+  startup properties or trust stores changed. /private/tmp/GrabXTlsCheck.java.
+- Considered scoped PKIX CertStore with public intermediates as candidates, existing
+  JVM roots as anchors, default HTTPS hostname verification. Public issuer files
+  retrieved via cert-declared HTTP endpoints (issuer HTTPS endpoint handshake fails):
+  /private/tmp/grabx-sectigo-intermediate.crt and grabx-sectigo-chain.p7c. No trust
+  anchors imported. Standard AIA approach documented in Oracle PKI guide, but did
+  not enable globally or commit to unbounded dynamic issuer fetching.
+- Auto-review REJECTED one exec command that would add custom TLS manager, bundle
+  issuer certs and wire direct/size paths, citing persistent security-boundary change,
+  HTTP-sourced certificate provisioning and lack of specific authorization. Entire
+  command did not execute: VerifiedConnections.java/resources do NOT exist, no
+  TLS changes applied. Do not bypass rejection via other tools/indirect execution.
+- Asked user asynchronously for explicit approval to add public intermediates only
+  while retaining signature/validity/hostname checks and existing Java root trust.
+  Await answer before dependent implementation. Explained auto-review origin/risk.
+- If approved: implement scoped verified PKIX path building, test valid incomplete
+  chain plus rejection of untrusted/expired/mismatched certificates; build, refresh
+  staged native bridge without altering registration; check same host TLS. Keep
+  incomplete-chain server handling separate from URL routing fixes. No film download,
+  no real task changes, no completed repair claimed. Other work remains preserved.
+
+
+## Latest outcome: GX media link routing matches popup (2026-10-23)
+
+- User reports GX still fails with generic Could not verify download link, while
+  popup Video successfully downloads the same movie. Source comparison confirmed
+  page-assistant.fileItem classified every anchor as file; popup classifies direct
+  MP4/WebM/MOV/MKV as video and audio suffixes as audio. These paths differ: file
+  requires Java range preflight; video/audio use the working media handoff.
+- Extension 0.3.1 uses matching URL-path media classification for GX anchor actions,
+  including signed queries and uppercase suffixes. Added independent inline flag
+  so media-link buttons keep compact positioning/style. Generic/opaque files keep
+  inspection; no global relaxation or assumptions of server throttling.
+- Successful handoffs clear the persisted prior bridge rejection and popup hides
+  it on success, avoiding stale errors implying a fresh failure. No Java changes.
+- All 39 Node extension tests passed: media/ordinary routing, signed URLs, regression
+  where file preflight fails but Video delivers, generic files still validated,
+  successful clearing of old error; existing cancel/fallback tests retained.
+  Java 21 installDist succeeded; git diff --check passed. No live site/browser
+  reload performed or remote server request in this follow-up. Original reason for
+  this server's Java preflight failure remains unmeasured; media route now matches
+  the user's confirmed working path rather than promising that preflight is fixed.
+- README updated. User next: Reload extension, refresh the same page, retry GX.
+  App restart unnecessary for this extension-only fix. Other work preserved.
+
+
+## Latest outcome: exact media source sizes and browser URL validation (2026-10-23)
+
+- User clarified previous ≈ removal was a misunderstanding: wants actual selected
+  video+audio sizes before transfer. Also reported GX file button on Liiivideo showing
+  Invalid HTTP(S) download request, asked whether server throttling/old requests.
+- BrowserFileProbe used strict URI.create on raw browser URLs, unlike capture parser.
+  Exposed/reused BrowserBridgeProtocol.normalizeHttpUrl, preserving signed escapes
+  while quoting browser-legal filename characters (brackets, spaces, pipes, etc.).
+  HTTP schemes/host/userinfo and UA injection checks retained. Local regression
+  verifies actual HTTP request and preservation of a%2Fb; this fixes a real validation
+  inconsistency, but the exact current clicked site URL was not inspected live.
+- Found Chrome/Brave use staged Application Support native-host, separate from app
+  build. Updated that existing staged distribution with ditto after installDist;
+  no registration IDs/permissions changed. Actual staged native messaging process
+  passed a framed inspectFile request against local HTTP server for bracket/space
+  filename + signed query. No external film download or user task mutation.
+- New ExactMediaSize obtains selected stream filesize metadata or HEAD length,
+  falling back to one-byte Content-Range request; 2s network timeouts, identity
+  encoding, UA/Referer whitelist, rejects HTML/manifests/unsupported protocols.
+  Add Link uses selected yt-dlp JSON on existing bounded two-thread executor and
+  stale-result guards, shows source-stream total or exact-size unavailable. Same
+  selectors as transfer. VideoSizeService also uses selected JSON, not approx print.
+- Transfer before_dl metadata includes selected URLs/protocol/headers to resolve
+  missing exact lengths before payload; no URL logging. MediaTransferProgress no
+  longer uses filesize_approx/bitrate/fragment estimates. Removed MP3 bitrate-size
+  substitution and single-stream approximate totals; unknown stays current bytes
+  without invented total. Final completed size still measured on disk after mux/encode.
+  Exact sum of source video+audio is not exact final muxed/converted output size.
+- Java 21 full test + installDist passed: 298 discovered, 250 passed, 48 optional
+  skips (native opt-in not enabled this run). Exact-size tests cover selected sums,
+  HEAD, valid range fallback, unknown/manifests, progress and URL validation tests.
+  git diff --check passed. Native check /private/tmp/grabx-native-inspect-check.py
+  passed on staged bridge. No live JavaFX preview or external media size benchmark.
+- Next: Stop/Run app; generate fresh site link (page says 12-minute validity), retry
+  GX button. Bridge already refreshed. Verify Add Link selected source size and
+  unknown-size messaging. No assurance every live/fragmented site exposes a total.
+  Prior extension and app work preserved; all changes uncommitted.
+
+
+## Latest outcome: cleaner media size display (2026-10-23)
+
+- User confirmed extension changes work well, then requested removing the approximate
+  size marker from the download card. MediaTransferProgress now renders current / total
+  without ≈; DownloadRunner postprocessing total also omits the marker. Underlying
+  estimation, progress and final actual-size measurement unchanged. Add Link's explicitly
+  labeled estimate stays as before; request was about the active task card screenshot.
+- Existing MediaTransferProgressTest expectation updated; focused tests and Java 21
+  installDist passed; git diff --check passed. App not restarted; unrelated changes
+  preserved. Next: Stop/Run to see the cleaner display. No other pending work.
+
+
+## Latest outcome: browser interception and in-page assistant (2026-10-23)
+
+- User requested ordinary page download clicks hand off without opening extension,
+  visible detection badge, and GrabX-styled buttons near video/file content.
+- Extension 0.3.0 adds top-frame HTTP(S) content script page-assistant.js: navy GX
+  buttons/green dots over media and beside recognizable file links; per-tab detected
+  count badge; mutation/metadata/SPA/fullscreen/scroll updates; bounded scanning
+  (50 media, 1500 anchors, 60 candidates, first 30 overlays). Dynamic content tested.
+- Ordinary trusted primary clicks on recognizable file/download anchors intercept
+  when existing Send downloads to GrabX switch is on; modifiers/new-tab links retain
+  browser behavior. Native failure replays original click with a bypass guard. The
+  browser download API remains fallback for opaque/server-driven links. Confirmed
+  browser responses bypass duplicate preflight (WeakSet internal marker), avoiding
+  fresh requests invalidating single-use URLs; pause/delivery/cancel and safe resume,
+  Save As/cancellation behavior retained. Rechecks in_progress events; reports errors.
+- Popup adds independent Show download buttons on pages switch. User action is
+  required to send; no auto-start of downloads. Buttons show delivery/queued/closed
+  app/failure toast and dedupe in-flight sends. Blob media uses page analysis.
+  Top-frame only; protected pages, DRM, cross-origin embeds unsupported. Small
+  opaque downloads can finish before download-event interception. This is not a
+  claim of universal IDM-equivalent site interception or a confirmed root cause for
+  the user's particular browser; same-page live extension check remains pending.
+- Content scripts require persistent site matching (manifest addition); user must
+  Reload extension and refresh existing pages; browser may request site access.
+  No live extension reload, browser preferences/native host or user data changed.
+- Verification: all 36 Node extension tests passed, including native handoff skipping
+  redundant inspection, safe failure/cancel, tab badge guards/bounds and independent
+  visibility preference. Java 21 installDist succeeded; packaged manifest confirmed
+  version 0.3.0 and content script. git diff --check passed. Java engine unchanged.
+- CUA browser tested actual content script in a local page with mocked Chrome/native
+  bridge: video-button delivery, ordinary file click capture, new-file detection 3→4,
+  failed bridge message. It is NOT a real Chrome-extension/native end-to-end test.
+  Screenshot /Users/yaseenhasan/.codex/visualizations/2026/10/22/01a16589-cc3f-7992-9d6d-2031dac16098/grabx-page-assistant-preview.png.
+  Local preview /private/tmp/grabx-extension-preview; server on 127.0.0.1:8766 was
+  used only for testing. README updated. Changes uncommitted, other changes preserved.
+- Next user check: Reload installed unpacked extension, refresh target page, keep
+  Send downloads to GrabX enabled; test ordinary link and video/page buttons. If a
+  specific site still fails, inspect its actual URL/flow and latest bridge rejection.
+
+
+## Latest outcome: notification toolbar button appearance (2026-10-23)
+
+- User requested bell match adjacent toolbar buttons instead of appearing focused.
+  Full-view bell now uses shared gx-icon-btn styling, 40x40 preferred button and
+  shared 34px SVG container: matching neutral fill, border, hover, press and icon.
+  Disabled focus traversal like neighboring toolbar buttons and removed the bell's
+  custom blue focused-border rule. Compact sizing/styling, inbox action, tooltip,
+  accessible unread count and badge retained; graphic is mouse-transparent.
+- Java 21 installDist succeeded; git diff --check passed. No engine/test changes,
+  no full suite rerun for this visual-only change, no live visual app check/restart.
+- Next: Stop/Run when convenient to see the matching bell. No other pending work
+  for this request; unrelated existing changes preserved and uncommitted.
+
+
+## Latest outcome: automatic connection tuning (2026-10-23)
+
+- User confirmed manual 64 raised displayed throughput to 1.6 MB/s, then requested
+  simpler connection help and an Automatic option alongside manual 1–64.
+- Added Automatic (persisted as 0); new/unconfigured installations default to Auto,
+  existing saved manual values including this user's 64 remain intact. Draft save,
+  discard, validation, accessible selector and startup wiring retained. Help shortened.
+- Auto reserves up to 64 pieces using existing size/identity/range rules, starts up
+  to four workers and samples four-second throughput windows. Doubles while gains
+  reach 10%; failed probes roll back with 30-second cooldown; two windows below
+  70% baseline halve workers. Retry ceilings still shrink on server rejection.
+- Dynamic pool plus adjustable permits caps newly started pieces after reductions;
+  existing writers finish their own piece before retiring. No concurrent duplicate
+  writers/resegmentation. Saved layouts and manual mode preserved. Auto pauses
+  experiments for any shared direct speed ceiling, pause, or the final few pieces.
+  UI shows Auto and the worker cap (including retiring workers), not exact sockets.
+- Java 21 GRABX_TEST_RESUME=true full test + installDist passed: 292 discovered,
+  281 passed, 11 skipped. Added final local connection-limited server integration:
+  16 MiB, 64 pieces, observed Auto reaching eight workers, exact bytes verified.
+  Final seven focused policy/UI/actual-auto-transfer tests passed; installDist
+  up-to-date. UI checks Auto/64 save and discard. git diff --check passed.
+- docs/SETTINGS.md documents algorithm and limits. No real user preferences/history,
+  downloads or live app changed; no app restart or external server benchmark.
+- Next user check: Stop/Run, Settings > Network, choose Automatic, Save, start a new
+  download of the same link and compare with manual 64. This is a heuristic, no
+  promise of optimal throughput; old splits still cap parallelism. Uncommitted.
+
+
+## Speed follow-up inspection (2026-10-23)
+
+- User reports no improvement (355 KB/s screenshot, new Robin Hood (2) task).
+  Read-only inspection of that exact Desktop resume metadata found segments=4,
+  support=Yes, strong ETag and Last-Modified, total=1157286041. Old task has
+  segments=16. Therefore the screenshot task was not created with 64 pieces.
+- On-disk com.grabx.app.plist has speed.direct/media=0 and no connections key;
+  live Java preferences may not yet be flushed, so absence alone is not definitive.
+  Asked asynchronously whether Network connection setting is visible/saved on 64;
+  answer pending. Do not assume user failed to save or that speed issue is fixed.
+- Added progress label showing 1 connection / Up to N connections using the current
+  attempt's worker cap (including reduced server-busy retries), plus diagnostics
+  logging requested setting, saved pieces and worker cap, without URLs.
+- Verification: Java 21 DownloadPreferencesTest and installDist passed for the
+  progress-label refinement; full suite not rerun for this display-only change.
+- Actual socket count is not claimed: late completed segments can reduce active
+  workers below the displayed cap. User data/preferences untouched.
+
+
+## Latest outcome: configurable direct connections (2026-10-23)
+
+- User requested Network setting for 1–64 connections per direct download. Added
+  persisted preference, default 4, invalid-value fallback, Settings draft/save/discard
+  integration and startup/save wiring to the runner. Network subtitle includes connections.
+- New downloads use up to requested pieces (minimum 256 KiB each, existing 4 MiB
+  parallel eligibility threshold). Existing validator/range checks, shared speed budget
+  and server-busy worker reduction retained. Saved layouts remain immutable; existing
+  active workers are not restarted. Next transfer launch caps workers by the preference
+  and saved piece count. Old 16-piece legacy inference remains unchanged.
+- Resume metadata, partial detection and byte accounting now support all 64 pieces.
+  Added real runner/local server test: 16 MiB via 64 ranges, exact bytes verified;
+  restored 64 half-filled pieces with one worker, exact completion verified again.
+- Java 21 offline full suite with GRABX_TEST_RESUME=true passed: 286 discovered,
+  275 passed, 11 skipped. After adding UI coverage/text refinement, final two focused
+  tests passed and installDist succeeded: draft 4→64, discard, save and clean state;
+  actual 64-piece transfer/resume. UI test initializes CSS/layout before lookup.
+  git diff --check passed. docs/SETTINGS.md updated.
+- No real user downloads, preferences, app restart or external-speed comparison.
+  Next user check: Stop/Run, Settings > Network > Connections per direct download,
+  choose 64 and Save; start a NEW copy of the same link to compare throughput.
+  Existing partial tasks may have fewer saved pieces and cannot expand to 64 safely
+  in place. Faster external throughput is not claimed yet. Changes uncommitted.
+
+
+## Latest outcome: default folder synchronization and speed investigation (2026-10-23)
+
+- Changing the configured default now resets the remembered destination to it,
+  including with remember-last enabled. Saving unchanged folder settings preserves
+  later one-off selections. Added regression coverage; existing task paths unchanged.
+- Unlimited limiter inspection and new deterministic regression confirm full 128 KiB
+  reads with no sleeps at zero, including after disabling a prior limit. No evidence
+  yet of a fixed 600 KB/s cap. Screenshot compares GrabX with Motrix showing 64
+  connections; GrabX currently allows up to four concurrent direct workers and only
+  segments with strong ETag and validated ranges. Do not claim the observed network
+  speed discrepancy is resolved without same-link measurements.
+- Buffered both direct and segmented output writes (128 KiB) to reduce file-write
+  overhead from small network reads. Existing close/flush and resume paths retained.
+- Java 21 offline full test and installDist succeeded today; optional native tests
+  remain subject to their existing opt-in gates. No live remote download comparison,
+  preferences/history mutation, app restart, or browser changes performed.
+- Next: user Stop/Run after current transfers finish, check changing default folder,
+  then compare the same URL; obtain URL to inspect server range/validator behavior
+  and measure connection throughput if the speed discrepancy persists.
+
+
 Updated: 2026-10-16 after fixing audio artwork retry following disk exhaustion.
 
 ## Latest outcome: audio retry after disk-full failure (2026-10-16)

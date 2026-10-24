@@ -68,3 +68,7 @@ are replaced by a generic name.
 - Preview source: /private/tmp/GrabXNotificationPreview.java; temporary snapshots
   /private/tmp/grabx-notifications-*.png. No real downloads, history or preferences
   were touched and the real app was not restarted. No extension reload is required.
+
+Each inbox card has a × button to delete only that entry; unread count and the
+empty state update immediately, and the inbox stays open. Clear all still clears
+the inbox. The temporary banner's × continues to hide that banner only.

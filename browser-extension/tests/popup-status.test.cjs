@@ -26,3 +26,15 @@ test('extension supplies real icon assets at every declared size', () => {
   assert.equal(manifest.action.default_icon[size],manifest.icons[size]);
  }
 });
+
+test('page shortcut visibility is independent of download interception and persists', async () => {
+ let listener; const saved=[];const toggle={checked:true,addEventListener:(_type,fn)=>{listener=fn;}};
+ const context={document:{addEventListener(){},getElementById:()=>toggle},chrome:{storage:{local:{
+  get:async()=>({showPageButtons:false,interceptBrowserDownloads:true}),set:async value=>saved.push(value)
+ }}}};
+ vm.createContext(context);
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../chromium/popup.js'),'utf8'),context);
+ await context.initializePageButtonsToggle();assert.equal(toggle.checked,false);
+ toggle.checked=true;await listener();
+ assert.equal(saved[0].showPageButtons,true);assert.equal(Object.keys(saved[0]).length,1);
+});

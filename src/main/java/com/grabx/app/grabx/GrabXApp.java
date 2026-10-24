@@ -20,6 +20,8 @@ public class GrabXApp extends Application {
             return;
         }
 
+        com.grabx.app.grabx.util.I18n.install(new com.grabx.app.grabx.core.service.LanguagePreferences(
+                java.util.prefs.Preferences.userNodeForPackage(MainController.class)).code());
         FXMLLoader fxmlLoader = new FXMLLoader(GrabXApp.class.getResource("main.fxml"));
         Scene scene = new Scene(fxmlLoader.load(), 1280, 820);
         controller = fxmlLoader.getController();

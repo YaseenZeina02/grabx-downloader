@@ -44,15 +44,21 @@ public final class NotificationView implements AutoCloseable {
     public Button createButton(boolean compact) {
         Button button = new Button();
         button.setId(compact ? "compact-notifications" : "notifications-button");
-        button.getStyleClass().add("notification-bell");
-        if (compact) button.getStyleClass().add("notification-bell-compact");
+        button.setFocusTraversable(false);
+        if (compact) button.getStyleClass().addAll("notification-bell", "notification-bell-compact");
+        else {
+            button.getStyleClass().add("gx-icon-btn");
+            button.setPrefSize(40, 40);
+        }
         button.getStylesheets().add(stylesheet()); button.setTooltip(new Tooltip("Notifications"));
         button.setOnAction(e -> toggleInbox(button)); buttons.add(button); updateButtons(); return button;
     }
     private void updateButtons() {
         int count = center.unreadProperty().get();
         for (Button button : buttons) {
-            StackPane graphic = new StackPane(icon(BELL));
+            boolean compact = button.getStyleClass().contains("notification-bell-compact");
+            StackPane graphic = new StackPane(compact ? icon(BELL) : IconButtonService.createSvgIcon(BELL, 34));
+            graphic.setMouseTransparent(true);
             if (count > 0) {
                 Label badge = new Label(count > 9 ? "9+" : Integer.toString(count));
                 badge.getStyleClass().add("notification-badge"); StackPane.setAlignment(badge, Pos.TOP_RIGHT);
@@ -106,9 +112,17 @@ public final class NotificationView implements AutoCloseable {
         StackPane mark = new StackPane(icon(symbol)); mark.getStyleClass().add("notification-mark");
         Label title = label(entry.title(), "notification-title"); title.setWrapText(true); title.setMaxWidth(Double.MAX_VALUE); HBox.setHgrow(title, Priority.ALWAYS);
         HBox header = new HBox(10, mark, title); header.setAlignment(Pos.CENTER_LEFT);
-        if (banner) {
+        {
             Button dismiss = new Button("×"); dismiss.setAccessibleText("Dismiss notification");
-            dismiss.getStyleClass().add("notification-dismiss"); dismiss.setOnAction(e -> hideBanners()); header.getChildren().add(dismiss);
+            dismiss.setId("notification-dismiss");
+            dismiss.setFocusTraversable(false);
+            dismiss.getStyleClass().add("notification-dismiss"); dismiss.setOnAction(e -> {
+                if (banner) hideBanners();
+                else {
+                    if (pending == entry) { pending = null; coalesce.stop(); }
+                    center.remove(entry);
+                }
+            }); header.getChildren().add(dismiss);
         }
         Label message = label(entry.message(), "notification-body"); message.setWrapText(true); message.setMaxWidth(Double.MAX_VALUE);
         message.setMaxHeight(90); message.setTextOverrun(OverrunStyle.ELLIPSIS);

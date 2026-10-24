@@ -37,7 +37,7 @@ public final class DirectDownloadState {
                 throw new IOException("Saved download metadata is invalid; parts kept");
             long total = Long.parseLong(p.getProperty("total"));
             int segments = Integer.parseInt(p.getProperty("segments"));
-            if (total < -1 || segments < 0 || segments > 16 || (segments > 0 && total <= 0))
+            if (total < -1 || segments < 0 || segments > TransferPreferences.MAX_CONNECTIONS || (segments > 0 && total <= 0))
                 throw new IOException("Saved download layout is invalid; parts kept");
             row.originalUrl = p.getProperty("originalUrl", row.originalUrl);
             row.url = p.getProperty("url", row.url); row.finalUrl = p.getProperty("finalUrl");
@@ -51,14 +51,14 @@ public final class DirectDownloadState {
     }
 
     static boolean hasSegments(Path output) {
-        for (int i = 0; i < 16; i++) if (Files.isRegularFile(DirectPartialFiles.part(output, i))) return true;
+        for (int i = 0; i < TransferPreferences.MAX_CONNECTIONS; i++) if (Files.isRegularFile(DirectPartialFiles.part(output, i))) return true;
         return false;
     }
 
     public static long downloaded(Path output) throws IOException {
         // During interrupted assembly, segment files remain authoritative.
         long sum = 0; boolean segmented = false;
-        for (int i = 0; i < 16; i++) {
+        for (int i = 0; i < TransferPreferences.MAX_CONNECTIONS; i++) {
             Path part = DirectPartialFiles.part(output, i);
             if (Files.isRegularFile(part)) { segmented = true; sum = Math.addExact(sum, Files.size(part)); }
         }

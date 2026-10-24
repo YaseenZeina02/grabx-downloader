@@ -9,6 +9,7 @@ public final class BrowserFileProbe {
 
     public static Result inspect(String url, String referer, String userAgent) {
         try {
+            url = com.grabx.app.grabx.browser.BrowserBridgeProtocol.normalizeHttpUrl(url);
             URI uri = URI.create(url);
             if (!("https".equalsIgnoreCase(uri.getScheme()) || "http".equalsIgnoreCase(uri.getScheme()))
                     || uri.getHost() == null || uri.getUserInfo() != null) throw new IllegalArgumentException();
@@ -29,7 +30,7 @@ public final class BrowserFileProbe {
             return new Result(true, true, url, filename, mime, "File link verified");
         } catch (DirectRemoteProbe.HttpFailure error) {
             return new Result(false, false, url, "", "", error.getMessage());
-        } catch (IllegalArgumentException error) {
+        } catch (com.grabx.app.grabx.browser.BrowserBridgeProtocol.ProtocolException | IllegalArgumentException error) {
             return new Result(false, false, "", "", "", "Invalid HTTP(S) download request");
         } catch (Exception error) {
             return new Result(false, false, url, "", "", "Could not verify this download link. The browser download has not been cancelled.");

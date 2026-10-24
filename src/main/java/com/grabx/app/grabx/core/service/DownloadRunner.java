@@ -1,6 +1,7 @@
 
 package com.grabx.app.grabx.core.service;
 
+import java.io.BufferedOutputStream;
 import com.grabx.app.grabx.core.model.DownloadRow;
 import com.grabx.app.grabx.util.AppLog;
 import javafx.application.Platform;
@@ -94,6 +95,13 @@ public final class DownloadRunner {
 
     private final BandwidthLimiter bandwidth = new BandwidthLimiter();
     private volatile long mediaRate;
+    private volatile boolean quickResumeChecks;
+    public void configureQuickResumeChecks(boolean value) { quickResumeChecks = value; }
+    private volatile int directConnections = TransferPreferences.DEFAULT_CONNECTIONS;
+    public void configureDirectConnections(int value) {
+        if (value < 0 || value > TransferPreferences.MAX_CONNECTIONS) throw new IllegalArgumentException("Invalid connection count");
+        directConnections = value;
+    }
 
     public void configureTransferLimits(long directTotal, long mediaPerTask) {
         bandwidth.setBytesPerSecond(directTotal);
@@ -434,7 +442,7 @@ public final class DownloadRunner {
                                     catch (NumberFormatException ignored) {}
                                     metadata = metadata.substring(separator + 1);
                                 }
-                                mediaProgress.select(metadata, duration);
+                                mediaProgress.select(ExactMediaSize.resolveStreams(metadata), duration);
                                 if (mediaProgress.combined()) {
                                     var selection = mediaProgress.snapshot();
                                     Platform.runLater(() -> {
@@ -480,12 +488,11 @@ public final class DownloadRunner {
                             String postProcessStatus = com.grabx.app.grabx.util.DownloadRuntimeUtils
                                     .postProcessStatus(s);
                             if (postProcessStatus != null) {
-                                final boolean combined = mediaProgress.combined();
                                 Platform.runLater(() -> {
                                     try {
                                         long expectedBytes = row.totalBytes.get();
                                         row.size.set(expectedBytes > 0
-                                                ? (combined ? "≈ " : "") + formatBytesDecimal.apply(expectedBytes)
+                                                ? formatBytesDecimal.apply(expectedBytes)
                                                 : "");
                                         row.speed.set("");
                                         row.eta.set("");
@@ -558,19 +565,7 @@ public final class DownloadRunner {
                                 long downloaded = parseLongSafe.apply(m.group(4));
                                 long total = parseLongSafe.apply(m.group(5));
                                 long exactTotal = total;
-                                if (total <= 0) total = parseLongSafe.apply(m.group(6));
 
-                                long estimatedOutput = 0;
-                                if (audioOnly && "mp3".equals(resolvedAudioFormat)) {
-                                    estimatedOutput = com.grabx.app.grabx.util.DownloadRuntimeUtils
-                                            .estimateEncodedAudioBytes(m.group(7), MP3_BITRATE_BITS_PER_SECOND);
-                                }
-                                if (estimatedOutput > 0) {
-                                    total = estimatedOutput;
-                                    downloaded = pct < 0
-                                            ? 0
-                                            : Math.round(estimatedOutput * Math.min(1, pct));
-                                }
 
                                 final boolean combined = mediaProgress.combined();
                                 MediaTransferProgress.Snapshot combinedProgress = null;
@@ -896,8 +891,8 @@ public final class DownloadRunner {
                         var remote = DirectRemoteProbe.probe(row.url, row.getReferer(), row.requestUserAgent, c -> transfer.attach(c::disconnect, null));
                         row.resumeSupport = remote.support();
                         long saved = DirectDownloadState.downloaded(output);
-                        // Without a saved validator, a single contiguous part can only be
-                        // resumed by comparing its entire prefix within the payload response.
+                        // Without a saved validator, default to a full-prefix comparison in
+                        // the payload response. The opt-in sampled check is less comprehensive.
                         boolean verifyPrefix = saved > 0 && durable && row.resumeSegments == 0
                                 && DirectRemoteProbe.validator(row) == null;
                         if (!continuing && !durable && saved == 0) {
@@ -939,7 +934,7 @@ public final class DownloadRunner {
                             // Parallel transfers require a stable validator and a successful actual range probe.
                             row.resumeSegments = remote.total() >= MIN_SEGMENTED_BYTES
                                     && "Yes".equals(remote.support()) && DirectRemoteProbe.strong(remote.etag())
-                                    ? directSegmentCount(remote.total()) : 0;
+                                    ? directSegmentCount(remote.total(), directConnections) : 0;
                         } else {
                             // Layout and identity cannot change under previously created segment files.
                             if (row.resumeSegments > 0) DirectRemoteProbe.verify(row, remote);
@@ -973,6 +968,28 @@ public final class DownloadRunner {
                         Path partial = DirectPartialFiles.part(output, -1);
                         long existing = Files.isRegularFile(partial) ? Files.size(partial) : 0;
                         if (total >= 0 && existing > total) throw new DirectRemoteProbe.NeedsAction("Saved data exceeds remote size");
+                        if (verifyPrefix && quickResumeChecks && "Yes".equals(row.resumeSupport) && total >= existing) {
+                            directStatus(row, "Quick check before resume");
+                            boolean checked = QuickResumeVerifier.verify(partial, existing, total, (start, end) -> {
+                                HttpURLConnection sample = openRangeConnection(row.finalUrl == null ? row.url : row.finalUrl,
+                                        start, end, row.getReferer());
+                                if (row.requestUserAgent != null && !row.requestUserAgent.isBlank())
+                                    sample.setRequestProperty("User-Agent", row.requestUserAgent);
+                                transfer.attach(sample::disconnect, null);
+                                return sample;
+                            }, () -> {
+                                transfer.awaitRunning();
+                                if (stopReasons.get(row) != null) throw new InterruptedException("Transfer stopped");
+                            }, input -> bandwidth.wrap(input, () -> {
+                                transfer.awaitRunning();
+                                if (stopReasons.get(row) != null) throw new InterruptedException("Transfer stopped");
+                            }));
+                            if (checked) {
+                                verifyPrefix = false;
+                                LOG.info("Direct quick resume check completed: savedBytes=" + existing);
+                            }
+                            // A server ignoring sample ranges falls back to the full, same-response check.
+                        }
                         // A verified complete local prefix needs no further range request (including the 416 boundary).
                         if (!verifyPrefix && existing == total && (existing > 0 || total == 0)) {
                             if (!Files.exists(partial)) Files.createFile(partial);
@@ -1051,7 +1068,8 @@ public final class DownloadRunner {
                             }
                             // Open for append only after verification; keep consuming the same
                             // response, so a later unvalidated request cannot switch file versions.
-                            try (OutputStream out = Files.newOutputStream(partial, StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
+                            try (OutputStream out = new BufferedOutputStream(
+                                    Files.newOutputStream(partial, StandardOpenOption.CREATE, StandardOpenOption.APPEND), 128 * 1024)) {
                                 byte[] buffer = new byte[128 * 1024];
                                 while (expected < 0 || received < expected) {
                                     transfer.awaitRunning();
@@ -1182,10 +1200,13 @@ public final class DownloadRunner {
 
     private long downloadSegmented(DownloadRow row, Path output, long total, int segmentCount,
                                    DirectTransferProcess transfer) throws Exception {
-        int connections = Math.min(4, segmentCount);
+        boolean automatic = directConnections == TransferPreferences.AUTO_CONNECTIONS;
+        int connections = Math.min(automatic ? TransferPreferences.MAX_CONNECTIONS : directConnections, segmentCount);
+        LOG.info("Direct parallel transfer: requestedConnections=" + directConnections
+                + ", savedSegments=" + segmentCount + ", workerLimit=" + connections);
         for (int attempt = 0; ; attempt++) {
             try {
-                return downloadSegmentedAttempt(row, output, total, segmentCount, connections, transfer);
+                return downloadSegmentedAttempt(row, output, total, segmentCount, connections, automatic, transfer);
             } catch (Exception error) {
                 Throwable cause = rootCause(error);
                 if (isInterruptedSegment(cause)) cause = new SegmentServerBusy(0, null);
@@ -1220,10 +1241,23 @@ public final class DownloadRunner {
     }
 
     private long downloadSegmentedAttempt(DownloadRow row, Path output, long total, int segmentCount,
-                                         int connections, DirectTransferProcess transfer) throws Exception {
+                                         int connections, boolean automatic, DirectTransferProcess transfer) throws Exception {
         var roundConnections = new java.util.concurrent.ConcurrentLinkedQueue<HttpURLConnection>();
-        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors
-                .newFixedThreadPool(connections, runnable -> {
+        AdaptiveConnections adaptive = automatic ? new AdaptiveConnections(connections) : null;
+        int initialConnections = automatic ? adaptive.connections() : connections;
+        class Slots extends java.util.concurrent.Semaphore {
+            private int limit = initialConnections;
+            Slots() { super(initialConnections); }
+            void resize(int value) {
+                int change = value - limit;
+                if (change > 0) release(change); else if (change < 0) reducePermits(-change);
+                limit = value;
+            }
+        }
+        Slots slots = new Slots();
+        var active = new java.util.concurrent.atomic.AtomicInteger();
+        var pool = new java.util.concurrent.ThreadPoolExecutor(initialConnections, connections,
+                0L, java.util.concurrent.TimeUnit.MILLISECONDS, new java.util.concurrent.LinkedBlockingQueue<>(), runnable -> {
                     Thread thread = new Thread(runnable, "http-segment");
                     thread.setDaemon(true);
                     return thread;
@@ -1245,7 +1279,14 @@ public final class DownloadRunner {
             final long existing = present;
 
             pool.execute(() -> {
+                boolean acquired = false;
                 try {
+                    while (!slots.tryAcquire(100, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                        if (stopReasons.get(row) != null || failure.get() != null) throw new InterruptedException("Transfer stopped");
+                        transfer.awaitRunning();
+                    }
+                    acquired = true;
+                    active.incrementAndGet();
                     SegmentTransfer.download(part, start, end, total, (offset, last) -> {
                         HttpURLConnection opened = openRangeConnection(row.finalUrl == null ? row.url : row.finalUrl, offset, last, row.getReferer());
                         if (row.requestUserAgent != null && !row.requestUserAgent.isBlank()) opened.setRequestProperty("User-Agent", row.requestUserAgent);
@@ -1267,6 +1308,7 @@ public final class DownloadRunner {
                 } catch (Throwable throwable) {
                     if (stopReasons.get(row) == null) failure.compareAndSet(null, throwable);
                 } finally {
+                    if (acquired) { active.decrementAndGet(); slots.release(); }
                     finished.countDown();
                 }
             });
@@ -1285,10 +1327,22 @@ public final class DownloadRunner {
                 long now = System.nanoTime();
                 if (transfer.pauseGate.isPaused()) {
                     speedMeter.reset(current, now);
+                    if (adaptive != null) adaptive.reset(current, now);
                     continue;
                 }
                 long speed = speedMeter.sample(current, now);
-                updateDirectProgress(row, current, total, speed);
+                if (adaptive != null) {
+                    int target = adaptive.sample(current, now, bandwidth.bytesPerSecond(),
+                            finished.getCount() > pool.getCorePoolSize() && active.get() <= pool.getCorePoolSize());
+                    if (target != pool.getCorePoolSize()) {
+                        LOG.info("Automatic direct connections: " + pool.getCorePoolSize() + " -> " + target);
+                        slots.resize(target);
+                        pool.setCorePoolSize(target);
+                    }
+                }
+                // Retiring workers finish their current piece before the smaller cap takes effect.
+                int workerCap = Math.max(pool.getCorePoolSize(), active.get());
+                updateDirectProgress(row, current, total, speed, workerCap, automatic);
             }
             Throwable error = failure.get();
             if (error != null) throw new java.util.concurrent.ExecutionException(error);
@@ -1375,10 +1429,13 @@ public final class DownloadRunner {
     }
 
     static HttpURLConnection openRangeConnection(String url, long start, long end, String referer) throws Exception {
-        HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+        HttpURLConnection connection = com.grabx.app.grabx.util.VerifiedConnections.open(new URL(url));
         connection.setInstanceFollowRedirects(true);
         connection.setConnectTimeout(20_000);
-        connection.setReadTimeout(15_000);
+        // Payload servers can pause between bursts. A short idle timeout forces
+        // validator-less downloads to re-read their entire saved prefix on every retry.
+        // Keep this bounded; cancellation still disconnects the registered connection.
+        connection.setReadTimeout(120_000);
         connection.setRequestProperty("User-Agent", DirectRemoteProbe.USER_AGENT);
         connection.setRequestProperty("Accept", "*/*");
                 connection.setRequestProperty("Accept-Encoding", "identity");
@@ -1403,6 +1460,12 @@ public final class DownloadRunner {
     }
 
     public static int directSegmentCountForLegacy(long total) { return total > 0 ? directSegmentCount(total) : 0; }
+
+    static int directSegmentCount(long total, int connections) {
+        if (connections == TransferPreferences.AUTO_CONNECTIONS) connections = TransferPreferences.MAX_CONNECTIONS;
+        // Keep individual pieces useful on small files, but allow large files to use all requested workers.
+        return (int) Math.max(1, Math.min(connections, total / (256 * 1024)));
+    }
 
     static int directSegmentCount(long total) {
         long desired = Math.max(2, (total + TARGET_SEGMENT_BYTES - 1) / TARGET_SEGMENT_BYTES);
@@ -1438,6 +1501,15 @@ public final class DownloadRunner {
     }
 
     private void updateDirectProgress(DownloadRow row, long downloaded, long total, long bytesPerSecond) {
+        updateDirectProgress(row, downloaded, total, bytesPerSecond, 1);
+    }
+
+    private void updateDirectProgress(DownloadRow row, long downloaded, long total, long bytesPerSecond, int connections) {
+        updateDirectProgress(row, downloaded, total, bytesPerSecond, connections, false);
+    }
+
+    private void updateDirectProgress(DownloadRow row, long downloaded, long total, long bytesPerSecond,
+                                      int connections, boolean automatic) {
         String sizeText = com.grabx.app.grabx.util.DownloadRuntimeUtils.formatTransferSize(downloaded, total);
         String speedText = formatBytesDecimal.apply(bytesPerSecond) + "/s";
         String etaText = total > 0 && bytesPerSecond > 0
@@ -1451,10 +1523,14 @@ public final class DownloadRunner {
             row.eta.set(etaText);
             row.status.set(bytesPerSecond <= 0 ? "Waiting for server • reconnecting if stalled"
                     : (total > 0 ? "Downloading" : "Downloading • total size unknown")
-                        + " • Resume support: " + row.resumeSupport);
+                        + " • Resume support: " + row.resumeSupport + (automatic ? " • Auto" : "") + connectionStatus(connections));
             // Keep unknown-length transfers visibly active until a size is discovered.
             row.progress.set(total > 0 ? Math.min(1, (double) downloaded / total) : -1);
         });
+    }
+
+    static String connectionStatus(int maximum) {
+        return maximum <= 1 ? " • 1 connection" : " • Up to " + maximum + " connections";
     }
 
     private void finishStoppedDirect(DownloadRow row, String reason, Path partial) {

@@ -31,6 +31,14 @@ class BrowserFileProbeTest {
             assertFalse(result.ok()); assertTrue(result.message().contains("498")); assertTrue(result.message().contains("fresh link"));
         }
     }
+    @Test void browserLegalFilenameCharactersAreEncodedWithoutChangingSignedQueryEscapes() throws Exception {
+        try (Fixture fixture = new Fixture(206, "video/mp4", "attachment; filename=movie.mp4")) {
+            var result = BrowserFileProbe.inspect(fixture.url().split("\\?")[0] + "/[movie] file.mp4?token=a%2Fb|c", null, null);
+            assertTrue(result.ok(), result.message());
+            String request = fixture.request.get(5, TimeUnit.SECONDS);
+            assertTrue(request.contains("%5Bmovie%5D%20file.mp4?token=a%2Fb%7Cc"), request);
+        }
+    }
     @Test void invalidRequestsAreRejectedBeforeOpeningAConnection() {
         assertFalse(BrowserFileProbe.inspect("file:///tmp/file", null, null).ok());
         assertFalse(BrowserFileProbe.inspect("https://example.com/file", null, "bad\r\nX-Test: injected").ok());

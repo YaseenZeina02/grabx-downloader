@@ -20,7 +20,7 @@ class VideoSizeServiceTest {
         AtomicInteger calls = new AtomicInteger();
         VideoSizeService service = new VideoSizeService(arguments -> {
             calls.incrementAndGet();
-            return "987654";
+            return "{\"filesize\":987654}";
         });
 
         assertEquals(987654L, service.probeAsync(

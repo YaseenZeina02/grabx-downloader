@@ -389,7 +389,7 @@ public class DownloadRowCell extends ListCell<DownloadRow> {
         resetVisibilityRules();
 
         title.textProperty().bind(item.title);
-        status.textProperty().bind(item.status);
+        status.textProperty().bind(com.grabx.app.grabx.util.I18n.binding(item.status));
         speed.textProperty().bind(item.speed);
         eta.textProperty().bind(item.eta.map(DownloadEtaFormatter::format));
         sizeLabel.textProperty().bind(item.size);

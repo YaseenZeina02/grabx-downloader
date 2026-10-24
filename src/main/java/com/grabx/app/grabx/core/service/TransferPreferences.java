@@ -9,6 +9,19 @@ public final class TransferPreferences {
     public static final long MAX_RATE = 1_000_000_000L;
     private final Preferences preferences;
     public TransferPreferences(Preferences preferences) { this.preferences = preferences; }
+    public static final int AUTO_CONNECTIONS = 0;
+    public static final int DEFAULT_CONNECTIONS = AUTO_CONNECTIONS;
+    public static final int MAX_CONNECTIONS = 64;
+    public int directConnections() {
+        int value = preferences.getInt("grabx.direct.connections", DEFAULT_CONNECTIONS);
+        return value >= AUTO_CONNECTIONS && value <= MAX_CONNECTIONS ? value : DEFAULT_CONNECTIONS;
+    }
+    public void saveDirectConnections(int value) {
+        if (value < AUTO_CONNECTIONS || value > MAX_CONNECTIONS) throw new IllegalArgumentException("Choose Automatic or 1 to 64 connections");
+        preferences.putInt("grabx.direct.connections", value);
+    }
+    public boolean quickResumeChecks() { return preferences.getBoolean("grabx.direct.quickResumeChecks", false); }
+    public void saveQuickResumeChecks(boolean value) { preferences.putBoolean("grabx.direct.quickResumeChecks", value); }
     public long directRate() { return valid(preferences.getLong("grabx.speed.direct", 0)); }
     public long mediaRate() { return valid(preferences.getLong("grabx.speed.media", 0)); }
     public void save(long direct, long media) {
