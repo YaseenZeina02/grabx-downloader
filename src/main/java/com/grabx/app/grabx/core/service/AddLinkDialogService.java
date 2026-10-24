@@ -393,10 +393,11 @@ private static javafx.scene.Node buildSuccessGraphic() {
         browseBtn.setOnAction(e -> {
             DirectoryChooser chooser = new DirectoryChooser();
             chooser.setTitle(com.grabx.app.grabx.util.I18n.text("Select Download Folder"));
+            File currentFolder = new File(folderField.getText());
+            if (currentFolder.isDirectory()) chooser.setInitialDirectory(currentFolder);
             File selected = chooser.showDialog(pane.getScene().getWindow());
             if (selected != null) {
                 folderField.setText(selected.getAbsolutePath());
-                cb.saveLastDownloadFolder(selected.getAbsolutePath());
             }
         });
 

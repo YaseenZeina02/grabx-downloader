@@ -95,6 +95,13 @@ public final class FfmpegManager {
 
             log("Initializing ffmpeg...");
 
+            Path bundled = InstalledLayout.tool("ffmpeg");
+            String bundledVersion = probeVersion(bundled);
+            if (bundledVersion != null) {
+                cached = bundled;
+                initDone = true;
+                return;
+            }
             // 1) Preferences
             try {
                 String saved = PREFS.get(PREF_FFMPEG_PATH, null);

@@ -45,6 +45,7 @@ bin/
 
 *.bundle
 /src.zip
+/local-releases/
 
 # Python maintenance tools
 __pycache__/

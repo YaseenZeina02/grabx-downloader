@@ -20,6 +20,20 @@ public class GrabXApp extends Application {
             return;
         }
 
+        var preferences = java.util.prefs.Preferences.userNodeForPackage(MainController.class);
+        boolean requested = getParameters().getRaw().contains("--setup");
+        if (requested || (Boolean.getBoolean("grabx.packaged") && !new com.grabx.app.grabx.setup.SetupPreferences(preferences).completed())) {
+            new com.grabx.app.grabx.setup.SetupWizard(stage, preferences, () -> {
+                try { openMain(stage); }
+                catch (IOException e) { throw new IllegalStateException("Could not open GrabX", e); }
+            }).show();
+            return;
+        }
+        openMain(stage);
+    }
+
+    private void openMain(Stage stage) throws IOException {
+        com.grabx.app.grabx.util.AppBranding.apply(stage, false);
         com.grabx.app.grabx.util.I18n.install(new com.grabx.app.grabx.core.service.LanguagePreferences(
                 java.util.prefs.Preferences.userNodeForPackage(MainController.class)).code());
         FXMLLoader fxmlLoader = new FXMLLoader(GrabXApp.class.getResource("main.fxml"));

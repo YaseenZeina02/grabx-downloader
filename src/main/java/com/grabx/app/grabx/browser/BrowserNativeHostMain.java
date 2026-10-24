@@ -135,6 +135,12 @@ public final class BrowserNativeHostMain {
         ProcessBuilder builder;
         boolean mac = false;
         if (executable != null && !executable.isBlank()) builder = new ProcessBuilder(executable);
+        else if (System.getProperty("jpackage.app-path") != null) {
+            boolean windows = System.getProperty("os.name", "").toLowerCase().contains("win");
+            Path packaged = Path.of(System.getProperty("jpackage.app-path")).resolveSibling(windows ? "GrabX.exe" : "GrabX");
+            if (!Files.isRegularFile(packaged)) throw new java.io.IOException("GrabX launcher is missing");
+            builder = new ProcessBuilder(packaged.toString());
+        }
         else if (System.getenv("GRABX_APP_HOME") != null && !System.getenv("GRABX_APP_HOME").isBlank()) {
             Path appHome = Path.of(System.getenv("GRABX_APP_HOME"));
             boolean windows = System.getProperty("os.name", "").toLowerCase().contains("win");

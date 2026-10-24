@@ -1,5 +1,175 @@
 # GrabX handoff
 
+## In progress: Windows x64 friend installer (2026-10-24)
+
+- User explicitly requests a complete Windows x64 package to send to a friend.
+  Native Windows build will run on GitHub Actions Windows 2022 in separate
+  codex/windows-x64-installer branch; no public release/tag planned. Existing
+  GitHub repository and SSH access verified. Local host is Mac ARM64.
+- Automatic approval review rejected the combined local commit/public push command:
+  building Windows did not explicitly authorize publishing all setup source changes
+  to the public repository. No branch, commit or push occurred. Asked human approval
+  via async choice; remote work must wait. This rejection must not be bypassed.
+  Local VMware inventory shows no running VMs; existing VM is Windows ARM, not an
+  already-ready native x64 build host. GitHub authentication/SSH are working.
+- Added pinned/hash-verified Node 22.23.4 and BtbN FFmpeg 8.1 LGPL static x64
+  preparation (FFprobe and upstream license notices included). App/Setup ICOs
+  derived from existing branded PNGs, Windows launcher icon configuration and
+  properties paths fixed. Preference tests use platform-native temp paths.
+- Dedicated workflow builds app, EXE/MSI with WiX 3, installs MSI, checks fresh
+  relocated packaged Java/media/extension/browser registration + GUI stays open,
+  then uninstalls. Outcome pending actual runner, not yet a Windows artifact.
+- Added reusable smoke-packaged-app.py/PackagedAppSmoke.java, two passing Python
+  hash-cache/PE architecture tests, and passing 18 focused Java setup/folder/bundle
+  tests plus installDist. Workflow YAML parses, Python scripts compile and diff
+  whitespace passes. No Windows installer has been generated yet. No local
+  installed app, real preferences, or browser changed.
+
+
+## Latest outcome: setup icon and self-contained friend install (2026-10-24)
+
+- User reported Java Duke icon on the installer desktop volume and asked how a
+  friend without any project files receives the browser extension. Root cause of
+  volume icon: jpackage --app-image DMG generation defaulted to JavaApp.icns when
+  --icon was omitted, despite a branded icon inside the app. Fixed separately.
+- Added main GX and setup GX+download-arrow/tray PNGs using native vector rendering
+  of existing GX letterforms (packaging/icons/render-icons.swift). New AppBranding
+  sets Stage and supported Taskbar/Dock images for setup and restores plain GX at
+  main-app entry, including Java launches. Packaging creates separate main/setup
+  ICNS; secondary setup launcher has its icon. DMG generation is two-phase with
+  setup ICNS explicitly supplied for the volume, main app retains plain GX.
+- Gradle now reproducibly zips the complete chromium extension into the app jar.
+  No loose external browser-extension project directory is needed or shipped in
+  native app input. Packager preflight rejects missing embedded archive/icons and
+  build-info records extension version/archive digest. Existing source extension
+  remains unchanged; no hardcoded developer extension ID.
+- ExtensionBundleService extracts validated embedded archive to stable per-user
+  data location: Mac Application Support/GrabX/browser-extension/chromium,
+  Windows LocalAppData, Linux XDG_DATA_HOME. Repairs and updates retain exact path;
+  staging/backup plus rollback protects valid exports; unmanaged directories are
+  refused. Zip traversal/duplicate/size checks implemented. Wizard prepares/opens
+  folder, explains included/no-project behavior, displays path and Copy button.
+- Browser connection from temporary Mac /Volumes app is rejected with Arabic/EN
+  guidance to move/open Applications first, so ejecting DMG cannot break the host.
+  Extension activation/Developer mode remains the user's browser step. Old copies
+  loaded from another folder should be disabled to avoid duplicate interception;
+  friend guide explains this. No store publication or real registration performed.
+- Verification: 19 focused setup/folder/extension tests passed, including actual FX
+  setup icon + EN/AR render and new fresh export, repair/stable path, malicious/
+  invalid update preservation, unmanaged files and platform locations. installDist,
+  Python syntax and git diff --check passed. No full/Node rerun for unchanged
+  download/extension logic; prior suite results belong to earlier entries.
+- Built and copied full 1.0.2 app to temporary directory with empty home, cwd outside
+  repository, no JAVA_HOME/CLASSPATH or developer PATH. Bundled runtime successfully
+  exported complete extension, verified manifest-referenced assets, all diagnostics
+  and 1024px branded icons; relocated native launcher passed framed status protocol.
+  Loose external extension directory was asserted absent. No real user data touched.
+- Created and mounted final DMG read-only; asserted actual .VolumeIcon.icns bytes
+  equal new setup icon and app contains branded icon and embedded extension; detached
+  only test mount. hdiutil verify passed. Retained artifact:
+  local-releases/GrabX-1.0.2-local-mac-arm64.dmg, updated SHA256SUMS/build-info/Arabic
+  friend guide, icons and browser preview. 1.0.0/1.0.1 DMGs preserved. Local unsigned
+  Apple Silicon preview; Windows/Linux native output and real browser flow untested.
+- Next user step: install 1.0.2 to Applications, reopen setup if already completed,
+  prepare bundled extension, disable previous-folder copy, Load unpacked and register
+  the ID shown by their own browser. A friend needs only the matching Mac DMG.
+
+
+## Latest outcome: setup controls and early folder validation (2026-10-24)
+
+- User supplied three screenshots: unstyled combo popup/closed cell, native spinner
+  arrows, legacy folder name, and invalid typed folder only rejected at Finish.
+- Unified language/browser combo surfaces and custom rounded popup styling including
+  hover/selection, chevron and fixed row sizing. All six languages now fit without
+  a redundant scrollbar. Replaced native Spinner with a bounded minus/value/plus
+  stepper, 1–16, disabled at bounds and accessible localized button names.
+- First setup proposes ~/Downloads/GrabX instead of importing legacy test folders;
+  reopening an already completed setup intentionally preserves an explicit saved
+  default. Suggested folder is created only at Finish with a visible creation hint.
+  Other missing paths are never silently created.
+- SetupPreferences exposes shared typed folder validation (empty, relative/invalid,
+  missing, file instead of directory, and actual write probe). Defaults Continue
+  now blocks on invalid input with localized inline error/red border/focus. Editing
+  clears the error. Finish rechecks so a subsequently removed folder returns to
+  Defaults with the same inline feedback. No prefs commit or default-dir creation
+  occurs just by clicking Continue.
+- Verification this change: 15 focused folder/setup tests passed, including actual
+  JavaFX EN/AR popup/defaults/browser renders, inline missing-folder blocking, draft
+  preservation and stepper bounds; installDist and git diff --check passed. Reviewed
+  resulting screenshots. Full/extension suites were not rerun for these UI/setup
+  changes; previous complete verification belongs to the entry below.
+- New retained Mac build: local-releases/GrabX-1.0.1-local-mac-arm64.dmg; previous
+  1.0.0 DMG retained. package-app.py --dest supports versioned output so old images
+  are preserved. Updated previews and packaging guide. Packaged native protocol
+  smoke passed. No installed application, real settings or browsers modified.
+- Next user step: close GrabX and install 1.0.1 from DMG; reopen setup with --setup
+  or GrabX Setup launcher if previously completed. Check popup and invalid typed
+  folder inline. Existing deliberately saved folders are preserved on reopen.
+
+
+## Latest outcome: local native installer and first-run setup (2026-10-24)
+
+- User requested a polished complete setup covering OS/tool checks, defaults and
+  browser extension, starting with a retained personal Mac copy. Added five-step
+  SetupWizard (English/Arabic instructions and RTL), local executable diagnostics,
+  draft folder/language/remember policy/queue/sound defaults, final writable-folder
+  validation, and optional browser registration. First run triggers in packaged app;
+  --setup and secondary GrabX Setup launcher reopen it with current drafts.
+- New BrowserSetupService registers only exact validated 32-letter a–p extension
+  origin for Chrome/Brave/Edge/Chromium, current user only (HKCU on Windows).
+  Packaged native launcher uses bundled Java; native host can start sibling GrabX.
+  Browser's Developer mode / Load unpacked remains manual. Registration is immediate
+  on Connect, optional, and not proof of a live browser connection. App must stay in
+  its installed location; reconnect after moving. No actual registration performed.
+- scripts/package-app.py builds OS-specific app-image/dmg/pkg/exe/msi/deb/rpm using
+  JDK 21 jlink/jpackage. Requires supplied standalone FFmpeg and Node 22+/Deno 2.3+
+  with notices for a complete build, probes versions, embeds licenses and SHA-256
+  manifest, and bundles Java/JavaFX/yt-dlp/extension. Explicit partial-build flag
+  supported. Each package built on destination OS/CPU; Windows/Linux native package
+  output unbuilt and untested here. No CI installer build has been claimed.
+- Retained artifact (outside Gradle clean, gitignored):
+  local-releases/GrabX-1.0.0-local-mac-arm64.dmg (~316 MiB), SHA256SUMS.txt,
+  build-info.json, Arabic start guide, Arabic/English screenshots. Installer version
+  starts at 1.0.0 because Apple's package version forbids leading zero. This is a
+  personal preview, not a public release declaration. Uses existing GX brand avatar.
+- Mac tools: official Node v22.23.4 standalone darwin-arm64, archive SHA-256 matched
+  official SHASUMS256; license included. FFmpeg 8.0 standalone arm64 copied from
+  existing GrabX cache (only Apple system library dependencies), -L license/build
+  flags included. Public redistribution still requires matching source/licensing
+  audit plus platform signing/notarization and production extension store listing.
+- Verification: full Java 21 GRABX_TEST_RESUME=true --rerun-tasks suite: 324 tests,
+  312 passed, 12 optional skipped, zero failures. Separate opt-in SetupWizard FX
+  test passed and rendered welcome/defaults/browser steps in both directions.
+  Four setup persistence/origin/platform-path regressions passed. All 45 extension
+  Node tests and three existing Python installer tests passed. Native app built,
+  all bundled diagnostics ready with system-development PATH removed; packaged
+  native messaging frame smoke passed. Packaged Setup launched with isolated home,
+  stayed open and was terminated as a test. Native UI launch requires desktop
+  permission; first restricted attempt exited, repeated desktop-capable run passed.
+  Classpath JavaFX logs an unsupported-configuration warning but UI renders; future
+  public packaging can move JavaFX to module path. User settings/history untouched.
+- packaging/README.md and PLATFORMS.md document build/install/reopen and limits.
+  Next user action: close running development app, install DMG into Applications,
+  complete setup, load extension and verify its live connection. No real download,
+  installed-app replacement, browser changes, signing or publication performed.
+
+
+## Latest outcome: default download folder policy (2026-10-24)
+
+- Default folder policy now uses configured Settings destination unless the user
+  explicitly enables remember-last-folder (previous fallback was true). Existing
+  saved remember preference is preserved; users with it ON must turn it OFF and Save
+  for per-download overrides. No real user preferences changed.
+- Add Link Browse no longer saves folder before confirmation, so cancel leaves
+  remembered destination untouched. Chooser opens at current displayed folder.
+  Accepted downloads/playlists still save last selection for optional remember mode.
+- Focused folder preference, Add Link and Settings tests plus installDist passed
+  with Java 21; regression covers fixed default and explicit remember persistence.
+  Browser-resolved destinations remain explicit per-transfer choices. No app restart
+  or live UI check performed. Next: restart updated app, disable remember if previously
+  saved ON, try a one-off folder and reopen Add Link to confirm default returns.
+
+
 ## Git checkpoint requested (2026-10-24)
 
 - User requested commit and push of accumulated work before the next feature.

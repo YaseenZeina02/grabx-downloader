@@ -45,6 +45,18 @@ tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
 }
 
+val bundledBrowserExtension by tasks.registering(Zip::class) {
+    from("browser-extension/chromium")
+    archiveFileName.set("chromium.zip")
+    destinationDirectory.set(layout.buildDirectory.dir("generated/extension/browser-extension"))
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+}
+tasks.processResources {
+    dependsOn(bundledBrowserExtension)
+    from(layout.buildDirectory.dir("generated/extension"))
+}
+
 val nativeHostStartScripts by tasks.registering(CreateStartScripts::class) {
     mainClass.set("com.grabx.app.grabx.browser.BrowserNativeHostMain")
     applicationName = "grabx-native-host"

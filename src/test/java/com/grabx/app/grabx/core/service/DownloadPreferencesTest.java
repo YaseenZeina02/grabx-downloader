@@ -2,32 +2,48 @@ package com.grabx.app.grabx.core.service;
 
 import org.junit.jupiter.api.Test;
 import java.util.List;
+import java.nio.file.Path;
+import org.junit.jupiter.api.io.TempDir;
 import static org.junit.jupiter.api.Assertions.*;
 
 class DownloadPreferencesTest {
+    @TempDir Path directory;
+    private String path(String name) { return directory.resolve(name).toString(); }
     @Test void fixedFolderDoesNotFollowOneOffDestinationsAndRememberModeMigrates() {
         var store = new SoundFeedbackServiceTest.MemoryPreferences();
-        store.put("gx_last_download_folder", "/tmp/old-downloads");
+        store.put("gx_last_download_folder", path("old-downloads"));
         var folders = new DownloadFolderPreferences(store);
-        assertTrue(folders.remembersLastFolder());
-        assertEquals("/tmp/old-downloads", folders.getLastFolderOrDefault());
-        folders.configure("/tmp/fixed", false);
-        folders.saveLastFolder("/tmp/one-off");
-        assertEquals("/tmp/fixed", folders.getLastFolderOrDefault());
+        assertFalse(folders.remembersLastFolder());
+        assertEquals(folders.configuredFolder(), folders.getLastFolderOrDefault());
+        folders.configure(path("fixed"), false);
+        folders.saveLastFolder(path("one-off"));
+        assertEquals(path("fixed"), folders.getLastFolderOrDefault());
         folders = new DownloadFolderPreferences(store);
-        assertEquals("/tmp/fixed", folders.getLastFolderOrDefault());
-        folders.configure("/tmp/fixed", true);
-        assertEquals("/tmp/one-off", folders.getLastFolderOrDefault());
+        assertEquals(path("fixed"), folders.getLastFolderOrDefault());
+        folders.configure(path("fixed"), true);
+        assertEquals(path("one-off"), folders.getLastFolderOrDefault());
+    }
+    @Test void explicitRememberPreferenceSurvivesRestartAndCanBeDisabled() {
+        var store = new SoundFeedbackServiceTest.MemoryPreferences();
+        var folders = new DownloadFolderPreferences(store);
+        folders.configure(path("default"), true);
+        folders.saveLastFolder(path("chosen"));
+        folders = new DownloadFolderPreferences(store);
+        assertTrue(folders.remembersLastFolder());
+        assertEquals(path("chosen"), folders.getLastFolderOrDefault());
+        assertEquals(path("default"), folders.configuredFolder());
+        folders.configure(path("default"), false);
+        assertEquals(path("default"), new DownloadFolderPreferences(store).getLastFolderOrDefault());
     }
     @Test void changingDefaultOverridesRememberedFolderButUnrelatedSavesPreserveIt() {
         var store = new SoundFeedbackServiceTest.MemoryPreferences();
         var folders = new DownloadFolderPreferences(store);
-        folders.saveLastFolder("/tmp/old");
-        folders.configure("/tmp/new-default", true);
-        assertEquals("/tmp/new-default", folders.getLastFolderOrDefault());
-        folders.saveLastFolder("/tmp/next-selection");
-        folders.configure("/tmp/new-default", true);
-        assertEquals("/tmp/next-selection", new DownloadFolderPreferences(store).getLastFolderOrDefault());
+        folders.saveLastFolder(path("old"));
+        folders.configure(path("new-default"), true);
+        assertEquals(path("new-default"), folders.getLastFolderOrDefault());
+        folders.saveLastFolder(path("next-selection"));
+        folders.configure(path("new-default"), true);
+        assertEquals(path("next-selection"), new DownloadFolderPreferences(store).getLastFolderOrDefault());
     }
     @Test void connectionCountPersistsAndRejectsInvalidValues() {
         var store = new SoundFeedbackServiceTest.MemoryPreferences();

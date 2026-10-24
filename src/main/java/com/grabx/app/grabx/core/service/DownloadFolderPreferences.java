@@ -18,7 +18,7 @@ public final class DownloadFolderPreferences {
 
     public DownloadFolderPreferences(Preferences preferences) { this.preferences = preferences; }
 
-    public boolean remembersLastFolder() { return preferences.getBoolean("grabx.folder.remember", true); }
+    public boolean remembersLastFolder() { return preferences.getBoolean("grabx.folder.remember", false); }
     public String configuredFolder() {
         String folder = preferences.get("grabx.folder.default", "");
         return folder.isBlank() ? systemDefault() : folder;

@@ -2,7 +2,12 @@
 
 Build on the destination OS: JavaFX includes native libraries, so a macOS distribution
 cannot be copied to Windows or Linux. Use the same CPU architecture for Java and JavaFX.
-The distribution is portable application files, not a signed installer or a bundled JRE.
+The Gradle zip distribution is portable application files, not a signed installer
+or a bundled JRE. Native local installers with a bundled Java runtime and first-run
+setup are now available through `scripts/package-app.py`; see
+[local installer instructions](packaging/README.md). Build each on its destination
+OS/CPU. The local macOS package is unsigned; Windows/Linux native packages still
+require builds and installation checks on those systems.
 
 ## Requirements
 
