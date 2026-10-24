@@ -87,7 +87,7 @@ class SetupWizardTest {
         var buffer = new java.awt.image.BufferedImage((int)image.getWidth(), (int)image.getHeight(), java.awt.image.BufferedImage.TYPE_INT_ARGB);
         image.getPixelReader().getPixels(0, 0, buffer.getWidth(), buffer.getHeight(), javafx.scene.image.PixelFormat.getIntArgbInstance(),
                 ((java.awt.image.DataBufferInt)buffer.getRaster().getDataBuffer()).getData(), 0, buffer.getWidth());
-        try { javax.imageio.ImageIO.write(buffer, "png", new java.io.File("/private/tmp/grabx-setup-" + name + ".png")); }
+        try { javax.imageio.ImageIO.write(buffer, "png", Path.of(System.getProperty("java.io.tmpdir"), "grabx-setup-" + name + ".png").toFile()); }
         catch (java.io.IOException e) { throw new RuntimeException(e); }
     }
 }

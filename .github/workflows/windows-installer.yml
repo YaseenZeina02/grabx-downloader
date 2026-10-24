@@ -31,6 +31,11 @@ jobs:
         run: |
           node --test browser-extension/tests/*.test.cjs
           python -m unittest discover -s scripts/tests -p test_windows_tools.py -v
+      - name: Collect actual Windows setup previews
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/windows-package/previews | Out-Null
+          Copy-Item "$env:TEMP/grabx-setup-*.png" build/windows-package/previews
       - name: Prepare complete verified Windows x64 tools
         run: python scripts/prepare-windows-tools.py
       - name: Locate WiX 3
@@ -88,5 +93,6 @@ jobs:
             build/reports/tests/test
             build/test-results/test
             build/windows-package/*.log
+            build/windows-package/previews
             build/packaging/Windows-*/**/*.log
           retention-days: 7
