@@ -28,12 +28,13 @@ final class ToolExecutable {
         }
         return directories.stream().map(directory -> directory.resolve(name)).toList();
     }
-    static String version(Path executable, String option) {
+    static String version(Path executable, String option) { return version(executable, option, 10); }
+    static String version(Path executable, String option, int timeoutSeconds) {
         if (executable == null || !Files.isRegularFile(executable) || !Files.isExecutable(executable)) return null;
         Process process = null;
         try {
             process = new ProcessBuilder(executable.toString(), option).redirectErrorStream(true).start();
-            if (!process.waitFor(10, TimeUnit.SECONDS) || process.exitValue() != 0) return null;
+            if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS) || process.exitValue() != 0) return null;
             String output = new String(process.getInputStream().readNBytes(4096), StandardCharsets.UTF_8).trim();
             return output.isEmpty() ? null : output.lines().findFirst().orElse(null);
         } catch (InterruptedException error) {

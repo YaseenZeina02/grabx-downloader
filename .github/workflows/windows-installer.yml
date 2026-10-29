@@ -32,6 +32,7 @@ jobs:
           node --test browser-extension/tests/*.test.cjs
           python -m unittest discover -s scripts/tests -p test_windows_tools.py -v
       - name: Collect actual Windows setup previews
+        if: always()
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force build/windows-package/previews | Out-Null

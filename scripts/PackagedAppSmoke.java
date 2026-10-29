@@ -31,6 +31,10 @@ public class PackagedAppSmoke {
         if (!javascript.waitFor(15, java.util.concurrent.TimeUnit.SECONDS) || javascript.exitValue() != 0)
             throw new AssertionError("JavaScript execution failed");
         // Damage only this isolated user's extracted files, then repair in the same process.
+        Path isolatedHome = Path.of(System.getProperty("user.home")).toAbsolutePath().normalize();
+        if (!media.toAbsolutePath().normalize().startsWith(isolatedHome)
+                || !extension.toAbsolutePath().normalize().startsWith(isolatedHome))
+            throw new AssertionError("Preparation escaped the isolated user directory");
         Files.writeString(media, "damaged media runtime");
         Files.delete(extension.resolve("manifest.json"));
         for (var check : DevicePreparation.prepare()) if (!check.ready()) throw new AssertionError("Repair failed: " + check);

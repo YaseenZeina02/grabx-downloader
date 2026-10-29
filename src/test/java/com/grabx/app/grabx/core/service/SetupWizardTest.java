@@ -56,6 +56,21 @@ class SetupWizardTest {
             assertTrue(connected.await(5,TimeUnit.SECONDS)); assertEquals("BRAVE:" + "a".repeat(32),selected.get());
         } finally { fx(() -> ref[0].close()); }
     }
+    @Test void footerStaysInsideSmallWindow() throws Exception {
+        var stage = new Stage[1];
+        fx(() -> {
+            stage[0] = new Stage();
+            new SetupWizard(stage[0], new SoundFeedbackServiceTest.MemoryPreferences(), () -> {}).show();
+            stage[0].setWidth(900); stage[0].setHeight(500);
+        });
+        // Allow the native resize event to update scene dimensions before checking layout.
+        Thread.sleep(250);
+        try { fx(() -> {
+            var scene = stage[0].getScene(); scene.getRoot().applyCss(); scene.getRoot().layout();
+            var next = scene.lookup("#setup-next");
+            assertTrue(next.localToScene(next.getBoundsInLocal()).getMaxY() < scene.getHeight());
+        }); } finally { fx(() -> stage[0].close()); }
+    }
     @Test void setupRendersBothDirectionsAndKeepsDraftsUnsaved() throws Exception {
         for (String locale : new String[]{"en", "ar"}) {
             var store = new SoundFeedbackServiceTest.MemoryPreferences(); store.put("grabx.language", locale);
@@ -101,7 +116,8 @@ class SetupWizardTest {
                 for (int i = 0; i < 20; i++) minus.fire();
                 assertEquals("1", value.getText()); assertTrue(minus.isDisabled());
                 next.fire(); stage.getScene().getRoot().applyCss(); stage.getScene().getRoot().layout(); snapshot(stage, "browser-" + locale);
-                assertTrue(next.localToScene(next.getBoundsInLocal()).getMaxY() < stage.getScene().getHeight());
+                assertTrue(next.localToScene(next.getBoundsInLocal()).getMaxY() < stage.getScene().getHeight(),
+                        "Footer bottom=" + next.localToScene(next.getBoundsInLocal()).getMaxY() + " scene height=" + stage.getScene().getHeight());
                 assertFalse(store.getBoolean("grabx.setup.complete.v1", false)); stage.close();
             });
         }

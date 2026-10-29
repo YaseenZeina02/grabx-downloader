@@ -82,7 +82,7 @@ public final class YtDlpManager {
                 try {
                     Path runtime = detectOS() == OS.MAC ? BundledYtDlpRuntime.installMac(getAppToolsDir())
                             : BundledYtDlpRuntime.installStandalone(getAppToolsDir(), detectOS(), detectArch());
-                    if (runtime != null && ToolExecutable.version(runtime, "--version") != null) {
+                    if (runtime != null && ToolExecutable.version(runtime, "--version", 45) != null) {
                         cached = runtime;
                         PREFS.put(PREF_YTDLP_PATH, runtime.toString());
                         PREFS.put(PREF_YTDLP_VER, BundledYtDlpRuntime.VERSION);

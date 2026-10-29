@@ -61,10 +61,16 @@ public final class SetupWizard {
         simultaneous.set(new TaskPreferences(store).maxActive());
         styleCombo(language, "setup-language", 240);
         language.valueProperty().addListener((o, a, b) -> render());
-        root.getStyleClass().add("setup-root");
+        root.getStyleClass().add("setup-root"); root.setMinSize(0, 0);
         navigation.getStyleClass().add("setup-sidebar"); navigation.setPrefWidth(238);
         scroll.setFitToWidth(true); scroll.getStyleClass().add("setup-scroll");
-        content.setPadding(new Insets(36)); root.setLeft(navigation); root.setCenter(scroll);
+        scroll.setMinSize(0, 0);
+        ScrollPane sidebar = new ScrollPane(navigation);
+        sidebar.setFitToWidth(true); sidebar.setFitToHeight(true); sidebar.setMinHeight(0);
+        sidebar.setPrefWidth(238); sidebar.setMinWidth(180);
+        sidebar.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        sidebar.getStyleClass().add("setup-scroll");
+        content.setPadding(new Insets(36)); root.setLeft(sidebar); root.setCenter(scroll);
         back.setOnAction(e -> { step--; render(); });
         next.setId("setup-next"); next.getStyleClass().add("setup-primary"); next.setOnAction(e -> advance());
         error.getStyleClass().add("setup-error"); error.setWrapText(true);
