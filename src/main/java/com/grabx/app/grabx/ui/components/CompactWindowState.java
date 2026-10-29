@@ -12,6 +12,16 @@ public record CompactWindowState(double x, double y, double width, double height
     }
 
     public void restore(Stage stage, Runnable finished) {
+        var area = com.grabx.app.grabx.util.WindowBounds.area(x, y, width, height);
+        var bounds = com.grabx.app.grabx.util.WindowBounds.fit(
+                new javafx.geometry.Rectangle2D(x, y, width, height), area);
+        stage.setMinWidth(Math.min(stage.getMinWidth(), bounds.getWidth()));
+        stage.setMinHeight(Math.min(stage.getMinHeight(), bounds.getHeight()));
+        new CompactWindowState(bounds.getMinX(), bounds.getMinY(), bounds.getWidth(), bounds.getHeight(),
+                maximized, fullScreen).restoreFitted(stage, finished);
+    }
+
+    private void restoreFitted(Stage stage, Runnable finished) {
         // Set window modes before bounds; leaving zoom/full-screen can itself resize
         // the native window. Apply before show to avoid flashing at a different size.
         apply(stage);

@@ -50,11 +50,11 @@ jobs:
           if (-not $wix) { throw 'WiX 3 not found' }
           (Join-Path $wix.FullName "bin") | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Build self-contained application image
-        run: python scripts/package-app.py --version 1.0.3 --type app-image --tools build/windows-tools --skip-build --dest build/windows-package/image
+        run: python scripts/package-app.py --version 1.0.4 --type app-image --tools build/windows-tools --skip-build --dest build/windows-package/image
       - name: Build branded EXE and MSI installers
         shell: pwsh
         run: |
-          $common = @('--name', 'GrabX', '--app-version', '1.0.3', '--vendor', 'GrabX', '--app-image', 'build/windows-package/image/GrabX', '--dest', 'build/windows-package/installers', '--icon', 'src/main/resources/com/grabx/app/grabx/icons/grabx-setup.ico', '--win-per-user-install', '--win-dir-chooser', '--win-menu', '--win-shortcut', '--win-menu-group', 'GrabX', '--win-upgrade-uuid', '2d05d6ea-9272-4ba2-a5d4-26960fa16fd3')
+          $common = @('--name', 'GrabX', '--app-version', '1.0.4', '--vendor', 'GrabX', '--app-image', 'build/windows-package/image/GrabX', '--dest', 'build/windows-package/installers', '--icon', 'src/main/resources/com/grabx/app/grabx/icons/grabx-setup.ico', '--win-per-user-install', '--win-dir-chooser', '--win-menu', '--win-shortcut', '--win-menu-group', 'GrabX', '--win-upgrade-uuid', '2d05d6ea-9272-4ba2-a5d4-26960fa16fd3')
           & "$env:JAVA_HOME/bin/jpackage.exe" @common --type msi
           if ($LASTEXITCODE -ne 0) { throw 'MSI packaging failed' }
           & "$env:JAVA_HOME/bin/jpackage.exe" @common --type exe
@@ -81,7 +81,7 @@ jobs:
           Get-ChildItem build/windows-package/installers/* -Include *.exe,*.msi | ForEach-Object { "$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Out-File build/windows-package/installers/SHA256SUMS.txt -Encoding utf8
       - uses: actions/upload-artifact@v4
         with:
-          name: GrabX-1.0.3-windows-x64
+          name: GrabX-1.0.4-windows-x64
           path: build/windows-package/installers/*
           if-no-files-found: error
           retention-days: 14

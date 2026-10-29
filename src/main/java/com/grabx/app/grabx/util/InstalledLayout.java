@@ -13,6 +13,8 @@ public final class InstalledLayout {
     }
     public static Path tool(String name) {
         String suffix = System.getProperty("os.name", "").toLowerCase().contains("win") ? ".exe" : "";
+        Path repaired = PackagedToolRepair.repairedDirectory();
+        if (repaired != null && Files.isDirectory(repaired)) return repaired.resolve(name + suffix);
         return contentDirectory().resolve("tools").resolve(name + suffix);
     }
     public static Path nativeLauncher() {

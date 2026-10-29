@@ -50,7 +50,7 @@ public class GrabXApp extends Application {
             if (controller != null) controller.shutdown();
             Platform.exit();
         });
-        stage.show();
+        com.grabx.app.grabx.util.WindowBounds.show(stage, 1280, 820, 900, 500);
     }
 
     @Override

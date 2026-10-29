@@ -38,6 +38,16 @@ class BundledYtDlpRuntimeTest {
         assertEquals(executable, BundledYtDlpRuntime.install(new ByteArrayInputStream(new byte[0]), target, "yt-dlp_macos", hash(zip)));
     }
 
+    @Test void repairsCorruptRuntimeAndMissingSupportingFiles() throws Exception {
+        byte[] zip = archive("yt-dlp_macos"); Path target = directory.resolve("runtime");
+        BundledYtDlpRuntime.install(new ByteArrayInputStream(zip), target, "yt-dlp_macos", hash(zip));
+        Files.writeString(target.resolve("yt-dlp_macos"), "broken");
+        BundledYtDlpRuntime.install(new ByteArrayInputStream(zip), target, "yt-dlp_macos", hash(zip));
+        assertEquals("fixture executable", Files.readString(target.resolve("yt-dlp_macos")));
+        Files.delete(target.resolve("_internal/runtime.data"));
+        BundledYtDlpRuntime.install(new ByteArrayInputStream(zip), target, "yt-dlp_macos", hash(zip));
+        assertArrayEquals(new byte[]{1,2,3}, Files.readAllBytes(target.resolve("_internal/runtime.data")));
+    }
     @Test void rejectsCorruptPackagesWithoutLeavingAnInstalledRuntime() throws Exception {
         byte[] zip = archive("yt-dlp_macos");
         assertThrows(IOException.class, () -> BundledYtDlpRuntime.install(new ByteArrayInputStream(zip), directory.resolve("bad"), "yt-dlp_macos", "bad hash"));

@@ -45,6 +45,10 @@ public final class YtDlpManager {
     }
 
     /** Returns yt-dlp path (bundled first, then PATH fallback). */
+    static void resetResolution() {
+        synchronized (INIT_LOCK) { cached = null; initDone = false; }
+    }
+
     public static Path ensureAvailable() {
         // Fast path: already resolved this run.
         try {
@@ -58,6 +62,7 @@ public final class YtDlpManager {
             if (cached != null && Files.exists(cached)) return cached;
         } catch (Exception ignored) {}
 
+        if (Boolean.getBoolean("grabx.packaged")) return null;
         // Last resort: PATH lookup (very fast) if init failed.
         try {
             Path fromPath = findOnPath(detectOS() == OS.WINDOWS ? "yt-dlp.exe" : "yt-dlp");
@@ -77,7 +82,7 @@ public final class YtDlpManager {
                 try {
                     Path runtime = detectOS() == OS.MAC ? BundledYtDlpRuntime.installMac(getAppToolsDir())
                             : BundledYtDlpRuntime.installStandalone(getAppToolsDir(), detectOS(), detectArch());
-                    if (runtime != null && (detectOS() == OS.MAC || ToolExecutable.version(runtime, "--version") != null)) {
+                    if (runtime != null && ToolExecutable.version(runtime, "--version") != null) {
                         cached = runtime;
                         PREFS.put(PREF_YTDLP_PATH, runtime.toString());
                         PREFS.put(PREF_YTDLP_VER, BundledYtDlpRuntime.VERSION);
@@ -89,6 +94,7 @@ public final class YtDlpManager {
                     LOG.warning("Could not initialize the current yt-dlp bundle: " + error.getMessage());
                 }
             }
+            if (Boolean.getBoolean("grabx.packaged")) { initDone = true; return; }
             try {
                 String saved = PREFS.get(PREF_YTDLP_PATH, null);
                 if (saved != null && !saved.isBlank()) {

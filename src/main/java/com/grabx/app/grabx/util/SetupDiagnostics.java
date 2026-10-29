@@ -33,8 +33,10 @@ public final class SetupDiagnostics {
         }
         result.add(new Check("YouTube JavaScript", js != null,
                 js == null ? "Install Node 22+ or Deno 2.3+ for full YouTube quality support" : js, "https://nodejs.org/en/download"));
-        result.add(new Check("yt-dlp", SetupDiagnostics.class.getResource("/tools/yt-dlp/bundled.properties") != null,
-                "Included with GrabX; prepared locally on first media download", "https://github.com/yt-dlp/yt-dlp"));
+        String media = ToolExecutable.version(YtDlpManager.cached, "--version");
+        result.add(new Check("yt-dlp", media != null,
+                media == null ? "Not prepared yet; run Check & prepare to verify the included runtime" : media,
+                "https://github.com/yt-dlp/yt-dlp"));
         return List.copyOf(result);
     }
 }

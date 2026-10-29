@@ -19,9 +19,9 @@ def main():
         env={k:v for k,v in os.environ.items() if k not in ['JAVA_HOME','CLASSPATH','JAVA_TOOL_OPTIONS','JDK_JAVA_OPTIONS']}
         env.update(HOME=str(home),USERPROFILE=str(home),LOCALAPPDATA=str(home/'AppData/Local'),APPDATA=str(home/'AppData/Roaming'))
         env['PATH']=str(Path(os.environ.get('SystemRoot','C:/Windows'))/'System32') if windows else '/usr/bin:/bin'
-        flags=[f'-Duser.home={home}',f'-Djava.util.prefs.userRoot={home}/prefs',f'-Djpackage.app-path={launcher}']
-        subprocess.run([str(runtime),*flags,'-cp',str(content/'*')+os.pathsep+str(helper),'PackagedAppSmoke',*(['register'] if args.windows_register else [])],env=env,cwd=root,check=True,timeout=180)
-        env['JAVA_TOOL_OPTIONS']=' '.join('"'+flag+'"' for flag in flags[:2])
+        flags=['-Dgrabx.packaged=true',f'-Duser.home={home}',f'-Djava.util.prefs.userRoot={home}/prefs',f'-Djpackage.app-path={launcher}']
+        subprocess.run([str(runtime),*flags,'-cp',str(content/'*')+os.pathsep+str(helper),'PackagedAppSmoke',*(['register'] if args.windows_register else [])],env=env,cwd=root,check=True,timeout=300)
+        env['JAVA_TOOL_OPTIONS']=' '.join('"'+flag+'"' for flag in flags[:3])
         payload=json.dumps({'type':'status'}).encode()
         reply=subprocess.run([str(native)],input=struct.pack('=I',len(payload))+payload,capture_output=True,env=env,cwd=root,check=True,timeout=30)
         assert len(reply.stdout)>4,reply.stderr.decode(errors='replace')

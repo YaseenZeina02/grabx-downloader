@@ -196,7 +196,7 @@ function hasBrowserDestination(path) {
 
 function nativeBridgeError(error) {
   const detail = error?.message || 'Unknown native messaging error';
-  const registration = `Run the native-host installer for your OS and this browser with extension ID ${chrome.runtime.id}, then restart the browser. See browser-extension/README.md (Windows: install-windows.ps1).`;
+  const registration = `Open GrabX Settings → Browser extension (or GrabX Setup), select this browser, paste extension ID ${chrome.runtime.id} and click Connect browser. Then reload this extension.`;
   if (/specified native messaging host not found/i.test(detail)) {
     return `GrabX browser bridge could not be found. ${registration} Opening GrabX alone does not register the bridge. (${detail})`;
   }

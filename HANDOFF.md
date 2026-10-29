@@ -1,5 +1,30 @@
 # GrabX handoff
 
+## In progress: 1.0.4 smart preparation and Windows friend build (2026-10-29)
+
+- User authorized completing OS/CPU preparation and repair, clean-environment tests,
+  and a new Windows installer for their friend. Existing branch remains
+  codex/windows-x64-installer. After auto-review rejected the initial source upload,
+  the user explicitly approved uploading these changes to the public build branch.
+  No master merge, GitHub release, or private issue screenshot upload is authorized.
+- Completed prior local UI work (window bounds/compact recovery, shortcut reduction,
+  browser integration and device preparation in Settings) is included in this build.
+  Private issue screenshots under docs/issues are retained locally, not staged.
+- Added platform-specific offline tool repair archives with SHA-256 manifests,
+  executable probes, transactional private-directory repair and license preservation.
+  Intact but non-running tools report errors without bypassing security restrictions.
+  Node fallback now scopes private runtime by platform and repairs damaged installs.
+  yt-dlp verifies extracted contents and repairs corrupt/missing runtime files.
+  Repeated preparation resets cached failures; diagnostics require a runnable yt-dlp.
+- Local verification: 342 Java tests / 284 passed / 58 optional skipped, zero failures;
+  actual EN/AR setup previews inspected; 45 extension tests and all 5 Python tests
+  passed. Combined SETUP+RESUME test invocation failed due to JavaFX initialization
+  lifecycle; setup/full suite and all 47 resume tests then passed separately.
+- New packaged smoke covers empty home/data, relocated application, restricted PATH,
+  offline MP3 + JavaScript, corruption/deletion repair and native registrations.
+  Version bumped to 1.0.4; native Windows build and artifact verification pending.
+
+
 ## Latest outcome: Windows x64 friend installer (2026-10-24)
 
 - User requested a complete Windows x64 copy for a friend, then explicitly approved

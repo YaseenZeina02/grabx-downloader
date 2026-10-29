@@ -114,15 +114,14 @@ final class BundledYtDlpRuntime {
             if (!Files.isRegularFile(binary) || !binary.toFile().setExecutable(true, true)) {
                 throw new IOException("Missing runtime executable");
             }
-            Files.writeString(staging.resolve(".ready"), sha256);
-            try {
-                Files.move(staging, destination, StandardCopyOption.ATOMIC_MOVE);
-            } catch (java.nio.file.AtomicMoveNotSupportedException exception) {
-                Files.move(staging, destination);
-            } catch (IOException exception) {
-                // Another app process may have completed the same installation.
-                if (!ready(destination, executable, sha256)) throw exception;
+            var hashes = new java.util.Properties();
+            try (var files = Files.walk(staging)) {
+                for (Path file : files.filter(Files::isRegularFile).toList())
+                    hashes.setProperty(staging.relativize(file).toString(), RuntimeFiles.sha256(file));
             }
+            try (var output = Files.newOutputStream(staging.resolve(".files"))) { hashes.store(output, "Bundled runtime integrity"); }
+            Files.writeString(staging.resolve(".ready"), sha256);
+            RuntimeFiles.replace(staging, destination);
             return destination.resolve(executable);
         } finally {
             if (Files.exists(staging)) try (var files = Files.walk(staging)) {
@@ -133,8 +132,19 @@ final class BundledYtDlpRuntime {
 
     private static boolean ready(Path destination, String executable, String sha256) {
         try {
-            return Files.isExecutable(destination.resolve(executable))
-                    && Files.readString(destination.resolve(".ready")).equals(sha256);
+            if (!Files.isExecutable(destination.resolve(executable))
+                    || !Files.readString(destination.resolve(".ready")).equals(sha256)) return false;
+            if (!Files.isRegularFile(destination.resolve(".files")))
+                return RuntimeFiles.sha256(destination.resolve(executable)).equals(sha256);
+            var hashes = new java.util.Properties();
+            try (var input = Files.newInputStream(destination.resolve(".files"))) { hashes.load(input); }
+            if (hashes.isEmpty() || !hashes.containsKey(executable)) return false;
+            for (String name : hashes.stringPropertyNames()) {
+                Path file = destination.resolve(name).normalize();
+                if (!file.startsWith(destination) || !Files.isRegularFile(file, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                        || !RuntimeFiles.sha256(file).equals(hashes.getProperty(name))) return false;
+            }
+            return true;
         } catch (IOException exception) { return false; }
     }
 }

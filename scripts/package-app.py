@@ -93,10 +93,23 @@ def main():
                 'browserExtensionIncluded': True, 'extensionVersion': extension_version,
                 'extensionArchiveSHA256': hashlib.sha256(extension).hexdigest(),
                 'tools': {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in tools.iterdir() if p.is_file()} if tools.is_dir() else {}}
+    if complete:
+        cpu = {'amd64': 'x64', 'x86_64': 'x64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine().lower())
+        if cpu is None: parser.error('Unsupported processor for bundled tool repair.')
+        target = {'Darwin': 'darwin', 'Windows': 'win', 'Linux': 'linux'}[system] + '-' + cpu
+        archive = inputs / 'tool-repair.zip'
+        files = {p.relative_to(tools).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                 for p in sorted(tools.rglob('*')) if p.is_file()}
+        with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as repair:
+            for name in files: repair.write(tools / name, name)
+        repair_manifest = {'target': target, 'sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
+                           'files': files, 'executables': [name + suffix for name in ['ffmpeg', 'ffprobe', 'node', 'deno'] if present(name)]}
+        (inputs / 'tool-repair.json').write_text(json.dumps(repair_manifest, indent=2))
+        manifest['offlineToolRepair'] = True
     (inputs / 'build-info.json').write_text(json.dumps(manifest, indent=2))
     command([jlink, '--add-modules', 'java.se,jdk.crypto.ec,jdk.unsupported', '--strip-debug', '--no-header-files', '--no-man-pages', '--output', work / 'runtime'])
     native = work / 'native.properties'
-    native.write_text('main-class=com.grabx.app.grabx.browser.BrowserNativeHostMain\n' + ('win-console=true\n' if system == 'Windows' else ''))
+    native.write_text('main-class=com.grabx.app.grabx.browser.BrowserNativeHostMain\n' + ('win-console=true\nwin-shortcut=false\nwin-menu=false\n' if system == 'Windows' else ''))
     app_icon = args.icon.resolve() if args.icon else None
     setup_icon = None
     if system == 'Darwin':
@@ -108,7 +121,7 @@ def main():
         if app_icon is None: app_icon = icons / 'grabx.ico'
         setup_icon = icons / 'grabx-setup.ico'
     setup = work / 'setup.properties'
-    setup.write_text('main-class=com.grabx.app.grabx.Launcher\narguments=--setup\n' + (f'icon={setup_icon.as_posix()}\n' if setup_icon else ''))
+    setup.write_text('main-class=com.grabx.app.grabx.Launcher\narguments=--setup\n' + ('win-shortcut=false\nwin-menu=true\n' if system == 'Windows' else '') + (f'icon={setup_icon.as_posix()}\n' if setup_icon else ''))
     output = args.dest.resolve() if args.dest else ROOT / 'build/installers' / f'{system}-{platform.machine()}' / args.type
     output.mkdir(parents=True, exist_ok=True)
     if (output / ('GrabX.app' if system == 'Darwin' else 'GrabX')).exists():

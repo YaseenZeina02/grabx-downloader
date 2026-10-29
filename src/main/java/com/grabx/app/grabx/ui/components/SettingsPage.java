@@ -99,7 +99,11 @@ public final class SettingsPage extends BorderPane {
                 navigation("Network", "Speed & connections", network(), false),
                 navigation("Notifications", "Events & connection", notifications(), false),
                 navigation("Sounds", "Volume & event previews", audio(), false),
-                navigation("Storage", "Incomplete file cleanup", storage(), false));
+                navigation("Storage", "Incomplete file cleanup", storage(), false),
+                navigation("Browser extension", "Prepare & connect", section("Browser extension", "Connect your browser at any time.",
+                        new com.grabx.app.grabx.setup.BrowserIntegrationPane()), false),
+                navigation("Device readiness", "Tools & repair", section("Device readiness", "Prepare the tools for this device.",
+                        new com.grabx.app.grabx.setup.DeviceReadinessPane()), false));
         Region spacer = new Region(); VBox.setVgrow(spacer, Priority.ALWAYS);
         Label hint = label("Your downloads keep running while you adjust settings.", "settings-muted"); hint.setWrapText(true);
         nav.getChildren().addAll(spacer, hint);

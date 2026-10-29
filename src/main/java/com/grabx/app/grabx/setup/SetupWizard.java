@@ -39,12 +39,10 @@ public final class SetupWizard {
     private final ScrollPane scroll = new ScrollPane(content);
     private final CheckBox remember = new CheckBox(), sounds = new CheckBox();
     private final IntegerProperty simultaneous = new SimpleIntegerProperty(3);
-    private final ComboBox<BrowserSetupService.Browser> browser = new ComboBox<>();
-    private final TextField extensionId = new TextField();
+    private BrowserIntegrationPane browserPane;
     private List<SetupDiagnostics.Check> checks;
-    private boolean checking, linking, linked;
+    private boolean checking, linked;
     private int step;
-    private Path preparedExtension;
 
     public SetupWizard(Stage stage, Preferences store, Runnable finished) {
         this.stage = stage; this.store = store; this.finished = finished;
@@ -62,12 +60,6 @@ public final class SetupWizard {
         sounds.setSelected(store.getBoolean("grabx.sounds.enabled", true));
         simultaneous.set(new TaskPreferences(store).maxActive());
         styleCombo(language, "setup-language", 240);
-        styleCombo(browser, "setup-browser", 280);
-        browser.getItems().setAll(BrowserSetupService.Browser.values()); browser.setValue(BrowserSetupService.Browser.CHROME);
-        browser.valueProperty().addListener((o, a, b) -> { linked = false; if (step == 3) render(); });
-        extensionId.setPromptText("abcdefghijklmnopabcdefghijklmnop");
-        extensionId.setNodeOrientation(NodeOrientation.LEFT_TO_RIGHT);
-        extensionId.textProperty().addListener((o, a, b) -> linked = false);
         language.valueProperty().addListener((o, a, b) -> render());
         root.getStyleClass().add("setup-root");
         navigation.getStyleClass().add("setup-sidebar"); navigation.setPrefWidth(238);
@@ -108,7 +100,7 @@ public final class SetupWizard {
     public void show() {
         com.grabx.app.grabx.util.AppBranding.apply(stage, true);
         stage.setTitle("GrabX · Setup"); stage.setMinWidth(880); stage.setMinHeight(650);
-        stage.setScene(scene()); stage.show();
+        stage.setScene(scene()); com.grabx.app.grabx.util.WindowBounds.show(stage, 1060, 740, 880, 500);
     }
     private Label label(String value, String style) {
         Label l = new Label(value); l.setWrapText(true); l.getStyleClass().add(style); l.setMaxWidth(Double.MAX_VALUE); return l;
@@ -130,9 +122,9 @@ public final class SetupWizard {
         }
         Region space = new Region(); VBox.setVgrow(space, Priority.ALWAYS);
         navigation.getChildren().addAll(space, label(System.getProperty("os.name") + " · " + System.getProperty("os.arch"), "setup-muted"), label(t("LOCAL EDITION", "نسخة محلية"), "setup-eyebrow"));
-        back.setText(t("Back", "السابق")); back.setDisable(step == 0 || linking);
+        back.setText(t("Back", "السابق")); back.setDisable(step == 0);
         next.setText(step == 4 ? t("Start GrabX", "ابدأ مع GrabX") : t("Continue", "متابعة"));
-        next.setDisable(checking || linking);
+        next.setDisable(checking);
         switch (step) {
             case 0 -> welcome(); case 1 -> tools(); case 2 -> defaults(); case 3 -> browsers(); case 4 -> review();
         }
@@ -147,21 +139,21 @@ public final class SetupWizard {
                 label(t("English and Arabic setup guidance. The app offers six interface languages.", "إرشادات الإعداد بالعربية والإنجليزية. واجهة التطبيق بتدعم ست لغات."), "setup-muted"));
     }
     private void tools() {
-        heading(t("Let's check your essentials.", "نتأكد إن جهازك جاهز."), t("Local checks only. Nothing is installed during this scan.", "الفحص محلي فقط، وما بنثبّت أي شيء خلاله."));
+        heading(t("Let's check your essentials.", "نتأكد إن جهازك جاهز."), t("Working tools are reused. Missing tools and extension files are prepared for this device; an internet connection may be needed.", "بنستخدم الأدوات الجاهزة وبنجهّز الناقص وملفات الإضافة حسب جهازك؛ ممكن نحتاج اتصال بالإنترنت."));
         if (checks == null) content.getChildren().add(label(t("Checking your device…", "جاري فحص الجهاز…"), "setup-muted"));
         else for (var check : checks) {
             VBox row = card(label((check.ready() ? "✓  " : "!  ") + check.name(), check.ready() ? "setup-ok" : "setup-warning"), label(check.detail(), "setup-muted"));
-            if (!check.ready()) row.getChildren().add(button(t("Installation instructions ↗", "تعليمات التثبيت ↗"), () -> open(check.helpUrl())));
+            if (!check.ready() && !check.helpUrl().isBlank()) row.getChildren().add(button(t("Installation instructions ↗", "تعليمات التثبيت ↗"), () -> open(check.helpUrl())));
             content.getChildren().add(row);
         }
-        content.getChildren().addAll(button(t("Check again", "إعادة الفحص"), this::scan),
+        content.getChildren().addAll(button(t("Check & prepare again", "إعادة الفحص والتجهيز"), this::scan),
                 label(t("Missing media tools limit YouTube, merging or conversion. Direct file downloads remain available. Continue to configure GrabX, or install the missing tool and check again.",
                         "نقص أدوات الوسائط بيحدّ من يوتيوب أو الدمج والتحويل. تنزيل الملفات المباشرة بيظل متاح. بتقدر تكمل الإعداد أو تثبّت الأداة الناقصة وتعيد الفحص."), "setup-muted"));
     }
     private void scan() {
         if (checking) return; checking = true; render();
         Thread worker = new Thread(() -> {
-            try { checks = SetupDiagnostics.inspect(); }
+            try { checks = Boolean.getBoolean("grabx.packaged") ? com.grabx.app.grabx.util.DevicePreparation.prepare() : SetupDiagnostics.inspect(); }
             finally { Platform.runLater(() -> { checking = false; render(); }); }
         }, "grabx-setup-check"); worker.setDaemon(true); worker.start();
     }
@@ -222,50 +214,11 @@ public final class SetupWizard {
         }
     }
     private void browsers() {
-        heading(t("Your browser, connected.", "متصفحك، متصل بـ GrabX."), t("Chrome, Brave, Edge and Chromium. Browser linking is optional.", "Chrome وBrave وEdge وChromium. ربط المتصفح اختياري."));
-        content.getChildren().add(browser);
-        content.getChildren().add(card(label(t("1. Add the extension", "١. أضف الإضافة"), "setup-card-title"),
-                label(t("Open your browser's Extensions page: " , "افتح صفحة الإضافات في متصفحك: ") + browser.getValue().extensions, "setup-muted"),
-                label(t("The extension is included with GrabX. The button below prepares a permanent copy on your device; no project files or separate download are needed.",
-                        "الإضافة مضمّنة مع GrabX. الزر أدناه بيجهّز نسخة ثابتة على جهازك؛ ما بتحتاج ملفات المشروع أو تنزيل منفصل."), "setup-muted"),
-                label(t("Enable Developer mode → Load unpacked → select the chromium folder prepared below. Keep this folder in place. Firefox and Safari are not supported.",
-                        "فعّل وضع المطوّر ← تحميل إضافة غير محزّمة ← اختر مجلد chromium اللي بنجهّزه بالزر أدناه. خلّي المجلد بمكانه. Firefox وSafari غير مدعومين."), "setup-muted"),
-                button(t("Prepare & show included extension", "تجهيز وفتح الإضافة المضمّنة"), this::showExtension)));
-        if (preparedExtension != null) {
-            TextField location = new TextField(preparedExtension.toString()); location.setEditable(false);
-            location.setNodeOrientation(NodeOrientation.LEFT_TO_RIGHT);
-            Button copy = button(t("Copy folder path", "نسخ مسار المجلد"), () -> {
-                var clipboard = new javafx.scene.input.ClipboardContent(); clipboard.putString(preparedExtension.toString());
-                javafx.scene.input.Clipboard.getSystemClipboard().setContent(clipboard);
-            });
-            content.getChildren().add(card(label(t("✓ Included extension is ready on this device", "✓ الإضافة المضمّنة جاهزة على هذا الجهاز"), "setup-ok"), location, copy));
-        }
-        Button connect = button(t("Connect browser", "ربط المتصفح"), this::connect); connect.setDisable(linking);
-        content.getChildren().add(card(label(t("2. Connect GrabX", "٢. اربط GrabX"), "setup-card-title"),
-                label(t("Copy the extension ID from that page, paste it here, then connect. Registration applies only to your user account.", "انسخ معرّف الإضافة من نفس الصفحة، الصقه هون واضغط ربط. الربط لحسابك الحالي فقط."), "setup-muted"), extensionId, connect));
-        content.getChildren().add(label(linked ? t("✓ Browser host registered. Reload the extension and use its connection status to verify.", "✓ تم تسجيل رابط المتصفح. أعد تحميل الإضافة وتحقق من حالة الاتصال داخلها.") :
-                t("You can continue without linking and return using the GrabX Setup launcher. Browser activation remains a step you complete in the browser.", "بتقدر تكمل بدون ربط وترجع لاحقًا من مشغّل GrabX Setup. تفعيل الإضافة بتكمله من داخل المتصفح."), "setup-muted"));
-    }
-    private void showExtension() {
-        try {
-            preparedExtension = ExtensionBundleService.forCurrentUser().prepare();
-            render();
-            Desktop.getDesktop().open(preparedExtension.toFile());
-        } catch (Exception e) { error.setText(e.getMessage()); }
-    }
-    private void connect() {
-        String packagedPath = System.getProperty("jpackage.app-path", "");
-        if (System.getProperty("os.name", "").toLowerCase().contains("mac") && packagedPath.startsWith("/Volumes/")) {
-            error.setText(t("Move GrabX to Applications and reopen it before connecting the browser.", "انقل GrabX إلى Applications وافتحه من هناك قبل ربط المتصفح.")); return;
-        }
-        if (!BrowserSetupService.validId(extensionId.getText().trim())) { error.setText(t("Paste a valid 32-character extension ID (letters a–p).", "ألصق معرّف إضافة صحيح من ٣٢ حرفًا (a–p).")); return; }
-        var chosen = browser.getValue(); String id = extensionId.getText().trim(); linking = true; render();
-        Thread worker = new Thread(() -> {
-            String failure = null;
-            try { BrowserSetupService.register(chosen, id); } catch (Exception e) { failure = e.getMessage(); }
-            String message = failure;
-            Platform.runLater(() -> { linking = false; linked = message == null; render(); if (message != null) error.setText(message); });
-        }, "grabx-browser-setup"); worker.setDaemon(true); worker.start();
+        heading(t("Your browser, connected.", "متصفحك، متصل بـ GrabX."),
+                t("You can skip this step and connect later from Settings → Browser extension.", "بتقدر تتخطى هالخطوة وتربط لاحقًا من الإعدادات ← إضافة المتصفح."));
+        if (browserPane == null) browserPane = new BrowserIntegrationPane(value -> linked = value);
+        browserPane.setLanguage(ar() ? "ar" : "en");
+        content.getChildren().add(browserPane);
     }
     private void open(String url) {
         try { Desktop.getDesktop().browse(URI.create(url)); } catch (Exception e) { error.setText(url); }

@@ -35,6 +35,10 @@ public final class FfmpegManager {
 
     /* ========= Public API ========= */
 
+    static void resetResolution() {
+        synchronized (INIT_LOCK) { cached = null; initDone = false; }
+    }
+
     public static Path ensureAvailable() {
         log("ensureAvailable() called");
 

@@ -117,6 +117,10 @@ class CompactWindowStateTest {
         var exit = type.getDeclaredMethod("exitCompactView"); exit.setAccessible(true);
         fx(() -> {
             try {
+                var notificationField = type.getDeclaredField("notificationView"); notificationField.setAccessible(true);
+                notificationField.set(controller, new NotificationView(
+                        new com.grabx.app.grabx.core.service.NotificationCenter(
+                                com.grabx.app.grabx.core.service.NotificationPreferences.Values.defaults()), () -> stage));
                 rootField.set(controller, stage.getScene().getRoot());
                 compactRoot.set(controller, new javafx.scene.layout.VBox());
             } catch (Exception e) { throw new AssertionError(e); }

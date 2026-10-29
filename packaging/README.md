@@ -120,3 +120,29 @@ registration and a real Setup launch, then uninstalls the MSI. Build results mus
 be inspected before claiming Windows verification. EXE/MSI are unsigned test
 installers; runtime/browser steps still need the recipient's live confirmation.
 
+
+## Device preparation and offline repair (1.0.4)
+
+Complete native builds include `tool-repair.zip` and `tool-repair.json`, scoped to
+the package OS and JVM architecture (x64 or ARM64). The first-run setup checks the
+manifest against the running JVM, verifies SHA-256 for executable and notice files,
+and actually runs FFmpeg/FFprobe and Node/Deno. Missing or corrupt files are restored
+to the current user's GrabX data directory using a staged replacement with rollback.
+An intact executable that cannot run is reported as a system/security compatibility
+problem; preparation does not relocate it to evade a block. Missing/damaged repair
+archives require reinstalling the matching GrabX package. Java itself is bundled;
+a broken Java/launcher requires reinstalling because setup cannot start without it.
+
+The embedded yt-dlp runtime and browser extension are also checked and repaired.
+The Settings > Device readiness action reruns preparation and clears failed tool
+resolution caches. Settings > Browser extension supports connecting after setup.
+Node's network fallback chooses OS/CPU, verifies the official archive checksum,
+and replaces only the app-owned version/platform directory. Complete packages
+prepare and repair their bundled tools offline, including licenses.
+
+`smoke-packaged-app.py` runs the actual packaged Java in a relocated copy with empty
+home/data directories and developer executables removed from PATH. It exercises
+first preparation, offline MP3 conversion and JavaScript, damaged yt-dlp/extension,
+missing FFmpeg, corrupt Node and a second repair of the private copy. It also checks
+native messaging and setup startup. This does not replace end-user testing of live
+browser handoff, external media sites or antivirus results on the friend's device.

@@ -14,6 +14,7 @@ import java.util.regex.Pattern;
 public final class YtDlpOptions {
     private static volatile List<String> resolved;
     private YtDlpOptions() {}
+    public static synchronized void refreshRuntime() { resolved = null; }
 
     public static List<String> extractionArguments() {
         List<String> result = resolved;
@@ -61,6 +62,7 @@ public final class YtDlpOptions {
     static List<Runtime> candidates(Map<String, String> environment, Path home, boolean windows) {
         var result = new ArrayList<Runtime>();
         for (String name : List.of("deno", "node")) result.add(new Runtime(name, InstalledLayout.tool(name)));
+        result.add(new Runtime("node", NodeRuntimeInstaller.executable()));
         var directories = new java.util.LinkedHashSet<Path>();
         String search = environment.getOrDefault("PATH", "");
         for (String part : search.split(Pattern.quote(windows ? ";" : File.pathSeparator))) {

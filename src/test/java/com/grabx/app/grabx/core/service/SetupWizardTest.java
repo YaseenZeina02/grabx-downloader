@@ -29,6 +29,33 @@ class SetupWizardTest {
     static void fx(Runnable action) throws Exception {
         var task = new FutureTask<Void>(action, null); Platform.runLater(task); task.get(30, TimeUnit.SECONDS);
     }
+    @Test void browserSettingsPrepareBeforeIdAndRegisterOnlyTheSelectedBrowser() throws Exception {
+        var ref = new Stage[1]; var connected = new CountDownLatch(1);
+        var selected = new java.util.concurrent.atomic.AtomicReference<String>();
+        fx(() -> {
+            var pane = new com.grabx.app.grabx.setup.BrowserIntegrationPane(value -> { if (value) connected.countDown(); },
+                    () -> new com.grabx.app.grabx.setup.ExtensionBundleService(dir.resolve("extension")).prepare(),
+                    (browser,id) -> selected.set(browser.name() + ":" + id));
+            Stage stage = new Stage(); ref[0] = stage; stage.setScene(new javafx.scene.Scene(pane,700,700)); stage.show();
+            assertFalse(stage.getScene().lookup("#browser-connect-id").isVisible());
+            assertTrue(((Button)stage.getScene().lookup("#browser-connect")).isDisabled());
+            ((Button)stage.getScene().lookup("#browser-prepare")).fire();
+        });
+        try {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10); var ready = new boolean[1];
+            do { fx(() -> ready[0] = ref[0].getScene().lookup("#browser-connect-id").isVisible()); if (!ready[0]) Thread.sleep(50); }
+            while (!ready[0] && System.nanoTime() < deadline);
+            assertTrue(ready[0]); assertTrue(java.nio.file.Files.isRegularFile(dir.resolve("extension/chromium/manifest.json")));
+            fx(() -> {
+                var scene = ref[0].getScene(); var id = (TextField)scene.lookup("#browser-connect-id"); var connect = (Button)scene.lookup("#browser-connect");
+                id.setText("invalid"); assertTrue(connect.isDisabled());
+                ((ComboBox<com.grabx.app.grabx.setup.BrowserSetupService.Browser>)scene.lookup("#browser-connect-browser"))
+                        .setValue(com.grabx.app.grabx.setup.BrowserSetupService.Browser.BRAVE);
+                id.setText("a".repeat(32)); assertFalse(connect.isDisabled()); connect.fire();
+            });
+            assertTrue(connected.await(5,TimeUnit.SECONDS)); assertEquals("BRAVE:" + "a".repeat(32),selected.get());
+        } finally { fx(() -> ref[0].close()); }
+    }
     @Test void setupRendersBothDirectionsAndKeepsDraftsUnsaved() throws Exception {
         for (String locale : new String[]{"en", "ar"}) {
             var store = new SoundFeedbackServiceTest.MemoryPreferences(); store.put("grabx.language", locale);
